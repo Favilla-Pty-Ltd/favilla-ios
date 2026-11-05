@@ -1,0 +1,92 @@
+# Builds the Favilla iPhone app on GitHub's macOS machines (no Mac needed).
+#   Every push to main: an unsigned simulator build, to check it compiles.
+#   Actions > iOS > Run workflow with "Upload to TestFlight" ticked: a signed
+#   build uploaded to TestFlight. Needs these repository secrets:
+#     APPLE_TEAM_ID   the 10-character Team ID (developer.apple.com > Account > Membership)
+#     ASC_KEY_ID      App Store Connect API key ID
+#     ASC_ISSUER_ID   App Store Connect API issuer ID
+#     ASC_KEY_P8      the whole contents of the AuthKey_XXXX.p8 file
+name: iOS
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload to TestFlight
+        type: boolean
+        default: false
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Newest Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$X"
+          xcodebuild -version
+      - name: Generate the project
+        run: brew install xcodegen && xcodegen generate
+      - name: Build (simulator, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project Favilla.xcodeproj -scheme Favilla -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -n 60
+
+  testflight:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.upload
+    runs-on: macos-latest
+    env:
+      DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the secrets
+        run: |
+          for v in DEVELOPMENT_TEAM ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+            if [ -z "${!v}" ]; then echo "::error::Missing secret for $v (see the top of this file)"; exit 1; fi
+          done
+      - name: Newest Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$X"
+          xcodebuild -version
+      - name: Generate the project
+        run: brew install xcodegen && xcodegen generate
+      - name: API key
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+      - name: Archive
+        run: |
+          set -o pipefail
+          xcodebuild -project Favilla.xcodeproj -scheme Favilla -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Favilla.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            archive | tail -n 80
+      - name: Upload to TestFlight
+        run: |
+          set -o pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$DEVELOPMENT_TEAM</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Favilla.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" | tail -n 60

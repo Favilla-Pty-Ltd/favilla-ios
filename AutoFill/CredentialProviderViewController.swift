@@ -54,9 +54,22 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     // MARK: - Ways in
 
-    // Passwords, the generic entry: only the site is known.
+    // Passwords, the generic entry: only the site (or app) is known.
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
-        fillPassword(site: serviceIdentifiers.first?.identifier ?? "", user: "")
+        let (site, isApp) = Self.pick(serviceIdentifiers)
+        fillPassword(site: site, user: "", isApp: isApp)
+    }
+
+    /// The website iOS gave, if any (a native app linked to its site gives its
+    /// domain); else, from iOS 26.2, an app not linked to a website comes as an
+    /// app ID with a display name: send the name, and the KEY offers all logins
+    /// when nothing matches (ruled 6 Nov 2026).
+    static func pick(_ ids: [ASCredentialServiceIdentifier]) -> (String, Bool) {
+        if let web = ids.first(where: { $0.type == .domain || $0.type == .URL }) { return (web.identifier, false) }
+        if #available(iOS 26.2, *), let app = ids.first(where: { $0.type == .app }) {
+            return (app.displayName ?? app.identifier, true)
+        }
+        return (ids.first?.identifier ?? "", false)
     }
 
     // Passkey sign-in, the generic entry (Other Options > Favilla).
@@ -78,7 +91,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             signInWithPasskey(rp: id.relyingPartyIdentifier, user: id.userName, clientDataHash: p.clientDataHash,
                               uv: p.userVerificationPreference, allow: [id.credentialID])
         } else if let id = credentialRequest.credentialIdentity as? ASPasswordCredentialIdentity {
-            fillPassword(site: id.serviceIdentifier.identifier, user: id.user)
+            let (site, isApp) = Self.pick([id.serviceIdentifier])
+            fillPassword(site: site, user: id.user, isApp: isApp)
         } else {
             notice = "iOS asked for something Favilla can't read."
             show()
@@ -107,12 +121,13 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     // MARK: - Passwords
 
-    private func fillPassword(site: String, user wanted: String) {
+    private func fillPassword(site: String, user wanted: String, isApp: Bool = false) {
         purpose = .password
         user = wanted
         link.site = site
+        link.siteIsAppName = isApp
         show()
-        let host = KeyLink.cleanSite(site) ?? site
+        let host = (isApp ? KeyLink.cleanAppName(site) : KeyLink.cleanSite(site)) ?? site
         watch = link.$outcome.sink { [weak self] o in
             guard let self, case .answer(let body)? = o else { return }
             defer { self.link.clearAnswer() }   // the password is not kept past here
@@ -122,7 +137,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 LastRequest.save("Password for \(host)", self.link.lines)
                 let cred = ASPasswordCredential(user: login.user, password: login.password)
                 self.closed = true
-                AccountList.record(.init(passkey: false, site: host, user: login.user)) {
+                // An app's name isn't a website iOS can list it under: list websites only.
+                AccountList.record(.init(passkey: false, site: isApp ? "" : host, user: login.user)) {
                     self.extensionContext.completeRequest(withSelectedCredential: cred)
                 }
             } catch Ctap.FillFailure.status(let st) {

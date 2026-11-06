@@ -30,7 +30,7 @@ struct SignInView: View {
 
     private var place: String {
         switch purpose {
-        case .password: return KeyLink.cleanSite(link.site) ?? link.site
+        case .password: return (link.siteIsAppName ? KeyLink.cleanAppName(link.site) : KeyLink.cleanSite(link.site)) ?? link.site
         case .passkeySignIn(let rp), .passkeyCreate(let rp, _): return rp
         }
     }

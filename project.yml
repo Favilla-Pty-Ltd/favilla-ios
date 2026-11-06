@@ -9,7 +9,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.1.0"
+    MARKETING_VERSION: "1.2.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
@@ -29,6 +29,7 @@ targets:
         CFBundleDisplayName: Favilla
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UIAppFonts: [Archivo-Light.ttf, Archivo-Regular.ttf, Archivo-SemiBold.ttf, Archivo-Bold.ttf]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # Portrait-only needs this or App Store Connect rejects the upload (90474).
@@ -55,6 +56,7 @@ targets:
         CFBundleDisplayName: Favilla
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UIAppFonts: [Archivo-Light.ttf, Archivo-Regular.ttf, Archivo-SemiBold.ttf, Archivo-Bold.ttf]
         NSBluetoothAlwaysUsageDescription: Favilla uses Bluetooth to reach your Favilla KEY when you sign in.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.authentication-services-credential-provider-ui

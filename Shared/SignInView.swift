@@ -1,11 +1,11 @@
-// SignInView.swift - the AutoFill sheet's screen.
+// SignInView.swift - the AutoFill sheet (mockups 1b and 3b, 6 Nov 2026).
 //
-//  - Passwords (KEY drop 9c): the sheet asks the KEY for the site's login and
-//    stays open while the owner picks it on the KEY; iOS fills the fields.
-//  - Passkeys (KEY drop 9a): the sheet stays open while the KEY shows the site
-//    and waits for a press, then hands the KEY's signature to iOS.
-// Type scale follows the probe screen: FAVILLA label 13 tracked, headline 22,
-// body 15, button 14 tracked.
+//  - Passwords (KEY 9c): the sheet asks the KEY for the site's login and stays
+//    open while the owner picks it on the KEY; iOS fills the fields.
+//  - Passkeys (KEY 9a): the sheet stays open while the KEY shows the site and
+//    waits for a press, then hands the KEY's signature to iOS.
+// The site name is the largest thing on the sheet: it is what the owner checks
+// against the KEY's screen.
 
 import SwiftUI
 
@@ -18,13 +18,15 @@ enum SheetPurpose: Equatable {
 struct SignInView: View {
     @ObservedObject var link: KeyLink
     var purpose: SheetPurpose = .password
+    /// The account, when iOS told us which one (a listed account, or a passkey being made).
+    var user: String = ""
     /// Shown instead of a request (something iOS asked for that the KEY can't do).
     var notice: String?
     var onRetry: () -> Void = {}
     var onClose: () -> Void
 
-    private var isPasskey: Bool { purpose != .password }
     private var creating: Bool { if case .passkeyCreate = purpose { return true }; return false }
+    private var failed: String? { if case .failed(let w)? = link.outcome { return w }; return nil }
 
     private var place: String {
         switch purpose {
@@ -35,84 +37,72 @@ struct SignInView: View {
 
     private var headline: String {
         if notice != nil { return "Not available yet" }
+        if link.pairing { return "Check the code on your KEY" }
         switch link.outcome {
         case .answer?, .ctap?: return creating ? "Passkey made" : "Signed in"
         case .failed?: return creating ? "No passkey made" : "Not signed in"
         case .cancelled?: return "Cancelled"
         default:
-            if link.pairing { return "Check the code on your KEY" }
             if link.waitingOnKey { return purpose == .password ? "Choose the login on your KEY" : "Approve on your KEY" }
-            return link.busy ? "Connecting to your KEY" : (creating ? "Make a passkey on your KEY" : "Sign in with Favilla")
+            return "Connecting to your KEY"
         }
     }
 
-    private var detail: String {
-        if let n = notice { return n }
-        switch link.outcome {
-        case .answer?, .ctap?: return ""
-        case .failed(let why)?: return why
-        default:
-            if link.pairing { return "This iPhone isn't paired with the KEY yet. If the numbers in iOS's prompt match the KEY's screen, tap Pair, then press ENTER on the KEY. (PAIR A PHONE must be open on the KEY.)" }
-            if link.waitingOnKey {
-                switch purpose {
-                case .password: return "Check \(place) on the KEY's screen, pick the login and press ENTER."
-                case .passkeySignIn: return "Check \(place) on the KEY's screen, then press to sign in."
-                case .passkeyCreate: return "Check \(place) on the KEY's screen, then press to make the passkey."
-                }
-            }
-            let what: String
-            switch purpose {
-            case .password: what = "Signing in to \(place)."
-            case .passkeySignIn: what = "Signing in to \(place) with a passkey."
-            case .passkeyCreate(_, let user): what = "Making a passkey\(user.isEmpty ? "" : " for \(user)") on \(place)."
-            }
-            return link.busy ? what + " If your KEY's Bluetooth is set to App and keyboard, press a button on it." : what
+    private var steps: [(String, Int)] {   // 0 to do, 1 now, 2 done
+        let connected = link.waitingOnKey || link.outcome?.isReply == true
+        let done = link.outcome?.isReply == true
+        let second: String
+        switch purpose {
+        case .password: second = "Pick the login on the KEY, press ENTER"
+        case .passkeySignIn: second = "Check the site on the KEY, press to sign in"
+        case .passkeyCreate: second = "Check the site on the KEY, press to make it"
         }
+        let third = creating ? "The site saves your passkey" : "Safari signs you in"
+        return [("Connected to your KEY", connected ? 2 : 1),
+                (second, done ? 2 : (connected ? 1 : 0)),
+                (third, done ? 2 : 0)]
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text("FAVILLA")
-                    .font(.system(size: 13, weight: .semibold))
-                    .tracking(3)
-                    .foregroundStyle(Brand.brass)
+                Lockup(mark: 22, word: 15)
                 Spacer()
-                Button("Close", action: onClose).foregroundStyle(Brand.grey)
+                Button("Close", action: onClose).font(Brand.body).foregroundStyle(Brand.grey).frame(minHeight: 44)
             }
-            Text(headline)
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(Brand.ink)
-            if !detail.isEmpty {
-                Text(detail)
-                    .font(.system(size: 15))
-                    .foregroundStyle(link.waitingOnKey || link.pairing ? Brand.brass : Brand.grey)
-                    .fixedSize(horizontal: false, vertical: true)
+            Text(headline).font(Brand.headline).foregroundStyle(Brand.ink)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(creating ? "MAKING A PASSKEY FOR" : "SIGNING IN TO").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
+                Text(place).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
+                if !user.isEmpty { Text("as \(user)").font(Brand.body).foregroundStyle(Brand.grey) }
             }
-            if case .failed? = link.outcome {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(link.lines.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(Brand.grey)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    .padding(12)
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Brand.card)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+
+            if let n = notice {
+                Text(n).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            } else if link.pairing {
+                Text("This iPhone isn't paired with the KEY yet. If the numbers in iOS's prompt match the KEY's screen, tap Pair, then press ENTER on the KEY. PAIR A PHONE must be open on the KEY.")
+                    .font(Brand.body).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
+            } else if let why = failed {
+                Text(why).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                LogBox(lines: link.lines, maxHeight: 160)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepRow(text: s.0, state: s.1) }
                 }
-                .frame(maxHeight: 180)
-                .background(Brand.card)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal, 2)
             }
+
             Spacer()
             if notice == nil {
                 if link.busy {
-                    button("CANCEL", filled: false) { link.cancel() }
-                } else if case .failed? = link.outcome {
-                    button("TRY AGAIN", filled: true, onRetry)
-                } else if link.outcome == .cancelled {
-                    button("TRY AGAIN", filled: true, onRetry)
+                    BrandButton(title: "CANCEL", filled: false) { link.cancel() }
+                } else if failed != nil || link.outcome == .cancelled {
+                    BrandButton(title: "TRY AGAIN", filled: true, action: onRetry)
                 }
             }
         }
@@ -120,17 +110,35 @@ struct SignInView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Brand.bg)
     }
+}
 
-    private func button(_ title: String, filled: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .tracking(2)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(filled ? Brand.brass : Brand.card)
-                .foregroundStyle(filled ? Brand.bg : Brand.ink)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+private struct StepRow: View {
+    let text: String
+    let state: Int   // 0 to do, 1 now, 2 done
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                if state == 2 {
+                    Circle().fill(Brand.brass)
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Brand.bg)
+                } else {
+                    Circle().strokeBorder(state == 1 ? Brand.brass : Brand.line, lineWidth: 2)
+                    if state == 1 { Circle().fill(Brand.brass).frame(width: 8, height: 8) }
+                }
+            }
+            .frame(width: 22, height: 22)
+            .accessibilityHidden(true)
+            Text(text)
+                .font(state == 1 ? Brand.font(15, .semibold) : Brand.body)
+                .foregroundStyle(state == 1 ? Brand.ink : Brand.grey)   // faint fails 4.5:1 for body text
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(state == 2 ? "done" : state == 1 ? "now" : "next")
     }
+}
+
+extension KeyLink.Outcome {
+    /// The KEY answered (password or passkey).
+    var isReply: Bool { switch self { case .answer, .ctap: return true; default: return false } }
 }

@@ -1,7 +1,6 @@
-// FavillaApp.swift - the Favilla app (probe stage).
-// The app's main jobs come later: pairing the AutoFill side with the KEY and
-// settings. For now it asks for Bluetooth permission (the AutoFill extension
-// shares it) and runs the same probe as the sign-in sheet.
+// FavillaApp.swift - the Favilla app's home (mockup 1d, 6 Nov 2026): the KEY's
+// link and pairing, the opt-in account list, and the last AutoFill request.
+// The sign-in itself happens in the AutoFill sheet (CredentialProviderViewController).
 
 import SwiftUI
 
@@ -11,65 +10,113 @@ struct FavillaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            VStack(spacing: 0) {
-                ProbeView(link: link, title: "FAVILLA")
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("TO PAIR A KEY")
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(2)
-                        .foregroundStyle(Brand.brass)
-                    Text("On the KEY, open PAIR A PHONE. Then tap FIND MY KEY here and accept the code when the numbers match the KEY's screen, and press ENTER on the KEY.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Brand.grey)
-                        .padding(.bottom, 10)
-                    Text("TO USE IT WHEN SIGNING IN")
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(2)
-                        .foregroundStyle(Brand.brass)
-                    Text("Settings > General > AutoFill & Passwords, turn on Favilla. Then tap a login field in Safari and choose Favilla. Pick the login (or approve the passkey) on your KEY.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Brand.grey)
-                }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Brand.bg)
-                LastRequestView()
-            }
-            .preferredColorScheme(.dark)
+            HomeView(link: link).preferredColorScheme(.dark)
         }
     }
 }
 
-/// The last AutoFill request's log (saved by the sheet), for the bench.
-struct LastRequestView: View {
-    @State private var open = false
-    @State private var text: String?
+struct HomeView: View {
+    @ObservedObject var link: KeyLink
+    @State private var listOn = AccountList.isOn
+    @State private var count = AccountList.entries.count
+    @State private var showLast = false
+    @Environment(\.scenePhase) private var phase
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: { text = LastRequest.load(); open.toggle() }) {
-                Text(open ? "HIDE LAST REQUEST" : "SHOW LAST REQUEST")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(2)
-                    .foregroundStyle(Brand.brass)
-            }
-            if open {
-                ScrollView {
-                    Text(text ?? "No request yet.")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Brand.grey)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                Lockup(mark: 28, word: 17).padding(.top, 8)
+
+                // YOUR KEY
+                BrandSection(title: "YOUR KEY") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                        if let d = KeyStatus.detail(link) {
+                            Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        }
+                        BrandButton(title: link.busy ? "CANCEL" : "FIND MY KEY", filled: !link.busy) {
+                            link.busy ? link.cancel() : link.probe()
+                        }
+                        Text("To pair a KEY: open PAIR A PHONE on the KEY, tap FIND MY KEY, check the code matches, tap Pair, then press ENTER on the KEY.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(16)
+                    .background(Brand.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
-                .frame(maxHeight: 240)
-                .background(Brand.card)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                // SIGNING IN
+                BrandSection(title: "SIGNING IN") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: Binding(get: { listOn }, set: { on in
+                            listOn = on
+                            AccountList.setOn(on) { _ in count = AccountList.entries.count }
+                        })) {
+                            Text("Show my accounts in the keyboard bar").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                        }
+                        .tint(Brand.brass)
+                        Text("iOS keeps a list of the site names and usernames you use through Favilla, so it can offer them the moment you tap a login field. Passwords and passkeys stay on the KEY until you approve one there.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(16)
+                    .background(Brand.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                    if listOn {
+                        VStack(spacing: 0) {
+                            HStack {
+                                Text("Accounts listed").font(Brand.body).foregroundStyle(Brand.ink)
+                                Spacer()
+                                Text("\(count)").font(Brand.body).foregroundStyle(Brand.grey)
+                            }
+                            .padding(16)
+                            Divider().overlay(Brand.line)
+                            Button {
+                                AccountList.setOn(false) { _ in AccountList.setOn(true) { _ in count = AccountList.entries.count } }
+                            } label: {
+                                Text("Remove the list from this iPhone").font(Brand.body).foregroundStyle(Brand.danger)
+                                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(.horizontal, 16)
+                            }
+                        }
+                        .background(Brand.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        Text("It fills as you sign in through Favilla. Off: Favilla is one entry under the key icon, and iOS holds no account names.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Off: Favilla is one entry under the key icon, and iOS holds no account names.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("Turn on Favilla in Settings > General > AutoFill & Passwords.")
+                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                }
+
+                // LAST REQUEST (bench)
+                BrandSection(title: "LAST REQUEST") {
+                    Button(showLast ? "Hide" : "Show the last sign-in's steps") { showLast.toggle() }
+                        .font(Brand.body).foregroundStyle(Brand.brass).frame(minHeight: 44)
+                    if showLast {
+                        LogBox(lines: (LastRequest.load() ?? "No request yet.").components(separatedBy: "\n"), maxHeight: 260)
+                            .textSelection(.enabled)
+                    }
+                }
             }
+            .padding(20)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Brand.bg)
+        .background(Brand.bg.ignoresSafeArea())
+        .onChange(of: phase) { _, p in
+            if p == .active { listOn = AccountList.isOn; count = AccountList.entries.count }
+        }
+    }
+}
+
+private struct BrandSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
+            content
+        }
     }
 }

@@ -1,14 +1,20 @@
 // CredentialProviderViewController.swift - the AutoFill extension.
 //
-// Passwords (KEY drop 9c): the extension asks the KEY for the site's login
-// (FILL on 8F1A0003, answer on 8F1A0004); the owner picks it on the KEY and
-// presses ENTER; the extension hands it to iOS as an ASPasswordCredential and
-// keeps nothing.
+// Passwords (KEY 9c): ask the KEY for the site's login (FILL on 8F1A0003, answer
+// on 8F1A0004); the owner picks it on the KEY and presses ENTER; hand it to iOS
+// as an ASPasswordCredential and keep nothing.
 //
-// Passkeys (KEY drop 9a, favilla-key-firmware docs/BLE_PASSKEY_PROTOCOL.md):
-// sign-in sends CTAP2 getAssertion and hands the KEY's signature to iOS;
-// creation sends makeCredential and hands iOS the attestation object. One
-// generic "Favilla" entry, no account names listed (ruled 5 Nov 2026).
+// Passkeys (KEY 9a, favilla-key-firmware docs/BLE_PASSKEY_PROTOCOL.md): sign-in
+// sends CTAP2 getAssertion and hands the KEY's signature to iOS; creation sends
+// makeCredential and hands iOS the attestation object (as "none").
+//
+// Two ways in (option 1, ruled 6 Nov 2026):
+//  - the generic Favilla entry (key icon > Favilla, or Other Options): iOS says
+//    only the site, the KEY shows its matches;
+//  - an account iOS listed above the keyboard or first in the passkey prompt
+//    (the opt-in AccountList): iOS says which account, the sheet shows it.
+// Every account used while the list is on is added to it (site + username, and
+// for a passkey its id and user handle; never a password).
 
 import AuthenticationServices
 import Combine
@@ -17,6 +23,7 @@ import SwiftUI
 final class CredentialProviderViewController: ASCredentialProviderViewController {
     private let link = KeyLink()
     private var purpose: SheetPurpose = .password
+    private var user = ""
     private var notice: String?
     private var configuring = false
     private var watch: AnyCancellable?
@@ -34,9 +41,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         let onClose: () -> Void = { [weak self] in self?.close() }
         let onRetry: () -> Void = { [weak self] in self?.retry() }
         let root: AnyView = configuring
-            ? AnyView(ProbeView(link: link, title: "FAVILLA", onClose: onClose).preferredColorScheme(.dark))
-            : AnyView(SignInView(link: link, purpose: purpose, notice: notice, onRetry: onRetry, onClose: onClose).preferredColorScheme(.dark))
+            ? AnyView(ProbeView(link: link, onClose: onClose).preferredColorScheme(.dark))
+            : AnyView(SignInView(link: link, purpose: purpose, user: user, notice: notice, onRetry: onRetry, onClose: onClose).preferredColorScheme(.dark))
         let host = UIHostingController(rootView: root)
+        host.view.backgroundColor = UIColor(red: 14 / 255, green: 13 / 255, blue: 12 / 255, alpha: 1)
         addChild(host)
         host.view.frame = view.bounds
         host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -44,78 +52,40 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         host.didMove(toParent: self)
     }
 
-    // MARK: - Passwords: the sheet's "Favilla" entry, for this site (KEY 9c).
+    // MARK: - Ways in
 
+    // Passwords, the generic entry: only the site is known.
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
-        purpose = .password
-        let site = serviceIdentifiers.first?.identifier ?? ""
-        link.site = site
-        show()
-        watch = link.$outcome.sink { [weak self] o in
-            guard let self, case .answer(let body)? = o else { return }
-            do {
-                let login = try Ctap.parseFill(body)
-                self.link.note("Login from the KEY (username \(login.user.isEmpty ? "empty" : "\(login.user.count) characters")); handing it to iOS")
-                LastRequest.save("Password for \(site)", self.link.lines)
-                self.closed = true
-                self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: login.user, password: login.password))
-            } catch Ctap.FillFailure.status(let st) {
-                self.link.showFailure(Ctap.message(forFillStatus: st))
-                LastRequest.save("Password for \(site)", self.link.lines)
-            } catch {
-                self.link.showFailure("The KEY's answer couldn't be read.")
-                LastRequest.save("Password for \(site)", self.link.lines)
-            }
-            self.link.clearAnswer()   // the password is not kept past here
-        }
-        retry = { [weak self] in self?.link.fill() }
-        link.fill()
+        fillPassword(site: serviceIdentifiers.first?.identifier ?? "", user: "")
     }
 
-    // MARK: - Passkeys: sign in (no account picked: the generic Favilla entry).
-
+    // Passkey sign-in, the generic entry (Other Options > Favilla).
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier],
                                         requestParameters: ASPasskeyCredentialRequestParameters) {
-        let rp = requestParameters.relyingPartyIdentifier
-        let cdh = requestParameters.clientDataHash
-        let uv = requestParameters.userVerificationPreference != .discouraged
-        let allow = requestParameters.allowedCredentials
-        purpose = .passkeySignIn(rp: rp)
-        link.site = rp
-        show()
-        let request = Ctap.getAssertion(rpId: rp, clientDataHash: cdh, allow: allow, uv: uv)
-        watch = link.$outcome.sink { [weak self] o in
-            guard let self, case .ctap(let body)? = o else { return }
-            do {
-                let a = try Ctap.parseAssertion(body)
-                guard self.passes(authData: a.authenticatorData, rp: rp, uvRequired: requestParameters.userVerificationPreference == .required,
-                                  creating: false, title: "Passkey sign-in for \(rp)") else { return }
-                let cred = ASPasskeyAssertionCredential(userHandle: a.userHandle, relyingParty: rp, signature: a.signature,
-                                                        clientDataHash: cdh, authenticatorData: a.authenticatorData,
-                                                        credentialID: a.credentialID)
-                self.closed = true
-                self.extensionContext.completeAssertionRequest(using: cred) { ok in
-                    self.link.note(ok ? "iOS says the request had expired" : "Handed to iOS")
-                    LastRequest.save("Passkey sign-in for \(rp)", self.link.lines)
-                }
-            } catch {
-                self.fail(error, creating: false)
-                LastRequest.save("Passkey sign-in for \(rp)", self.link.lines)
-            }
-        }
-        retry = { [weak self] in self?.link.ctap(request) }
-        link.ctap(request)
+        signInWithPasskey(rp: requestParameters.relyingPartyIdentifier, user: "", clientDataHash: requestParameters.clientDataHash,
+                          uv: requestParameters.userVerificationPreference, allow: requestParameters.allowedCredentials)
     }
 
-    // A passkey identity iOS picked from its list: Favilla registers none, so
-    // this needs the sheet.
+    // An account iOS listed: always needs the KEY, so ask for the sheet.
     override func provideCredentialWithoutUserInteraction(for credentialRequest: ASCredentialRequest) {
         extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain,
                                                           code: ASExtensionError.userInteractionRequired.rawValue))
     }
 
-    // MARK: - Passkeys: make one on the KEY.
+    // An account iOS listed, with the sheet.
+    override func prepareInterfaceToProvideCredential(for credentialRequest: ASCredentialRequest) {
+        if let p = credentialRequest as? ASPasskeyCredentialRequest, let id = p.credentialIdentity as? ASPasskeyCredentialIdentity {
+            signInWithPasskey(rp: id.relyingPartyIdentifier, user: id.userName, clientDataHash: p.clientDataHash,
+                              uv: p.userVerificationPreference, allow: [id.credentialID])
+        } else if let id = credentialRequest.credentialIdentity as? ASPasswordCredentialIdentity {
+            fillPassword(site: id.serviceIdentifier.identifier, user: id.user)
+        } else {
+            notice = "iOS asked for something Favilla can't read."
+            show()
+        }
+    }
 
+    // Passkey creation.
     override func prepareInterface(forPasskeyRegistration registrationRequest: ASCredentialRequest) {
         guard let req = registrationRequest as? ASPasskeyCredentialRequest,
               let id = req.credentialIdentity as? ASPasskeyCredentialIdentity else {
@@ -123,50 +93,116 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             show()
             return
         }
-        let rp = id.relyingPartyIdentifier
-        let cdh = req.clientDataHash
-        purpose = .passkeyCreate(rp: rp, user: id.userName)
-        link.site = rp
-        show()
-        let algs = req.supportedAlgorithms.map { $0.rawValue }
-        let request = Ctap.makeCredential(rpId: rp, clientDataHash: cdh, userHandle: id.userHandle,
-                                          userName: id.userName, algorithms: algs)
-        watch = link.$outcome.sink { [weak self] o in
-            guard let self, case .ctap(let body)? = o else { return }
-            do {
-                let r = try Ctap.parseRegistration(body)
-                self.link.note("KEY attestation \(r.fmt), handed to iOS as none; credential id \(r.credentialID.count) bytes, attestation object \(r.attestationObject.count) bytes")
-                guard self.passes(authData: r.authenticatorData, rp: rp, uvRequired: req.userVerificationPreference == .required,
-                                  creating: true, title: "Passkey creation for \(rp)") else { return }
-                let cred = ASPasskeyRegistrationCredential(relyingParty: rp, clientDataHash: cdh,
-                                                           credentialID: r.credentialID, attestationObject: r.attestationObject)
-                self.closed = true
-                self.extensionContext.completeRegistrationRequest(using: cred) { ok in
-                    self.link.note(ok ? "iOS says the request had expired" : "Handed to iOS")
-                    LastRequest.save("Passkey creation for \(rp)", self.link.lines)
-                }
-            } catch {
-                self.fail(error, creating: true)
-                LastRequest.save("Passkey creation for \(rp)", self.link.lines)
-            }
-        }
-        retry = { [weak self] in self?.link.ctap(request) }
-        link.ctap(request)
+        makePasskey(rp: id.relyingPartyIdentifier, user: id.userName, userHandle: id.userHandle,
+                    clientDataHash: req.clientDataHash, uv: req.userVerificationPreference,
+                    algorithms: req.supportedAlgorithms.map { $0.rawValue })
     }
 
-    // MARK: - Settings > AutoFill & Passwords > Favilla: the link check.
-
+    // Settings > AutoFill & Passwords > Favilla: the link check (and pairing).
     override func prepareInterfaceForExtensionConfiguration() {
         configuring = true
         show()
         link.probe()
     }
 
+    // MARK: - Passwords
+
+    private func fillPassword(site: String, user wanted: String) {
+        purpose = .password
+        user = wanted
+        link.site = site
+        show()
+        let host = KeyLink.cleanSite(site) ?? site
+        watch = link.$outcome.sink { [weak self] o in
+            guard let self, case .answer(let body)? = o else { return }
+            defer { self.link.clearAnswer() }   // the password is not kept past here
+            do {
+                let login = try Ctap.parseFill(body)
+                self.link.note("Login from the KEY (username \(login.user.isEmpty ? "empty" : "\(login.user.count) characters")); handing it to iOS")
+                LastRequest.save("Password for \(host)", self.link.lines)
+                let cred = ASPasswordCredential(user: login.user, password: login.password)
+                self.closed = true
+                AccountList.record(.init(passkey: false, site: host, user: login.user)) {
+                    self.extensionContext.completeRequest(withSelectedCredential: cred)
+                }
+            } catch Ctap.FillFailure.status(let st) {
+                self.link.showFailure(Ctap.message(forFillStatus: st))
+                LastRequest.save("Password for \(host)", self.link.lines)
+            } catch {
+                self.link.showFailure("The KEY's answer couldn't be read.")
+                LastRequest.save("Password for \(host)", self.link.lines)
+            }
+        }
+        retry = { [weak self] in self?.link.fill() }
+        link.fill()
+    }
+
+    // MARK: - Passkeys
+
+    private func signInWithPasskey(rp: String, user wanted: String, clientDataHash cdh: Data,
+                                   uv: ASAuthorizationPublicKeyCredentialUserVerificationPreference, allow: [Data]) {
+        purpose = .passkeySignIn(rp: rp)
+        user = wanted
+        link.site = rp
+        show()
+        let request = Ctap.getAssertion(rpId: rp, clientDataHash: cdh, allow: allow, uv: uv != .discouraged)
+        let title = "Passkey sign-in for \(rp)"
+        watch = link.$outcome.sink { [weak self] o in
+            guard let self, case .ctap(let body)? = o else { return }
+            do {
+                let a = try Ctap.parseAssertion(body)
+                guard self.passes(authData: a.authenticatorData, rp: rp, uvRequired: uv == .required, creating: false, title: title) else { return }
+                let cred = ASPasskeyAssertionCredential(userHandle: a.userHandle, relyingParty: rp, signature: a.signature,
+                                                        clientDataHash: cdh, authenticatorData: a.authenticatorData,
+                                                        credentialID: a.credentialID)
+                self.link.note("Handed to iOS")
+                LastRequest.save(title, self.link.lines)
+                self.closed = true
+                self.extensionContext.completeAssertionRequest(using: cred)
+            } catch {
+                self.fail(error, creating: false)
+                LastRequest.save(title, self.link.lines)
+            }
+        }
+        retry = { [weak self] in self?.link.ctap(request) }
+        link.ctap(request)
+    }
+
+    private func makePasskey(rp: String, user name: String, userHandle: Data, clientDataHash cdh: Data,
+                             uv: ASAuthorizationPublicKeyCredentialUserVerificationPreference, algorithms: [Int]) {
+        purpose = .passkeyCreate(rp: rp, user: name)
+        user = name
+        link.site = rp
+        show()
+        let request = Ctap.makeCredential(rpId: rp, clientDataHash: cdh, userHandle: userHandle, userName: name, algorithms: algorithms)
+        let title = "Passkey creation for \(rp)"
+        watch = link.$outcome.sink { [weak self] o in
+            guard let self, case .ctap(let body)? = o else { return }
+            do {
+                let r = try Ctap.parseRegistration(body)
+                self.link.note("KEY attestation \(r.fmt), handed to iOS as none; credential id \(r.credentialID.count) bytes")
+                guard self.passes(authData: r.authenticatorData, rp: rp, uvRequired: uv == .required, creating: true, title: title) else { return }
+                let cred = ASPasskeyRegistrationCredential(relyingParty: rp, clientDataHash: cdh,
+                                                           credentialID: r.credentialID, attestationObject: r.attestationObject)
+                self.link.note("Handed to iOS")
+                LastRequest.save(title, self.link.lines)
+                self.closed = true
+                AccountList.record(.init(passkey: true, site: rp, user: name, credentialID: r.credentialID, userHandle: userHandle)) {
+                    self.extensionContext.completeRegistrationRequest(using: cred)
+                }
+            } catch {
+                self.fail(error, creating: true)
+                LastRequest.save(title, self.link.lines)
+            }
+        }
+        retry = { [weak self] in self?.link.ctap(request) }
+        link.ctap(request)
+    }
+
     // MARK: -
 
-    /// Check the KEY's authenticator data before iOS sees it. Logs what it found
-    /// (and saves it, since the sheet closes on success); on a problem the sheet
-    /// stays open and says why instead of handing iOS something it will refuse.
+    /// Check the KEY's authenticator data before iOS sees it. On a problem the
+    /// sheet stays open and says why instead of handing iOS something it refuses.
     private func passes(authData: Data, rp: String, uvRequired: Bool, creating: Bool, title: String) -> Bool {
         guard let c = Ctap.check(authData: authData, rpId: rp) else {
             link.showFailure("The KEY's reply was too short to use.")
@@ -175,7 +211,6 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         }
         link.note("Checked: " + c.summary + (uvRequired ? ", UV required" : ""))
         let problems = c.problems(uvRequired: uvRequired, creating: creating)
-        LastRequest.save(title, link.lines)
         guard problems.isEmpty else {
             link.showFailure("Not handed to iOS: " + problems.joined(separator: "; ") + ".")
             LastRequest.save(title, link.lines)
@@ -198,8 +233,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         guard !closed else { return }
         closed = true
         link.cancel()
-        if !configuring { LastRequest.save("Request closed on the sheet", link.lines) }
         if configuring { extensionContext.completeExtensionConfigurationRequest(); return }
+        LastRequest.save("Request closed on the sheet", link.lines)
         extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain,
                                                           code: ASExtensionError.userCanceled.rawValue))
     }

@@ -113,22 +113,25 @@ final class KeyLink: NSObject, ObservableObject {
     }
 
     private func go(_ c: CBCentralManager) {
-        // 1. The KEY this phone used before (saved by an earlier run).
-        if let s = store.string(forKey: KeyLink.savedIdKey), let id = UUID(uuidString: s),
-           let p = c.retrievePeripherals(withIdentifiers: [id]).first {
-            add("Known KEY: waiting for it. Press a button on the KEY.")
-            connect(p, c)
-            return
-        }
-        // 2. A KEY the system is already connected to (as a keyboard).
+        // 1. A KEY the system is already connected to (as a keyboard): use that link.
         if let p = c.retrieveConnectedPeripherals(withServices: [KeyLink.hidService, KeyLink.favService])
             .first(where: { ($0.name ?? "").hasPrefix(KeyLink.keyName) }) {
             add("KEY already connected to the phone")
             connect(p, c)
             return
         }
-        // 3. Look for it. It is findable for 15 s after a press on its home screen.
-        add("Looking for the KEY. Press a button on the KEY's home screen.")
+        // 2. The KEY this phone used before (saved by an earlier run). A pending
+        //    connect waits for it to advertise. iOS gives a re-paired KEY a new
+        //    identity, so search as well and take whichever answers (bench,
+        //    6 Nov 2026: after a re-pair the saved one never answered).
+        if let s = store.string(forKey: KeyLink.savedIdKey), let id = UUID(uuidString: s),
+           let p = c.retrievePeripherals(withIdentifiers: [id]).first {
+            add("Known KEY: waiting for it, and searching. Press a button on the KEY.")
+            connect(p, c)
+        } else {
+            add("Looking for the KEY. Press a button on the KEY's home screen.")
+        }
+        // 3. Search. The KEY is findable for 15 s after a press on its home screen.
         c.scanForPeripherals(withServices: [KeyLink.hidService], options: nil)
     }
 
@@ -216,21 +219,30 @@ extension KeyLink: CBCentralManagerDelegate {
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? p.name ?? ""
         guard name.hasPrefix(KeyLink.keyName) else { return }
         c.stopScan()
-        add("Found \(name) (RSSI \(rssi))")
+        if let old = peripheral {
+            if old.identifier == p.identifier { add("Found it advertising"); return }   // the pending connect completes
+            add("Found \(name) under a new identity (re-paired?)")
+            c.cancelPeripheralConnection(old)
+        } else {
+            add("Found \(name) (RSSI \(rssi))")
+        }
         connect(p, c)
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        c.stopScan()
         add("Connected")
         store.set(p.identifier.uuidString, forKey: KeyLink.savedIdKey)
         p.discoverServices([KeyLink.favService])
     }
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
+        guard p.identifier == peripheral?.identifier else { return }
         finish(.failed("Couldn't connect to your KEY. Try again."), "Could not connect: \(error?.localizedDescription ?? "unknown")")
     }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
         if busy { finish(.failed("Your KEY dropped the link. Try again."), "The KEY dropped the link: \(error?.localizedDescription ?? "no reason given")") }
     }
 }

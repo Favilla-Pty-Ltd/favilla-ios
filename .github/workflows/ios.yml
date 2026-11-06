@@ -26,6 +26,10 @@ jobs:
           X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
           sudo xcode-select -s "$X"
           xcodebuild -version
+      - name: Test CBOR and the passkey framing
+        run: |
+          swiftc -O Shared/CBOR.swift Shared/Ctap.swift Tests/main.swift -o ctaptests
+          ./ctaptests
       - name: Generate the project
         run: brew install xcodegen && xcodegen generate
       - name: Build (simulator, unsigned)

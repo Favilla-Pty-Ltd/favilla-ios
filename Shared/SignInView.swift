@@ -1,35 +1,70 @@
-// SignInView.swift - the AutoFill sheet's sign-in screen (KEY drop 8z7).
+// SignInView.swift - the AutoFill sheet's screen.
 //
-// The sheet sends the site to the KEY, then closes so the page's login field has
-// the focus again; the owner picks the login on the KEY and the KEY types it.
+//  - Passwords (KEY drop 8z7): the sheet sends the site to the KEY, then closes
+//    so the page's login field has the focus again; the owner picks the login
+//    on the KEY and the KEY types it.
+//  - Passkeys (KEY drop 9a): the sheet stays open while the KEY shows the site
+//    and waits for a press, then hands the KEY's signature to iOS.
 // Type scale follows the probe screen: FAVILLA label 13 tracked, headline 22,
 // body 15, button 14 tracked.
 
 import SwiftUI
 
+enum SheetPurpose: Equatable {
+    case password
+    case passkeySignIn(rp: String)
+    case passkeyCreate(rp: String, user: String)
+}
+
 struct SignInView: View {
     @ObservedObject var link: KeyLink
-    /// Shown instead of signing in (e.g. a passkey ask, not supported yet).
+    var purpose: SheetPurpose = .password
+    /// Shown instead of a request (something iOS asked for that the KEY can't do).
     var notice: String?
+    var onRetry: () -> Void = {}
     var onClose: () -> Void
+
+    private var isPasskey: Bool { purpose != .password }
+    private var creating: Bool { if case .passkeyCreate = purpose { return true }; return false }
+
+    private var place: String {
+        switch purpose {
+        case .password: return KeyLink.cleanSite(link.site) ?? link.site
+        case .passkeySignIn(let rp), .passkeyCreate(let rp, _): return rp
+        }
+    }
 
     private var headline: String {
         if notice != nil { return "Not available yet" }
         switch link.outcome {
         case .sent?: return "Choose the login on your KEY"
-        case .failed?: return "Not sent to your KEY"
+        case .ctap?: return creating ? "Passkey made" : "Signed in"
+        case .failed?: return isPasskey ? (creating ? "No passkey made" : "Not signed in") : "Not sent to your KEY"
         case .cancelled?: return "Cancelled"
-        default: return link.busy ? "Press a button on your KEY" : "Sign in with Favilla"
+        default:
+            if link.waitingOnKey { return "Approve on your KEY" }
+            return link.busy ? "Press Home on your KEY" : (creating ? "Make a passkey on your KEY" : "Sign in with Favilla")
         }
     }
 
     private var detail: String {
         if let n = notice { return n }
-        let site = KeyLink.cleanSite(link.site) ?? link.site
         switch link.outcome {
         case .sent?: return "Then press to type it. This sheet closes now, so the login field is ready."
+        case .ctap?: return ""
         case .failed(let why)?: return why
-        default: return link.busy ? "Signing in to \(site). Your KEY wakes its Bluetooth when you press." : "Signing in to \(site)."
+        default:
+            if link.waitingOnKey {
+                return creating ? "Check \(place) on the KEY's screen, then press to make the passkey."
+                                : "Check \(place) on the KEY's screen, then press to sign in."
+            }
+            switch purpose {
+            case .password: return link.busy ? "Signing in to \(place). Your KEY wakes its Bluetooth when you press." : "Signing in to \(place)."
+            case .passkeySignIn: return "Signing in to \(place) with a passkey. Your KEY wakes its Bluetooth when you press Home."
+            case .passkeyCreate(_, let user):
+                let who = user.isEmpty ? "" : " for \(user)"
+                return "Making a passkey\(who) on \(place). Your KEY wakes its Bluetooth when you press Home."
+            }
         }
     }
 
@@ -46,10 +81,12 @@ struct SignInView: View {
             Text(headline)
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(Brand.ink)
-            Text(detail)
-                .font(.system(size: 15))
-                .foregroundStyle(link.outcome == .sent ? Brand.brass : Brand.grey)
-                .fixedSize(horizontal: false, vertical: true)
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 15))
+                    .foregroundStyle(link.outcome == .sent || link.waitingOnKey ? Brand.brass : Brand.grey)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if case .failed? = link.outcome {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
@@ -70,8 +107,10 @@ struct SignInView: View {
             if notice == nil {
                 if link.busy {
                     button("CANCEL", filled: false) { link.cancel() }
-                } else if link.outcome != .sent {
-                    button("TRY AGAIN", filled: true) { link.signIn() }
+                } else if case .failed? = link.outcome {
+                    button("TRY AGAIN", filled: true, onRetry)
+                } else if link.outcome == .cancelled {
+                    button("TRY AGAIN", filled: true, onRetry)
                 }
             }
         }

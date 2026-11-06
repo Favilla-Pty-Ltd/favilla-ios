@@ -9,7 +9,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.2.0"
+    MARKETING_VERSION: "0.3.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
@@ -63,7 +63,7 @@ targets:
             ASCredentialProviderExtensionShowsConfigurationUI: true
             ASCredentialProviderExtensionCapabilities:
               ProvidesPasswords: true
-              ProvidesPasskeys: false   # not wired to the KEY yet: keep Favilla out of passkey prompts
+              ProvidesPasskeys: true    # KEY drop 9a: passkeys over Bluetooth (BLE_PASSKEY_PROTOCOL.md)
     entitlements:
       path: AutoFill/FavillaAutoFill.entitlements
       properties:

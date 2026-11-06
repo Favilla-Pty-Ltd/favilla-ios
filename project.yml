@@ -27,6 +27,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Favilla
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # Portrait-only needs this or App Store Connect rejects the upload (90474).
@@ -51,6 +53,8 @@ targets:
       path: AutoFill/Info.plist
       properties:
         CFBundleDisplayName: Favilla
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSBluetoothAlwaysUsageDescription: Favilla uses Bluetooth to reach your Favilla KEY when you sign in.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.authentication-services-credential-provider-ui

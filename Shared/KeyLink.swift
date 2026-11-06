@@ -108,7 +108,7 @@ final class KeyLink: NSObject, ObservableObject {
             return
         }
         add("Starting Bluetooth")
-        armTimeout(30, "Your KEY didn't answer. Press the Home button on the KEY, then try again.")
+        armTimeout(30, "Your KEY didn't answer. Press a button on the KEY's home screen, then try again.")
         if let c = central, c.state == .poweredOn { go(c) } else { central = CBCentralManager(delegate: self, queue: .main) }
     }
 

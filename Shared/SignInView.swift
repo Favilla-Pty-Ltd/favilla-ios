@@ -43,7 +43,7 @@ struct SignInView: View {
         case .cancelled?: return "Cancelled"
         default:
             if link.waitingOnKey { return "Approve on your KEY" }
-            return link.busy ? "Press Home on your KEY" : (creating ? "Make a passkey on your KEY" : "Sign in with Favilla")
+            return link.busy ? "Press a button on your KEY" : (creating ? "Make a passkey on your KEY" : "Sign in with Favilla")
         }
     }
 
@@ -60,10 +60,10 @@ struct SignInView: View {
             }
             switch purpose {
             case .password: return link.busy ? "Signing in to \(place). Your KEY wakes its Bluetooth when you press." : "Signing in to \(place)."
-            case .passkeySignIn: return "Signing in to \(place) with a passkey. Your KEY wakes its Bluetooth when you press Home."
+            case .passkeySignIn: return "Signing in to \(place) with a passkey. Your KEY wakes its Bluetooth when you press any button on its home screen."
             case .passkeyCreate(_, let user):
                 let who = user.isEmpty ? "" : " for \(user)"
-                return "Making a passkey\(who) on \(place). Your KEY wakes its Bluetooth when you press Home."
+                return "Making a passkey\(who) on \(place). Your KEY wakes its Bluetooth when you press any button on its home screen."
             }
         }
     }

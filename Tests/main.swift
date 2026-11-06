@@ -98,10 +98,13 @@ var regResp = Data([0x00])
 regResp.append(CBOR.map([(.int(1), .text("packed")), (.int(2), .bytes(authReg)), (.int(3), att)]).encoded())
 do {
     let r = try Ctap.parseRegistration(regResp)
-    check(r.credentialID == credId, "registration credential id")
+    check(r.credentialID == credId && r.fmt == "packed", "registration credential id, KEY's format noted")
     let obj = try CBOR.decode(r.attestationObject)
-    check(obj["fmt"]?.string == "packed" && obj["authData"]?.data == authReg && obj["attStmt"] == att, "attestation object fields")
-    check(hx(r.attestationObject).hasPrefix("a363666d74"), "attestation object starts with fmt (canonical order)")
+    check(obj["fmt"]?.string == "none" && obj["authData"]?.data == authReg && obj["attStmt"] == CBOR.map([]), "attestation object is none with empty statement")
+    check(hx(r.attestationObject).hasPrefix("a363666d74646e6f6e656761747453746d74a0"), "attestation object canonical: fmt none, attStmt {}")
+    let p = try Ctap.parseRegistration(regResp, passAttestation: true)
+    let po = try CBOR.decode(p.attestationObject)
+    check(po["fmt"]?.string == "packed" && po["attStmt"] == att, "passAttestation keeps the KEY's statement")
 } catch { check(false, "parseRegistration threw \(error)") }
 
 let authA = Data(repeating: 0x22, count: 37)

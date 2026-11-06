@@ -137,12 +137,18 @@ enum Ctap {
         return Assertion(credentialID: cred, authenticatorData: auth, signature: sig, userHandle: handle)
     }
 
-    static func parseRegistration(_ resp: Data) throws -> Registration {
+    /// `passAttestation` false (the default) hands iOS "none" with an empty
+    /// statement, as third-party passkey apps on iPhone do and as WebAuthn lets a
+    /// client do (bench 6 Nov 2026: iOS refused the KEY's "packed" reply though
+    /// every field checked out). true passes the KEY's own statement through.
+    static func parseRegistration(_ resp: Data, passAttestation: Bool = false) throws -> Registration {
         let m = try body(resp)
         guard let fmt = m[1]?.string, let auth = m[2]?.data, let att = m[3] else { throw Failure.malformed("no fmt, authData or attStmt") }
         guard let cred = credentialID(fromAuthData: auth) else { throw Failure.malformed("no attested credential in authData") }
+        let outFmt = passAttestation ? fmt : "none"
+        let outAtt: CBOR = passAttestation ? att : .map([])
         // WebAuthn attestation object: {"fmt", "attStmt", "authData"} (canonical order by the encoder).
-        let obj = CBOR.map([(.text("fmt"), .text(fmt)), (.text("attStmt"), att), (.text("authData"), .bytes(auth))]).encoded()
+        let obj = CBOR.map([(.text("fmt"), .text(outFmt)), (.text("attStmt"), outAtt), (.text("authData"), .bytes(auth))]).encoded()
         return Registration(credentialID: cred, attestationObject: obj, fmt: fmt, authenticatorData: auth)
     }
 

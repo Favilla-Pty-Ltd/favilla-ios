@@ -83,7 +83,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                                                         credentialID: a.credentialID)
                 self.closed = true
                 self.extensionContext.completeAssertionRequest(using: cred) { ok in
-                    self.link.note("iOS took the signature: \(ok)")
+                    self.link.note("iOS completion handler: \(ok)")
                     LastRequest.save("Passkey sign-in for \(rp)", self.link.lines)
                 }
             } catch {
@@ -123,14 +123,14 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             guard let self, case .ctap(let body)? = o else { return }
             do {
                 let r = try Ctap.parseRegistration(body)
-                self.link.note("Attestation format \(r.fmt), credential id \(r.credentialID.count) bytes, attestation object \(r.attestationObject.count) bytes")
+                self.link.note("KEY attestation \(r.fmt), handed to iOS as none; credential id \(r.credentialID.count) bytes, attestation object \(r.attestationObject.count) bytes")
                 guard self.passes(authData: r.authenticatorData, rp: rp, uvRequired: req.userVerificationPreference == .required,
                                   creating: true, title: "Passkey creation for \(rp)") else { return }
                 let cred = ASPasskeyRegistrationCredential(relyingParty: rp, clientDataHash: cdh,
                                                            credentialID: r.credentialID, attestationObject: r.attestationObject)
                 self.closed = true
                 self.extensionContext.completeRegistrationRequest(using: cred) { ok in
-                    self.link.note("iOS took the passkey: \(ok)")
+                    self.link.note("iOS completion handler: \(ok)")
                     LastRequest.save("Passkey creation for \(rp)", self.link.lines)
                 }
             } catch {

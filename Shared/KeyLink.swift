@@ -57,6 +57,9 @@ final class KeyLink: NSObject, ObservableObject {
     /// `site` is a native app's name (iOS 26.2+ gives an app ID and name for apps
     /// not linked to a website), not a domain: sent as written, not as a host name.
     var siteIsAppName = false
+    /// The account iOS named (a listed account), sent with FILL so the KEY can
+    /// open that entry straight away (9d). Empty: the KEY shows the site's matches.
+    var fillUser: String = ""
     private(set) var mode: Mode = .probe
 
     private var central: CBCentralManager?
@@ -121,7 +124,7 @@ final class KeyLink: NSObject, ObservableObject {
         pendingFrames = []; requestSent = false; reasm = Ctap.Reassembler(); cpChar = nil; cpLenChar = nil; reqCh = nil
         started = Date()
         if !site.isEmpty { add("Asked for: \(site)") }
-        if m == .fill, KeyLink.fillBody(site: site, appName: siteIsAppName) == nil {
+        if m == .fill, KeyLink.fillBody(site: site, appName: siteIsAppName, user: fillUser) == nil {
             finish(.failed("This site's name can't be sent to the KEY."), "Site name not usable: \(site)")
             return
         }
@@ -247,12 +250,18 @@ final class KeyLink: NSObject, ObservableObject {
         return s.contains(where: { $0 != " " }) ? s : nil
     }
 
-    /// [0x34 FILL][site length][site][0x00] (protocol doc, Passwords).
-    static func fillBody(site: String, appName: Bool = false) -> Data? {
+    /// [0x34 FILL][site length][site][user length][user] (protocol doc, Passwords; user from 9d).
+    static func fillBody(site: String, appName: Bool = false, user: String = "") -> Data? {
         guard let s = appName ? cleanAppName(site) : cleanSite(site) else { return nil }
         var d = Data([cmdFill, UInt8(s.utf8.count)])
         d.append(contentsOf: Array(s.utf8))
-        d.append(0)
+        // A username the KEY can't take (too long) is left out: it then shows the site's matches.
+        let u = Array(user.utf8)
+        if !u.isEmpty, u.count <= siteMax {
+            d.append(UInt8(u.count)); d.append(contentsOf: u)
+        } else {
+            d.append(0)
+        }
         return d
     }
 
@@ -370,7 +379,7 @@ extension KeyLink: CBPeripheralDelegate {
         paired()
         switch mode {
         case .fill where ch.uuid == KeyLink.answerChar:
-            guard let rq = reqCh, let body = KeyLink.fillBody(site: site, appName: siteIsAppName) else { return }
+            guard let rq = reqCh, let body = KeyLink.fillBody(site: site, appName: siteIsAppName, user: fillUser) else { return }
             add("Subscribed; sending the ask (encrypted)")
             p.writeValue(body, for: rq, type: .withResponse)
         case .ctap where ch.uuid == KeyLink.fidoStatus:
@@ -446,7 +455,7 @@ extension KeyLink: CBPeripheralDelegate {
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
         if let e = error as NSError? {
-            if mode == .fill, KeyLink.needsPairing(e), let body = KeyLink.fillBody(site: site, appName: siteIsAppName) {
+            if mode == .fill, KeyLink.needsPairing(e), let body = KeyLink.fillBody(site: site, appName: siteIsAppName, user: fillUser) {
                 awaitPairing { p.writeValue(body, for: ch, type: .withResponse) }; return
             }
             let code = e.domain == CBATTErrorDomain ? e.code : -1

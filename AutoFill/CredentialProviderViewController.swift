@@ -126,6 +126,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         user = wanted
         link.site = site
         link.siteIsAppName = isApp
+        link.fillUser = wanted
         show()
         let host = (isApp ? KeyLink.cleanAppName(site) : KeyLink.cleanSite(site)) ?? site
         watch = link.$outcome.sink { [weak self] o in

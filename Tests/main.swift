@@ -1,5 +1,5 @@
 // Tests for CBOR.swift and Ctap.swift (no Bluetooth). CI compiles and runs:
-//   swiftc Shared/CBOR.swift Shared/Ctap.swift Tests/main.swift -o ctaptests && ./ctaptests
+//   swiftc Shared/CBOR.swift Shared/Ctap.swift Shared/KeyLink.swift Tests/main.swift -o ctaptests && ./ctaptests
 
 import CryptoKit
 import Foundation
@@ -143,6 +143,13 @@ for st: UInt8 in [0x02, 0x03, 0x05] {
 }
 check((try? Ctap.parseFill(Data([0x00, 5, 0x61]))) == nil, "parseFill rejects a short body")
 check((try? Ctap.parseFill(Data([0x00, 0, 1, 0x61, 0x62]))) == nil, "parseFill rejects trailing bytes")
+
+// --- FILL request bytes (9d) -----------------------------------------------------
+check(KeyLink.fillBody(site: "https://GitHub.com/login").map(hx) == "340a6769746875622e636f6d00", "FILL: host from a URL, lower-case, no username")
+check(KeyLink.fillBody(site: "github.com", user: "josh").map(hx) == "340a6769746875622e636f6d046a6f7368", "FILL: with username")
+check(KeyLink.fillBody(site: "github.com", user: String(repeating: "x", count: 101)).map(hx) == "340a6769746875622e636f6d00", "FILL: over-long username left out")
+check(KeyLink.fillBody(site: "My Bank", appName: true).map(hx) == "34074d792042616e6b00", "FILL: app name kept as written")
+check(KeyLink.fillBody(site: "bad site") == nil, "FILL: a domain with a space is refused")
 
 // --- Checking authData -------------------------------------------------------
 var good = Data(SHA256.hash(data: Data("webauthn.io".utf8)))

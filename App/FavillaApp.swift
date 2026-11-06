@@ -18,7 +18,7 @@ struct FavillaApp: App {
                         .font(.system(size: 11, weight: .semibold))
                         .tracking(2)
                         .foregroundStyle(Brand.brass)
-                    Text("Settings > General > AutoFill & Passwords, turn on Favilla. Then tap a login field in Safari, choose Favilla, and press a button on your KEY.")
+                    Text("Settings > General > AutoFill & Passwords, turn on Favilla. Then tap a login field in Safari, choose Favilla and press a button on your KEY. Pick the login on the KEY and it types it in.")
                         .font(.system(size: 13))
                         .foregroundStyle(Brand.grey)
                 }

@@ -4,8 +4,11 @@ The iPhone app for the Favilla KEY: an AutoFill provider that signs you in with
 passkeys and passwords held on the KEY, reached over Bluetooth. Keys never
 leave the KEY; the app only relays requests and answers.
 
-**Stage: probe.** The AutoFill sheet and the app check that the phone can reach
-the KEY over its bonded Bluetooth link (needs KEY firmware drop 8y or later).
+**Stage: sign in (passwords).** Pick Favilla in Safari's sign-in sheet: the
+sheet sends the site to the KEY and closes, you pick the login on the KEY, and
+the KEY types it in as the phone's Bluetooth keyboard. The app never receives a
+password. Needs KEY firmware drop 8z7 or later. Passkeys are not wired up yet.
+The app itself still runs the link probe (FIND MY KEY).
 
 ## Build
 

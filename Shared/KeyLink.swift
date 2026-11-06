@@ -1,29 +1,30 @@
-// KeyLink.swift - the Bluetooth link to a Favilla KEY (Nov 2026).
+// KeyLink.swift - the Bluetooth link to a Favilla KEY.
+// Built against favilla-key-firmware docs/BLE_PASSKEY_PROTOCOL.md (drops 9a to 9c).
 //
-// Two jobs, same link:
-//  - probe(): read the Favilla service's probe characteristic. It is readable
-//    only on an encrypted (bonded) link, so a successful read proves the app, or
-//    the AutoFill extension, reached THIS KEY on the phone's own bond.
-//  - signIn(site:): write the site iOS asked about to the KEY's sign-in request
-//    characteristic (KEY drop 8z7). The KEY puts it on its screen, the owner
-//    picks the login there, and the KEY types it as the phone's Bluetooth
-//    keyboard. Nothing comes back but success or a status: never a password,
-//    username or site name the KEY holds (ruled 6 Nov 2026).
-//  - ctap(_:): passkeys (KEY drop 9a). One CTAP2 request in the FIDO Bluetooth
-//    framing on 8F1A0010/11/12, per favilla-key-firmware
-//    docs/BLE_PASSKEY_PROTOCOL.md; the reply body comes back in .ctap(Data).
+// Three jobs, same link:
+//  - probe(): read the probe characteristic 8F1A0002. It is readable only on an
+//    encrypted (bonded) link. With PAIR A PHONE open on the KEY, that read is
+//    also how the app pairs a KEY in "App only" mode (it isn't listed in iOS
+//    Bluetooth settings): iOS shows its 6-digit prompt, the owner checks the
+//    KEY's screen and presses ENTER there.
+//  - fill(): passwords (9c). Subscribe to the sign-in answer 8F1A0004, write
+//    [0x34 FILL][site len][site][0x00] to 8F1A0003; the owner picks the login on
+//    the KEY and the answer comes back on 8F1A0004 as .answer(body).
+//  - ctap(_:): passkeys (9a). One CTAP2 request in the FIDO Bluetooth framing on
+//    8F1A0010/11/12; the reply body comes back as .ctap(body).
 //
-// The KEY does not advertise at rest (drop 8m). A press on its home screen
-// makes it findable for 15 s (drop 8y). CoreBluetooth's connect() waits for
-// that, so the flow is: start, then press a button on the KEY.
+// Finding the KEY: in "App only" it advertises the Favilla service the whole
+// PASSKEY life. In "App and keyboard" it advertises (the keyboard service) for
+// 15 s after a press on its home screen. The app scans for both.
 
 import CoreBluetooth
 import Foundation
 
 final class KeyLink: NSObject, ObservableObject {
     static let favService = CBUUID(string: "8F1A0001-6B2E-4C8D-9A3E-5F7C2D1E0B4A")
-    static let probeChar  = CBUUID(string: "8F1A0002-6B2E-4C8D-9A3E-5F7C2D1E0B4A")
-    static let reqChar    = CBUUID(string: "8F1A0003-6B2E-4C8D-9A3E-5F7C2D1E0B4A")
+    static let probeChar  = CBUUID(string: "8F1A0002-6B2E-4C8D-9A3E-5F7C2D1E0B4A")   // read, encrypted
+    static let reqChar    = CBUUID(string: "8F1A0003-6B2E-4C8D-9A3E-5F7C2D1E0B4A")   // sign-in request: write, encrypted
+    static let answerChar = CBUUID(string: "8F1A0004-6B2E-4C8D-9A3E-5F7C2D1E0B4A")   // sign-in answer: notify (9c)
     static let fidoCP     = CBUUID(string: "8F1A0010-6B2E-4C8D-9A3E-5F7C2D1E0B4A")   // control point: write, encrypted
     static let fidoStatus = CBUUID(string: "8F1A0011-6B2E-4C8D-9A3E-5F7C2D1E0B4A")   // status: notify
     static let fidoCPLen  = CBUUID(string: "8F1A0012-6B2E-4C8D-9A3E-5F7C2D1E0B4A")   // control point length: read, 2 bytes BE
@@ -31,17 +32,23 @@ final class KeyLink: NSObject, ObservableObject {
     static let keyName    = "Favilla KEY"
     private static let savedIdKey = "keyPeripheralId"
     private static let groupId    = "group.io.favillakey.app"
-    private static let cmdSignIn: UInt8 = 0x31   // chan::C_SIGN_IN
-    private static let siteMax = 100            // chan::FIELD_MAX
+    private static let cmdFill: UInt8 = 0x34
+    private static let siteMax = 100
 
-    enum Mode { case probe, signIn, ctap }
-    enum Outcome: Equatable { case ok(String), sent, ctap(Data), failed(String), cancelled }
+    enum Mode { case probe, fill, ctap }
+    enum Outcome: Equatable {
+        case ok(String)          // probe read
+        case answer(Data)        // password answer body (status byte first); never logged
+        case ctap(Data)          // passkey reply body (CTAP status byte first)
+        case failed(String)
+        case cancelled
+    }
 
     @Published private(set) var lines: [String] = []
     @Published private(set) var result: String?
     @Published private(set) var outcome: Outcome?
     @Published private(set) var busy = false
-    /// Passkeys: the KEY is showing the request and waiting for a press (KEEPALIVE 0x02).
+    /// The KEY has the request on its screen and is waiting for the owner.
     @Published private(set) var waitingOnKey = false
     /// The site or app iOS asked about, when run from the AutoFill sheet.
     var site: String = ""
@@ -52,20 +59,22 @@ final class KeyLink: NSObject, ObservableObject {
     private var started = Date()
     private var timeout: DispatchWorkItem?
     private let store = UserDefaults(suiteName: KeyLink.groupId) ?? .standard
-    // Passkeys: the request, its writes still to send, and the reply so far.
+    private var reasm = Ctap.Reassembler()
+    // Passkeys: the request and its writes still to send.
     private var ctapRequest = Data()
     private var pendingFrames: [Data] = []
     private var requestSent = false
-    private var reasm = Ctap.Reassembler()
     private var cpChar: CBCharacteristic?
     private var cpLenChar: CBCharacteristic?
+    // Passwords: where the request goes.
+    private var reqCh: CBCharacteristic?
 
     // MARK: - Start
 
     func probe() { start(.probe) }
 
-    /// Send the sign-in ask for `site` (set before calling).
-    func signIn() { start(.signIn) }
+    /// Ask the KEY for the login for `site` (set before calling).
+    func fill() { start(.fill) }
 
     /// Send one CTAP2 request (command byte + CBOR) to the KEY's passkey service.
     func ctap(_ request: Data) {
@@ -76,7 +85,7 @@ final class KeyLink: NSObject, ObservableObject {
     /// Add a line to the visible log (e.g. the checks on the KEY's reply).
     func note(_ s: String) { add(s) }
 
-    /// Show a failure that was found after the reply came back (e.g. a CTAP refusal).
+    /// Show a failure found after the reply came back (e.g. a refusal in the body).
     func showFailure(_ why: String) {
         guard !busy else { return }
         add("Refused: \(why)")
@@ -103,39 +112,39 @@ final class KeyLink: NSObject, ObservableObject {
         outcome = nil
         lines = []
         waitingOnKey = false
-        pendingFrames = []; requestSent = false; reasm = Ctap.Reassembler(); cpChar = nil; cpLenChar = nil
+        pendingFrames = []; requestSent = false; reasm = Ctap.Reassembler(); cpChar = nil; cpLenChar = nil; reqCh = nil
         started = Date()
         if !site.isEmpty { add("Asked for: \(site)") }
-        if m == .signIn, KeyLink.requestBody(site: site) == nil {
+        if m == .fill, KeyLink.fillBody(site: site) == nil {
             finish(.failed("This site's name can't be sent to the KEY."), "Site name not usable: \(site)")
             return
         }
         add("Starting Bluetooth")
-        armTimeout(30, "Your KEY didn't answer. Press a button on the KEY's home screen, then try again.")
+        armTimeout(m == .probe ? 60 : 30, "Your KEY didn't answer. Check it's on its home screen in PASSKEY mode with Bluetooth on. If its Bluetooth is set to App and keyboard, press a button on it first.")
         if let c = central, c.state == .poweredOn { go(c) } else { central = CBCentralManager(delegate: self, queue: .main) }
     }
 
     private func go(_ c: CBCentralManager) {
-        // 1. A KEY the system is already connected to (as a keyboard): use that link.
-        if let p = c.retrieveConnectedPeripherals(withServices: [KeyLink.hidService, KeyLink.favService])
+        // 1. A KEY the system is already connected to: use that link.
+        if let p = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService, KeyLink.hidService])
             .first(where: { ($0.name ?? "").hasPrefix(KeyLink.keyName) }) {
             add("KEY already connected to the phone")
             connect(p, c)
             return
         }
-        // 2. The KEY this phone used before (saved by an earlier run). A pending
-        //    connect waits for it to advertise. iOS gives a re-paired KEY a new
-        //    identity, so search as well and take whichever answers (bench,
-        //    6 Nov 2026: after a re-pair the saved one never answered).
+        // 2. The KEY this phone used before. A pending connect waits for it to
+        //    advertise. iOS gives a re-paired KEY a new identity, so search as
+        //    well and take whichever answers (bench, 6 Nov 2026).
         if let s = store.string(forKey: KeyLink.savedIdKey), let id = UUID(uuidString: s),
            let p = c.retrievePeripherals(withIdentifiers: [id]).first {
-            add("Known KEY: waiting for it, and searching. Press a button on the KEY.")
+            add("Known KEY: connecting, and searching")
             connect(p, c)
         } else {
-            add("Looking for the KEY. Press a button on the KEY's home screen.")
+            add("Looking for the KEY")
         }
-        // 3. Search. The KEY is findable for 15 s after a press on its home screen.
-        c.scanForPeripherals(withServices: [KeyLink.hidService], options: nil)
+        // 3. Search: the Favilla service ("App only", always advertised) or the
+        //    keyboard service ("App and keyboard", 15 s after a press).
+        c.scanForPeripherals(withServices: [KeyLink.favService, KeyLink.hidService], options: nil)
     }
 
     private func armTimeout(_ seconds: Double, _ why: String) {
@@ -162,12 +171,18 @@ final class KeyLink: NSObject, ObservableObject {
         central?.stopScan()
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         peripheral = nil
-        cpChar = nil; cpLenChar = nil; pendingFrames = []
+        cpChar = nil; cpLenChar = nil; reqCh = nil; pendingFrames = []
+        reasm = Ctap.Reassembler()   // drop any partial reply (it may hold part of a password)
         add(log)
         result = log
         outcome = o
         waitingOnKey = false
         busy = false
+    }
+
+    /// Forget a password answer once it has been handed to iOS.
+    func clearAnswer() {
+        if case .answer = outcome { outcome = nil }
     }
 
     // MARK: - The request
@@ -183,26 +198,28 @@ final class KeyLink: NSObject, ObservableObject {
         return s
     }
 
-    /// [0x31 SIGN_IN][sLen][site][uLen = 0], as the KEY's chan::parseLogin expects.
-    static func requestBody(site: String) -> Data? {
+    /// [0x34 FILL][site length][site][0x00] (protocol doc, Passwords).
+    static func fillBody(site: String) -> Data? {
         guard let s = cleanSite(site) else { return nil }
-        var d = Data([cmdSignIn, UInt8(s.utf8.count)])
+        var d = Data([cmdFill, UInt8(s.utf8.count)])
         d.append(contentsOf: Array(s.utf8))
         d.append(0)
         return d
     }
 
-    /// What the KEY's refusal means, in plain words (ATT error 0x80 + chan::Status).
+    /// What the KEY's refusal of a write means (ATT error 0x80 + status).
     static func refusal(_ code: Int) -> String {
         switch code - 0x80 {
         case 4:  return "Your KEY isn't in PASSKEY mode. Restart it and choose PASSKEY."
         case 5:  return "Your KEY is locked. Enter the passkey PIN on the KEY, then try again."
         case 6:  return "Your KEY is already showing a sign-in. Finish it on the KEY, then try again."
         case 7:  return "The KEY couldn't read this site's name."
-        case 8:  return "This iPhone isn't confirmed on the KEY. Pair it again in Settings > Bluetooth on the KEY."
+        case 8:  return KeyLink.notConfirmed
         default: return "The KEY refused the request (code \(code))."
         }
     }
+
+    static let notConfirmed = "This iPhone isn't confirmed on the KEY. On the KEY open PAIR A PHONE, then tap FIND MY KEY in the Favilla app and accept the code."
 }
 
 // MARK: - CBCentralManagerDelegate
@@ -220,14 +237,15 @@ extension KeyLink: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? p.name ?? ""
-        guard name.hasPrefix(KeyLink.keyName) else { return }
+        let uuids = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
+        guard name.hasPrefix(KeyLink.keyName) || uuids.contains(KeyLink.favService) else { return }
         c.stopScan()
         if let old = peripheral {
             if old.identifier == p.identifier { add("Found it advertising"); return }   // the pending connect completes
-            add("Found \(name) under a new identity (re-paired?)")
+            add("Found the KEY under a new identity (re-paired?)")
             c.cancelPeripheralConnection(old)
         } else {
-            add("Found \(name) (RSSI \(rssi))")
+            add("Found \(name.isEmpty ? "the KEY" : name) (RSSI \(rssi))")
         }
         connect(p, c)
     }
@@ -255,57 +273,59 @@ extension KeyLink: CBCentralManagerDelegate {
 extension KeyLink: CBPeripheralDelegate {
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard let s = p.services?.first(where: { $0.uuid == KeyLink.favService }) else {
-            finish(.failed("Your KEY needs newer firmware (drop 8y or later). If it has it, forget Favilla KEY in iPhone Bluetooth settings and pair again."), "No Favilla service")
+            finish(.failed("Your KEY's Bluetooth table looks old. Restart the KEY; if that doesn't help, forget Favilla KEY on this iPhone and pair again."), "No Favilla service")
             return
         }
         add("Favilla service found")
         switch mode {
         case .probe: p.discoverCharacteristics([KeyLink.probeChar], for: s)
-        case .signIn: p.discoverCharacteristics([KeyLink.reqChar], for: s)
+        case .fill: p.discoverCharacteristics([KeyLink.reqChar, KeyLink.answerChar], for: s)
         case .ctap: p.discoverCharacteristics([KeyLink.fidoCP, KeyLink.fidoStatus, KeyLink.fidoCPLen], for: s)
         }
     }
 
     func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor s: CBService, error: Error?) {
-        if mode == .ctap {
-            let cs = s.characteristics ?? []
+        let cs = s.characteristics ?? []
+        switch mode {
+        case .probe:
+            guard let ch = cs.first(where: { $0.uuid == KeyLink.probeChar }) else {
+                finish(.failed("The KEY's probe is missing."), "Probe characteristic missing"); return
+            }
+            add("Reading (encrypted; pairs this iPhone if PAIR A PHONE is open on the KEY)")
+            p.readValue(for: ch)
+        case .fill:
+            guard let rq = cs.first(where: { $0.uuid == KeyLink.reqChar }),
+                  let an = cs.first(where: { $0.uuid == KeyLink.answerChar }) else {
+                finish(.failed("Your KEY needs firmware 9c or later for passwords. If it has it, restart the KEY."), "Sign-in answer characteristic missing"); return
+            }
+            reqCh = rq
+            add("Subscribing to the answer")
+            p.setNotifyValue(true, for: an)   // the answer only goes to a subscribed link
+        case .ctap:
             guard let cp = cs.first(where: { $0.uuid == KeyLink.fidoCP }),
                   let st = cs.first(where: { $0.uuid == KeyLink.fidoStatus }),
                   let len = cs.first(where: { $0.uuid == KeyLink.fidoCPLen }) else {
-                finish(.failed("Your KEY needs firmware drop 9a or later for passkeys. If it has it, forget Favilla KEY in iPhone Bluetooth settings and pair again."), "FIDO characteristics missing")
-                return
+                finish(.failed("Your KEY needs firmware 9a or later for passkeys. If it has it, restart the KEY."), "FIDO characteristics missing"); return
             }
             cpChar = cp; cpLenChar = len
             add("Passkey service found; subscribing")
             p.setNotifyValue(true, for: st)   // replies to an unsubscribed app are dropped
-            return
-        }
-        let want = mode == .probe ? KeyLink.probeChar : KeyLink.reqChar
-        guard let ch = s.characteristics?.first(where: { $0.uuid == want }) else {
-            finish(.failed(mode == .probe ? "Probe characteristic missing." : "Your KEY needs firmware drop 8z7 or later for signing in."), "Characteristic \(want) missing")
-            return
-        }
-        switch mode {
-        case .probe:
-            add("Reading (encrypted)")
-            p.readValue(for: ch)
-        case .signIn:
-            guard let body = KeyLink.requestBody(site: site) else {
-                finish(.failed("This site's name can't be sent to the KEY."), "Site name not usable")
-                return
-            }
-            add("Sending the sign-in ask (encrypted)")
-            p.writeValue(body, for: ch, type: .withResponse)
-        case .ctap: break
         }
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-        guard mode == .ctap, ch.uuid == KeyLink.fidoStatus else { return }
-        if let e = error { finish(.failed("This iPhone may not be paired with this KEY."), "Subscribe refused: \(e.localizedDescription)"); return }
-        guard let len = cpLenChar else { return }
-        add("Subscribed; reading the write size")
-        p.readValue(for: len)
+        if let e = error { finish(.failed(KeyLink.notConfirmed), "Subscribe refused: \(e.localizedDescription)"); return }
+        switch mode {
+        case .fill where ch.uuid == KeyLink.answerChar:
+            guard let rq = reqCh, let body = KeyLink.fillBody(site: site) else { return }
+            add("Subscribed; sending the ask (encrypted)")
+            p.writeValue(body, for: rq, type: .withResponse)
+        case .ctap where ch.uuid == KeyLink.fidoStatus:
+            guard let len = cpLenChar else { return }
+            add("Subscribed; reading the write size")
+            p.readValue(for: len)
+        default: break
+        }
     }
 
     private func sendNextFrame(_ p: CBPeripheral) {
@@ -319,20 +339,25 @@ extension KeyLink: CBPeripheralDelegate {
         p.writeValue(pendingFrames.removeFirst(), for: cp, type: .withResponse)
     }
 
-    private func ctapNotified(_ d: Data) {
+    private func notified(_ d: Data) {
         do {
             guard let ev = try reasm.feed(d) else { return }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
             switch ev {
             case .keepalive(let k):
                 if k == 0x02, !waitingOnKey { waitingOnKey = true; add("The KEY is waiting for your press") }
                 armTimeout(10, "The KEY stopped answering. Try again.")
-            case .message(let body):
-                let ms = Int(Date().timeIntervalSince(started) * 1000)
+            case .message(let body) where mode == .ctap:
                 finish(.ctap(body), String(format: "Reply in %d ms (status 0x%02X, %d bytes)", ms, body.first ?? 0xFF, body.count))
+            case .answer(let body) where mode == .fill:
+                // Log the status only: the body holds the password.
+                finish(.answer(body), String(format: "Answer in %d ms (status 0x%02X)", ms, body.first ?? 0xFF))
             case .ping(let b):
                 add("Ping back (\(b.count) bytes)")
             case .error(let e):
                 finish(.failed(Ctap.message(forFramingError: e)), String(format: "KEY framing error 0x%02X", e))
+            default:
+                finish(.failed("The KEY's reply didn't make sense. Try again."), "Reply of the wrong kind for this request")
             }
         } catch {
             finish(.failed("The KEY's reply didn't make sense. Try again."), "Bad reply: \(error)")
@@ -340,46 +365,44 @@ extension KeyLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
-        if mode == .ctap {
-            if let e = error { finish(.failed("This iPhone may not be paired with this KEY."), "Read refused: \(e.localizedDescription)"); return }
-            let v = [UInt8](ch.value ?? Data())
-            if ch.uuid == KeyLink.fidoCPLen {
-                guard v.count >= 2 else { finish(.failed("The KEY's passkey service didn't answer properly."), "Bad control point length"); return }
-                let max = Swift.min(Int(v[0]) << 8 | Int(v[1]), 512)
-                guard max >= 4 else { finish(.failed("The KEY's passkey service didn't answer properly."), "Control point length \(max)"); return }
-                guard ctapRequest.count <= Ctap.maxBody else { finish(.failed("The request is too big for the KEY."), "Request \(ctapRequest.count) bytes"); return }
-                pendingFrames = Ctap.frames(cmd: Ctap.cmdMsg, payload: ctapRequest, max: max)
-                add("Sending the request (\(ctapRequest.count) bytes in \(pendingFrames.count) write\(pendingFrames.count == 1 ? "" : "s"))")
-                sendNextFrame(p)
-            } else if ch.uuid == KeyLink.fidoStatus, let d = ch.value {
-                ctapNotified(d)
-            }
+        if ch.uuid == KeyLink.fidoStatus || ch.uuid == KeyLink.answerChar {
+            if let d = ch.value, error == nil { notified(d) }
             return
         }
-        if let e = error { finish(.failed("This iPhone may not be paired with this KEY."), "Read refused: \(e.localizedDescription)"); return }
+        if let e = error { finish(.failed(KeyLink.notConfirmed), "Read refused: \(e.localizedDescription)"); return }
+        if ch.uuid == KeyLink.fidoCPLen {
+            let v = [UInt8](ch.value ?? Data())
+            guard v.count >= 2 else { finish(.failed("The KEY's passkey service didn't answer properly."), "Bad control point length"); return }
+            let max = Swift.min(Int(v[0]) << 8 | Int(v[1]), 512)
+            guard max >= 4 else { finish(.failed("The KEY's passkey service didn't answer properly."), "Control point length \(max)"); return }
+            guard ctapRequest.count <= Ctap.maxBody else { finish(.failed("The request is too big for the KEY."), "Request \(ctapRequest.count) bytes"); return }
+            pendingFrames = Ctap.frames(cmd: Ctap.cmdMsg, payload: ctapRequest, max: max)
+            add("Sending the request (\(ctapRequest.count) bytes in \(pendingFrames.count) write\(pendingFrames.count == 1 ? "" : "s"))")
+            sendNextFrame(p)
+            return
+        }
+        // The probe.
         let text = ch.value.flatMap { String(data: $0, encoding: .utf8) } ?? "(no data)"
         let ms = Int(Date().timeIntervalSince(started) * 1000)
         finish(.ok(text), "OK in \(ms) ms: \(text)")
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
-        if mode == .ctap {
-            if let e = error as NSError? {
-                let code = e.domain == CBATTErrorDomain ? e.code : -1
-                finish(.failed(code == 0x05 ? "This iPhone isn't confirmed on the KEY. Pair it again in Settings > Bluetooth on the KEY." : "The KEY refused the request."),
-                       "Write refused: \(e.localizedDescription)")
-                return
-            }
-            if !requestSent { sendNextFrame(p) }
-            return
-        }
         if let e = error as NSError? {
             let code = e.domain == CBATTErrorDomain ? e.code : -1
             if code >= 0x80 { finish(.failed(KeyLink.refusal(code)), "KEY refused: code \(code)") }
-            else { finish(.failed("This iPhone may not be paired with this KEY."), "Write refused: \(e.localizedDescription)") }
+            else if code == 0x05 { finish(.failed(KeyLink.notConfirmed), "Write refused: not a confirmed phone") }
+            else { finish(.failed("The KEY refused the request."), "Write refused: \(e.localizedDescription)") }
             return
         }
-        let ms = Int(Date().timeIntervalSince(started) * 1000)
-        finish(.sent, "On the KEY in \(ms) ms")
+        switch mode {
+        case .ctap:
+            if !requestSent { sendNextFrame(p) }
+        case .fill:
+            waitingOnKey = true
+            add("On the KEY: pick the login there")
+            armTimeout(45, "Your KEY didn't answer. Try again.")   // the KEY answers cancelled after 30 s itself
+        case .probe: break
+        }
     }
 }

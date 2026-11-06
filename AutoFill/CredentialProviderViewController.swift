@@ -1,9 +1,9 @@
 // CredentialProviderViewController.swift - the AutoFill extension.
 //
-// Passwords (KEY drop 8z7): the extension sends the site to the KEY and closes.
-// The owner picks the login on the KEY and presses; the KEY types it into the
-// page as the phone's Bluetooth keyboard. The extension never receives a
-// password (ruled 6 Nov 2026), so it returns no credential.
+// Passwords (KEY drop 9c): the extension asks the KEY for the site's login
+// (FILL on 8F1A0003, answer on 8F1A0004); the owner picks it on the KEY and
+// presses ENTER; the extension hands it to iOS as an ASPasswordCredential and
+// keeps nothing.
 //
 // Passkeys (KEY drop 9a, favilla-key-firmware docs/BLE_PASSKEY_PROTOCOL.md):
 // sign-in sends CTAP2 getAssertion and hands the KEY's signature to iOS;
@@ -44,20 +44,32 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         host.didMove(toParent: self)
     }
 
-    // MARK: - Passwords: the sheet's "Favilla" entry, for this site.
+    // MARK: - Passwords: the sheet's "Favilla" entry, for this site (KEY 9c).
 
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         purpose = .password
+        let site = serviceIdentifiers.first?.identifier ?? ""
+        link.site = site
         show()
-        link.site = serviceIdentifiers.first?.identifier ?? ""
-        // Once the KEY has the ask, give the user a moment to read the screen,
-        // then close so the page's field has the focus when the KEY types.
         watch = link.$outcome.sink { [weak self] o in
-            guard o == .sent else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self?.close() }
+            guard let self, case .answer(let body)? = o else { return }
+            do {
+                let login = try Ctap.parseFill(body)
+                self.link.note("Login from the KEY (username \(login.user.isEmpty ? "empty" : "\(login.user.count) characters")); handing it to iOS")
+                LastRequest.save("Password for \(site)", self.link.lines)
+                self.closed = true
+                self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: login.user, password: login.password))
+            } catch Ctap.FillFailure.status(let st) {
+                self.link.showFailure(Ctap.message(forFillStatus: st))
+                LastRequest.save("Password for \(site)", self.link.lines)
+            } catch {
+                self.link.showFailure("The KEY's answer couldn't be read.")
+                LastRequest.save("Password for \(site)", self.link.lines)
+            }
+            self.link.clearAnswer()   // the password is not kept past here
         }
-        retry = { [weak self] in self?.link.signIn() }
-        link.signIn()
+        retry = { [weak self] in self?.link.fill() }
+        link.fill()
     }
 
     // MARK: - Passkeys: sign in (no account picked: the generic Favilla entry).
@@ -83,7 +95,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                                                         credentialID: a.credentialID)
                 self.closed = true
                 self.extensionContext.completeAssertionRequest(using: cred) { ok in
-                    self.link.note("iOS completion handler: \(ok)")
+                    self.link.note(ok ? "iOS says the request had expired" : "Handed to iOS")
                     LastRequest.save("Passkey sign-in for \(rp)", self.link.lines)
                 }
             } catch {
@@ -130,7 +142,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                                                            credentialID: r.credentialID, attestationObject: r.attestationObject)
                 self.closed = true
                 self.extensionContext.completeRegistrationRequest(using: cred) { ok in
-                    self.link.note("iOS completion handler: \(ok)")
+                    self.link.note(ok ? "iOS says the request had expired" : "Handed to iOS")
                     LastRequest.save("Passkey creation for \(rp)", self.link.lines)
                 }
             } catch {
@@ -186,7 +198,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         guard !closed else { return }
         closed = true
         link.cancel()
-        if !configuring, purpose != .password { LastRequest.save("Passkey request closed", link.lines) }
+        if !configuring { LastRequest.save("Request closed on the sheet", link.lines) }
         if configuring { extensionContext.completeExtensionConfigurationRequest(); return }
         extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain,
                                                           code: ASExtensionError.userCanceled.rawValue))

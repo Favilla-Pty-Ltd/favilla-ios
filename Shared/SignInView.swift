@@ -1,8 +1,7 @@
 // SignInView.swift - the AutoFill sheet's screen.
 //
-//  - Passwords (KEY drop 8z7): the sheet sends the site to the KEY, then closes
-//    so the page's login field has the focus again; the owner picks the login
-//    on the KEY and the KEY types it.
+//  - Passwords (KEY drop 9c): the sheet asks the KEY for the site's login and
+//    stays open while the owner picks it on the KEY; iOS fills the fields.
 //  - Passkeys (KEY drop 9a): the sheet stays open while the KEY shows the site
 //    and waits for a press, then hands the KEY's signature to iOS.
 // Type scale follows the probe screen: FAVILLA label 13 tracked, headline 22,
@@ -37,34 +36,35 @@ struct SignInView: View {
     private var headline: String {
         if notice != nil { return "Not available yet" }
         switch link.outcome {
-        case .sent?: return "Choose the login on your KEY"
-        case .ctap?: return creating ? "Passkey made" : "Signed in"
-        case .failed?: return isPasskey ? (creating ? "No passkey made" : "Not signed in") : "Not sent to your KEY"
+        case .answer?, .ctap?: return creating ? "Passkey made" : "Signed in"
+        case .failed?: return creating ? "No passkey made" : "Not signed in"
         case .cancelled?: return "Cancelled"
         default:
-            if link.waitingOnKey { return "Approve on your KEY" }
-            return link.busy ? "Press a button on your KEY" : (creating ? "Make a passkey on your KEY" : "Sign in with Favilla")
+            if link.waitingOnKey { return purpose == .password ? "Choose the login on your KEY" : "Approve on your KEY" }
+            return link.busy ? "Connecting to your KEY" : (creating ? "Make a passkey on your KEY" : "Sign in with Favilla")
         }
     }
 
     private var detail: String {
         if let n = notice { return n }
         switch link.outcome {
-        case .sent?: return "Then press to type it. This sheet closes now, so the login field is ready."
-        case .ctap?: return ""
+        case .answer?, .ctap?: return ""
         case .failed(let why)?: return why
         default:
             if link.waitingOnKey {
-                return creating ? "Check \(place) on the KEY's screen, then press to make the passkey."
-                                : "Check \(place) on the KEY's screen, then press to sign in."
+                switch purpose {
+                case .password: return "Check \(place) on the KEY's screen, pick the login and press ENTER."
+                case .passkeySignIn: return "Check \(place) on the KEY's screen, then press to sign in."
+                case .passkeyCreate: return "Check \(place) on the KEY's screen, then press to make the passkey."
+                }
             }
+            let what: String
             switch purpose {
-            case .password: return link.busy ? "Signing in to \(place). Your KEY wakes its Bluetooth when you press." : "Signing in to \(place)."
-            case .passkeySignIn: return "Signing in to \(place) with a passkey. Your KEY wakes its Bluetooth when you press any button on its home screen."
-            case .passkeyCreate(_, let user):
-                let who = user.isEmpty ? "" : " for \(user)"
-                return "Making a passkey\(who) on \(place). Your KEY wakes its Bluetooth when you press any button on its home screen."
+            case .password: what = "Signing in to \(place)."
+            case .passkeySignIn: what = "Signing in to \(place) with a passkey."
+            case .passkeyCreate(_, let user): what = "Making a passkey\(user.isEmpty ? "" : " for \(user)") on \(place)."
             }
+            return link.busy ? what + " If your KEY's Bluetooth is set to App and keyboard, press a button on it." : what
         }
     }
 
@@ -84,7 +84,7 @@ struct SignInView: View {
             if !detail.isEmpty {
                 Text(detail)
                     .font(.system(size: 15))
-                    .foregroundStyle(link.outcome == .sent || link.waitingOnKey ? Brand.brass : Brand.grey)
+                    .foregroundStyle(link.waitingOnKey ? Brand.brass : Brand.grey)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if case .failed? = link.outcome {

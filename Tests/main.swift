@@ -123,6 +123,27 @@ do { _ = try Ctap.parseAssertion(Data([0x2E])); check(false, "0x2E should throw"
 catch Ctap.Failure.status(let s) { check(s == 0x2E, "status 0x2E surfaces as .status") }
 catch { check(false, "wrong error \(error)") }
 
+// --- Passwords (9c) -----------------------------------------------------------
+do {
+    var r = Ctap.Reassembler()
+    var ans = Data([0x00, 4]); ans.append(Data("josh".utf8)); ans.append(6); ans.append(Data("s3cr3t".utf8))
+    var got: Ctap.Event?
+    for f in Ctap.frames(cmd: Ctap.cmdAnswer, payload: ans, max: 8) { got = try r.feed(f) ?? got }
+    check(got == Ctap.Event.answer(ans), "answer 0x84 reassembles across frames")
+    let l = try Ctap.parseFill(ans)
+    check(l.user == "josh" && l.password == "s3cr3t", "parseFill login")
+    var noUser = Data([0x00, 0]); noUser.append(3); noUser.append(Data("abc".utf8))
+    let l2 = try Ctap.parseFill(noUser)
+    check(l2.user == "" && l2.password == "abc", "parseFill empty username")
+} catch { check(false, "fill threw \(error)") }
+for st: UInt8 in [0x02, 0x03, 0x05] {
+    do { _ = try Ctap.parseFill(Data([st])); check(false, "status should throw") }
+    catch Ctap.FillFailure.status(let s) { check(s == st, String(format: "fill status 0x%02X", st)) }
+    catch { check(false, "wrong error") }
+}
+check((try? Ctap.parseFill(Data([0x00, 5, 0x61]))) == nil, "parseFill rejects a short body")
+check((try? Ctap.parseFill(Data([0x00, 0, 1, 0x61, 0x62]))) == nil, "parseFill rejects trailing bytes")
+
 // --- Checking authData -------------------------------------------------------
 var good = Data(SHA256.hash(data: Data("webauthn.io".utf8)))
 good.append(0x45); good.append(contentsOf: [0, 0, 0, 7]); good.append(Data(repeating: 0xAA, count: 16))

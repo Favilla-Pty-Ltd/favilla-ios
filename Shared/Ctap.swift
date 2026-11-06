@@ -10,6 +10,7 @@ enum Ctap {
     static let cmdPing: UInt8 = 0x81
     static let cmdKeepalive: UInt8 = 0x82
     static let cmdMsg: UInt8 = 0x83
+    static let cmdAnswer: UInt8 = 0x84   // the KEY's password answer on 8F1A0004 (9c)
     static let cmdCancel: UInt8 = 0xBE
     static let cmdError: UInt8 = 0xBF
     static let maxBody = 1024
@@ -42,6 +43,7 @@ enum Ctap {
     enum Event: Equatable {
         case keepalive(UInt8)   // 0x01 processing, 0x02 waiting for the user on the KEY
         case message(Data)      // a whole MSG body: status byte + CBOR
+        case answer(Data)       // a whole password answer (0x84): status byte + login
         case ping(Data)
         case error(UInt8)       // the KEY's framing error code
     }
@@ -76,6 +78,7 @@ enum Ctap {
             switch cmd {
             case Ctap.cmdKeepalive: return .keepalive(buf.first ?? 0)
             case Ctap.cmdMsg: return .message(buf)
+            case Ctap.cmdAnswer: return .answer(buf)
             case Ctap.cmdPing: return .ping(buf)
             case Ctap.cmdError: return .error(buf.first ?? 0x7F)
             default: throw Failure.unexpected(cmd)
@@ -159,6 +162,37 @@ enum Ctap {
         let n = Int(b[53]) << 8 | Int(b[54])
         guard n > 0, b.count >= 55 + n else { return nil }
         return Data(b[55..<55 + n])
+    }
+
+    // MARK: - Passwords (9c): the answer to FILL
+
+    struct Login { let user: String; let password: String }
+
+    enum FillFailure: Error, Equatable { case status(UInt8), malformed }
+
+    /// Body: [0x00][user length][user][password length][password], or one status
+    /// byte: 0x02 cancelled or timed out, 0x03 no saved login, 0x05 locked.
+    static func parseFill(_ body: Data) throws -> Login {
+        let b = [UInt8](body)
+        guard let st = b.first else { throw FillFailure.malformed }
+        guard st == 0x00 else { throw FillFailure.status(st) }
+        guard b.count >= 3 else { throw FillFailure.malformed }
+        let ul = Int(b[1])
+        guard b.count >= 2 + ul + 1 else { throw FillFailure.malformed }
+        let pl = Int(b[2 + ul])
+        guard b.count == 3 + ul + pl,
+              let user = String(bytes: b[2..<2 + ul], encoding: .utf8),
+              let pass = String(bytes: b[3 + ul..<3 + ul + pl], encoding: .utf8) else { throw FillFailure.malformed }
+        return Login(user: user, password: pass)
+    }
+
+    static func message(forFillStatus s: UInt8) -> String {
+        switch s {
+        case 0x02: return "Cancelled on the KEY, or nobody picked a login in time."
+        case 0x03: return "There's no saved login for this site on your KEY."
+        case 0x05: return "Your KEY is locked. Enter the passkey PIN on the KEY, then try again."
+        default: return String(format: "The KEY couldn't give the login (status 0x%02X).", s)
+        }
     }
 
     // MARK: - Checking the KEY's authenticator data before iOS sees it

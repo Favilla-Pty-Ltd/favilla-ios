@@ -14,11 +14,19 @@ struct FavillaApp: App {
             VStack(spacing: 0) {
                 ProbeView(link: link, title: "FAVILLA")
                 VStack(alignment: .leading, spacing: 6) {
+                    Text("TO PAIR A KEY")
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(2)
+                        .foregroundStyle(Brand.brass)
+                    Text("On the KEY, open PAIR A PHONE. Then tap FIND MY KEY here and accept the code when the numbers match the KEY's screen, and press ENTER on the KEY.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Brand.grey)
+                        .padding(.bottom, 10)
                     Text("TO USE IT WHEN SIGNING IN")
                         .font(.system(size: 11, weight: .semibold))
                         .tracking(2)
                         .foregroundStyle(Brand.brass)
-                    Text("Settings > General > AutoFill & Passwords, turn on Favilla. Then tap a login field in Safari, choose Favilla and press a button on your KEY. Pick the login on the KEY and it types it in.")
+                    Text("Settings > General > AutoFill & Passwords, turn on Favilla. Then tap a login field in Safari and choose Favilla. Pick the login (or approve the passkey) on your KEY.")
                         .font(.system(size: 13))
                         .foregroundStyle(Brand.grey)
                 }

@@ -25,7 +25,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private func show() {
         guard isViewLoaded else { return }   // viewDidLoad shows it
         children.forEach { $0.view.removeFromSuperview(); $0.removeFromParent() }
-        let onClose = { [weak self] in self?.close() }
+        let onClose: () -> Void = { [weak self] in self?.close() }
         let root: AnyView = configuring
             ? AnyView(ProbeView(link: link, title: "FAVILLA", onClose: onClose).preferredColorScheme(.dark))
             : AnyView(SignInView(link: link, notice: notice, onClose: onClose).preferredColorScheme(.dark))

@@ -29,6 +29,8 @@ targets:
         CFBundleDisplayName: Favilla
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Portrait-only needs this or App Store Connect rejects the upload (90474).
+        UIRequiresFullScreen: true
         ITSAppUsesNonExemptEncryption: false
         NSBluetoothAlwaysUsageDescription: Favilla uses Bluetooth to reach your Favilla KEY when you sign in.
     entitlements:

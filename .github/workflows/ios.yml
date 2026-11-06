@@ -39,6 +39,15 @@ jobs:
             -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build > build.log 2>&1 \
             || { grep -E "error:|\*\* BUILD" build.log | sort -u | head -n 80; exit 1; }
           grep -E "warning:.*\.swift|\*\* BUILD" build.log | sort -u | head -n 40
+      - name: Check the bundled fonts (app and AutoFill extension)
+        run: |
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -type d -name Favilla.app -path "*Debug-iphonesimulator*" | head -1)
+          echo "app: $APP"
+          for f in Archivo-Light Archivo-Regular Archivo-SemiBold Archivo-Bold; do
+            test -f "$APP/$f.ttf" || { echo "::error::$f.ttf missing from the app"; exit 1; }
+            test -f "$APP/PlugIns/FavillaAutoFill.appex/$f.ttf" || { echo "::error::$f.ttf missing from the AutoFill extension"; exit 1; }
+          done
+          echo "fonts present in both"
 
   testflight:
     needs: build

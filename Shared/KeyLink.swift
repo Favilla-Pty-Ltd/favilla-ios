@@ -50,6 +50,8 @@ final class KeyLink: NSObject, ObservableObject {
     @Published private(set) var busy = false
     /// The KEY has the request on its screen and is waiting for the owner.
     @Published private(set) var waitingOnKey = false
+    /// iOS is pairing with the KEY (6-digit comparison): the link is kept open.
+    @Published private(set) var pairing = false
     /// The site or app iOS asked about, when run from the AutoFill sheet.
     var site: String = ""
     private(set) var mode: Mode = .probe
@@ -112,6 +114,7 @@ final class KeyLink: NSObject, ObservableObject {
         outcome = nil
         lines = []
         waitingOnKey = false
+        pairing = false
         pendingFrames = []; requestSent = false; reasm = Ctap.Reassembler(); cpChar = nil; cpLenChar = nil; reqCh = nil
         started = Date()
         if !site.isEmpty { add("Asked for: \(site)") }
@@ -177,7 +180,42 @@ final class KeyLink: NSObject, ObservableObject {
         result = log
         outcome = o
         waitingOnKey = false
+        pairing = false
         busy = false
+    }
+
+    // MARK: - Pairing on demand
+    //
+    // A KEY the phone isn't bonded with refuses encrypted reads, writes and
+    // subscriptions with "insufficient authentication" (ATT 0x05) or
+    // "insufficient encryption" (0x0F), and iOS starts pairing. Bench 6 Nov
+    // 2026: giving up on that refusal dropped the link and killed iOS's prompt
+    // after a fraction of a second. So keep the link and retry while the owner
+    // compares the code and presses ENTER on the KEY (PAIR A PHONE open).
+
+    static func needsPairing(_ e: Error) -> Bool {
+        let n = e as NSError
+        return n.domain == CBATTErrorDomain && (n.code == CBATTError.insufficientAuthentication.rawValue ||
+                                                n.code == CBATTError.insufficientEncryption.rawValue)
+    }
+
+    private func awaitPairing(_ retry: @escaping () -> Void) {
+        if !pairing {
+            pairing = true
+            add("Not paired yet: iOS is asking to pair. Compare the code with the KEY's screen, tap Pair, then press ENTER on the KEY.")
+            armTimeout(60, KeyLink.notConfirmed)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.busy, self.pairing, self.peripheral != nil else { return }
+            retry()
+        }
+    }
+
+    private func paired() {
+        guard pairing else { return }
+        pairing = false
+        add("Paired")
+        armTimeout(45, "Your KEY didn't answer. Try again.")
     }
 
     /// Forget a password answer once it has been handed to iOS.
@@ -314,7 +352,11 @@ extension KeyLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-        if let e = error { finish(.failed(KeyLink.notConfirmed), "Subscribe refused: \(e.localizedDescription)"); return }
+        if let e = error {
+            if KeyLink.needsPairing(e) { awaitPairing { p.setNotifyValue(true, for: ch) }; return }
+            finish(.failed(KeyLink.notConfirmed), "Subscribe refused: \(e.localizedDescription)"); return
+        }
+        paired()
         switch mode {
         case .fill where ch.uuid == KeyLink.answerChar:
             guard let rq = reqCh, let body = KeyLink.fillBody(site: site) else { return }
@@ -369,7 +411,11 @@ extension KeyLink: CBPeripheralDelegate {
             if let d = ch.value, error == nil { notified(d) }
             return
         }
-        if let e = error { finish(.failed(KeyLink.notConfirmed), "Read refused: \(e.localizedDescription)"); return }
+        if let e = error {
+            if KeyLink.needsPairing(e) { awaitPairing { p.readValue(for: ch) }; return }
+            finish(.failed(KeyLink.notConfirmed), "Read refused: \(e.localizedDescription)"); return
+        }
+        paired()
         if ch.uuid == KeyLink.fidoCPLen {
             let v = [UInt8](ch.value ?? Data())
             guard v.count >= 2 else { finish(.failed("The KEY's passkey service didn't answer properly."), "Bad control point length"); return }
@@ -389,12 +435,16 @@ extension KeyLink: CBPeripheralDelegate {
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
         if let e = error as NSError? {
+            if mode == .fill, KeyLink.needsPairing(e), let body = KeyLink.fillBody(site: site) {
+                awaitPairing { p.writeValue(body, for: ch, type: .withResponse) }; return
+            }
             let code = e.domain == CBATTErrorDomain ? e.code : -1
             if code >= 0x80 { finish(.failed(KeyLink.refusal(code)), "KEY refused: code \(code)") }
             else if code == 0x05 { finish(.failed(KeyLink.notConfirmed), "Write refused: not a confirmed phone") }
             else { finish(.failed("The KEY refused the request."), "Write refused: \(e.localizedDescription)") }
             return
         }
+        paired()
         switch mode {
         case .ctap:
             if !requestSent { sendNextFrame(p) }

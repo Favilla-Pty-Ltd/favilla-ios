@@ -40,6 +40,7 @@ struct SignInView: View {
         case .failed?: return creating ? "No passkey made" : "Not signed in"
         case .cancelled?: return "Cancelled"
         default:
+            if link.pairing { return "Check the code on your KEY" }
             if link.waitingOnKey { return purpose == .password ? "Choose the login on your KEY" : "Approve on your KEY" }
             return link.busy ? "Connecting to your KEY" : (creating ? "Make a passkey on your KEY" : "Sign in with Favilla")
         }
@@ -51,6 +52,7 @@ struct SignInView: View {
         case .answer?, .ctap?: return ""
         case .failed(let why)?: return why
         default:
+            if link.pairing { return "This iPhone isn't paired with the KEY yet. If the numbers in iOS's prompt match the KEY's screen, tap Pair, then press ENTER on the KEY. (PAIR A PHONE must be open on the KEY.)" }
             if link.waitingOnKey {
                 switch purpose {
                 case .password: return "Check \(place) on the KEY's screen, pick the login and press ENTER."
@@ -84,7 +86,7 @@ struct SignInView: View {
             if !detail.isEmpty {
                 Text(detail)
                     .font(.system(size: 15))
-                    .foregroundStyle(link.waitingOnKey ? Brand.brass : Brand.grey)
+                    .foregroundStyle(link.waitingOnKey || link.pairing ? Brand.brass : Brand.grey)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if case .failed? = link.outcome {

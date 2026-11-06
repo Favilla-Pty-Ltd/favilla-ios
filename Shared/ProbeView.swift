@@ -27,7 +27,7 @@ struct ProbeView: View {
                     Button("Close", action: close).foregroundStyle(Brand.grey)
                 }
             }
-            Text(link.busy ? "Press a button on your KEY" : (link.result == nil ? "Check the link to your KEY" : "Result"))
+            Text(link.pairing ? "Check the code on your KEY" : link.busy ? "Connecting to your KEY" : (link.result == nil ? "Check the link to your KEY" : "Result"))
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(Brand.ink)
             if let r = link.result {

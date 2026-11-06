@@ -71,6 +71,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/keys"
           printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+      - name: Revoke earlier CI signing certificates (Apple caps how many an account holds)
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+        run: |
+          python3 -m pip install --quiet --break-system-packages pyjwt cryptography || python3 -m pip install --quiet pyjwt cryptography
+          python3 .github/scripts/revoke_ci_dev_certs.py
       - name: Archive
         run: |
           set -o pipefail

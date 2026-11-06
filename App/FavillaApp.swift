@@ -25,8 +25,43 @@ struct FavillaApp: App {
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Brand.bg)
+                LastRequestView()
             }
             .preferredColorScheme(.dark)
         }
+    }
+}
+
+/// The last AutoFill request's log (saved by the sheet), for the bench.
+struct LastRequestView: View {
+    @State private var open = false
+    @State private var text: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: { text = LastRequest.load(); open.toggle() }) {
+                Text(open ? "HIDE LAST REQUEST" : "SHOW LAST REQUEST")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(2)
+                    .foregroundStyle(Brand.brass)
+            }
+            if open {
+                ScrollView {
+                    Text(text ?? "No request yet.")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Brand.grey)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(maxHeight: 240)
+                .background(Brand.card)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Brand.bg)
     }
 }

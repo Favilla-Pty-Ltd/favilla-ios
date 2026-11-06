@@ -76,13 +76,19 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             guard let self, case .ctap(let body)? = o else { return }
             do {
                 let a = try Ctap.parseAssertion(body)
+                guard self.passes(authData: a.authenticatorData, rp: rp, uvRequired: requestParameters.userVerificationPreference == .required,
+                                  creating: false, title: "Passkey sign-in for \(rp)") else { return }
                 let cred = ASPasskeyAssertionCredential(userHandle: a.userHandle, relyingParty: rp, signature: a.signature,
                                                         clientDataHash: cdh, authenticatorData: a.authenticatorData,
                                                         credentialID: a.credentialID)
                 self.closed = true
-                self.extensionContext.completeAssertionRequest(using: cred)
+                self.extensionContext.completeAssertionRequest(using: cred) { ok in
+                    self.link.note("iOS took the signature: \(ok)")
+                    LastRequest.save("Passkey sign-in for \(rp)", self.link.lines)
+                }
             } catch {
                 self.fail(error, creating: false)
+                LastRequest.save("Passkey sign-in for \(rp)", self.link.lines)
             }
         }
         retry = { [weak self] in self?.link.ctap(request) }
@@ -117,12 +123,19 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             guard let self, case .ctap(let body)? = o else { return }
             do {
                 let r = try Ctap.parseRegistration(body)
+                self.link.note("Attestation format \(r.fmt), credential id \(r.credentialID.count) bytes, attestation object \(r.attestationObject.count) bytes")
+                guard self.passes(authData: r.authenticatorData, rp: rp, uvRequired: req.userVerificationPreference == .required,
+                                  creating: true, title: "Passkey creation for \(rp)") else { return }
                 let cred = ASPasskeyRegistrationCredential(relyingParty: rp, clientDataHash: cdh,
                                                            credentialID: r.credentialID, attestationObject: r.attestationObject)
                 self.closed = true
-                self.extensionContext.completeRegistrationRequest(using: cred)
+                self.extensionContext.completeRegistrationRequest(using: cred) { ok in
+                    self.link.note("iOS took the passkey: \(ok)")
+                    LastRequest.save("Passkey creation for \(rp)", self.link.lines)
+                }
             } catch {
                 self.fail(error, creating: true)
+                LastRequest.save("Passkey creation for \(rp)", self.link.lines)
             }
         }
         retry = { [weak self] in self?.link.ctap(request) }
@@ -139,6 +152,26 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     // MARK: -
 
+    /// Check the KEY's authenticator data before iOS sees it. Logs what it found
+    /// (and saves it, since the sheet closes on success); on a problem the sheet
+    /// stays open and says why instead of handing iOS something it will refuse.
+    private func passes(authData: Data, rp: String, uvRequired: Bool, creating: Bool, title: String) -> Bool {
+        guard let c = Ctap.check(authData: authData, rpId: rp) else {
+            link.showFailure("The KEY's reply was too short to use.")
+            LastRequest.save(title, link.lines)
+            return false
+        }
+        link.note("Checked: " + c.summary + (uvRequired ? ", UV required" : ""))
+        let problems = c.problems(uvRequired: uvRequired, creating: creating)
+        LastRequest.save(title, link.lines)
+        guard problems.isEmpty else {
+            link.showFailure("Not handed to iOS: " + problems.joined(separator: "; ") + ".")
+            LastRequest.save(title, link.lines)
+            return false
+        }
+        return true
+    }
+
     /// A reply came back but it's a refusal or unreadable: say so on the sheet.
     private func fail(_ error: Error, creating: Bool) {
         let why: String
@@ -153,6 +186,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         guard !closed else { return }
         closed = true
         link.cancel()
+        if !configuring, purpose != .password { LastRequest.save("Passkey request closed", link.lines) }
         if configuring { extensionContext.completeExtensionConfigurationRequest(); return }
         extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain,
                                                           code: ASExtensionError.userCanceled.rawValue))

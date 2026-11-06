@@ -73,6 +73,9 @@ final class KeyLink: NSObject, ObservableObject {
         start(.ctap)
     }
 
+    /// Add a line to the visible log (e.g. the checks on the KEY's reply).
+    func note(_ s: String) { add(s) }
+
     /// Show a failure that was found after the reply came back (e.g. a CTAP refusal).
     func showFailure(_ why: String) {
         guard !busy else { return }

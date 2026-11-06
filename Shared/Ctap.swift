@@ -2,6 +2,7 @@
 // Built against favilla-key-firmware docs/BLE_PASSKEY_PROTOCOL.md (drop 9a).
 // No Bluetooth here, so it can be tested on its own (Tests/ctap_tests.swift).
 
+import CryptoKit
 import Foundation
 
 enum Ctap {
@@ -118,7 +119,7 @@ enum Ctap {
     }
 
     struct Assertion { let credentialID: Data; let authenticatorData: Data; let signature: Data; let userHandle: Data }
-    struct Registration { let credentialID: Data; let attestationObject: Data }
+    struct Registration { let credentialID: Data; let attestationObject: Data; let fmt: String; let authenticatorData: Data }
 
     private static func body(_ resp: Data) throws -> CBOR {
         guard let st = resp.first else { throw Failure.malformed("empty reply") }
@@ -142,7 +143,7 @@ enum Ctap {
         guard let cred = credentialID(fromAuthData: auth) else { throw Failure.malformed("no attested credential in authData") }
         // WebAuthn attestation object: {"fmt", "attStmt", "authData"} (canonical order by the encoder).
         let obj = CBOR.map([(.text("fmt"), .text(fmt)), (.text("attStmt"), att), (.text("authData"), .bytes(auth))]).encoded()
-        return Registration(credentialID: cred, attestationObject: obj)
+        return Registration(credentialID: cred, attestationObject: obj, fmt: fmt, authenticatorData: auth)
     }
 
     /// authData: rpIdHash 32 | flags 1 | signCount 4 | [AAGUID 16 | credIdLen 2 BE | credId | pubKey]
@@ -152,6 +153,47 @@ enum Ctap {
         let n = Int(b[53]) << 8 | Int(b[54])
         guard n > 0, b.count >= 55 + n else { return nil }
         return Data(b[55..<55 + n])
+    }
+
+    // MARK: - Checking the KEY's authenticator data before iOS sees it
+
+    /// authData: rpIdHash 32 | flags 1 | signCount 4 | ...  Flags: UP 0x01, UV 0x04,
+    /// BE 0x08, BS 0x10, AT 0x40, ED 0x80.
+    struct AuthCheck {
+        let rpHashMatches: Bool
+        let flags: UInt8
+        let signCount: UInt32
+        let aaguid: Data?
+        var up: Bool { flags & 0x01 != 0 }
+        var uv: Bool { flags & 0x04 != 0 }
+        var at: Bool { flags & 0x40 != 0 }
+
+        /// Reasons iOS or the site would refuse it; empty when it looks right.
+        func problems(uvRequired: Bool, creating: Bool) -> [String] {
+            var p: [String] = []
+            if !rpHashMatches { p.append("the KEY signed for a different site name than iOS asked for") }
+            if !up { p.append("the KEY's reply doesn't say you pressed it") }
+            if uvRequired && !uv { p.append("the site needs the PIN checked, and the KEY's reply doesn't say it was") }
+            if creating && !at { p.append("the KEY's reply has no new passkey in it") }
+            return p
+        }
+
+        var summary: String {
+            let f = [up ? "UP" : nil, uv ? "UV" : nil, flags & 0x08 != 0 ? "BE" : nil, flags & 0x10 != 0 ? "BS" : nil,
+                     at ? "AT" : nil, flags & 0x80 != 0 ? "ED" : nil].compactMap { $0 }.joined(separator: " ")
+            let g = aaguid.map { $0.map { String(format: "%02x", $0) }.joined() } ?? "-"
+            return String(format: "rpIdHash %@, flags 0x%02X (%@), signCount %u, AAGUID %@",
+                          rpHashMatches ? "matches" : "DOES NOT MATCH", flags, f, signCount, g)
+        }
+    }
+
+    static func check(authData a: Data, rpId: String) -> AuthCheck? {
+        let b = [UInt8](a)
+        guard b.count >= 37 else { return nil }
+        let want = Data(SHA256.hash(data: Data(rpId.utf8)))
+        let count = UInt32(b[33]) << 24 | UInt32(b[34]) << 16 | UInt32(b[35]) << 8 | UInt32(b[36])
+        let aaguid: Data? = (b[32] & 0x40 != 0 && b.count >= 53) ? Data(b[37..<53]) : nil
+        return AuthCheck(rpHashMatches: Data(b[0..<32]) == want, flags: b[32], signCount: count, aaguid: aaguid)
     }
 
     /// What a CTAP2 status means, in plain words.

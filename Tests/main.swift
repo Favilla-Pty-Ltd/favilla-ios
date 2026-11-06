@@ -1,6 +1,7 @@
 // Tests for CBOR.swift and Ctap.swift (no Bluetooth). CI compiles and runs:
 //   swiftc Shared/CBOR.swift Shared/Ctap.swift Tests/main.swift -o ctaptests && ./ctaptests
 
+import CryptoKit
 import Foundation
 
 var failures = 0
@@ -118,6 +119,21 @@ check((try? Ctap.parseAssertion(Data([0x27]))) == nil, "assertion refused (0x27)
 do { _ = try Ctap.parseAssertion(Data([0x2E])); check(false, "0x2E should throw") }
 catch Ctap.Failure.status(let s) { check(s == 0x2E, "status 0x2E surfaces as .status") }
 catch { check(false, "wrong error \(error)") }
+
+// --- Checking authData -------------------------------------------------------
+var good = Data(SHA256.hash(data: Data("webauthn.io".utf8)))
+good.append(0x45); good.append(contentsOf: [0, 0, 0, 7]); good.append(Data(repeating: 0xAA, count: 16))
+if let c = Ctap.check(authData: good, rpId: "webauthn.io") {
+    check(c.rpHashMatches && c.up && c.uv && c.at && c.signCount == 7, "check: good authData")
+    check(c.problems(uvRequired: true, creating: true).isEmpty, "check: no problems")
+} else { check(false, "check: parses") }
+if let c = Ctap.check(authData: good, rpId: "example.com") {
+    check(!c.rpHashMatches && !c.problems(uvRequired: false, creating: false).isEmpty, "check: wrong site is a problem")
+} else { check(false, "check: parses 2") }
+var noUV = good; noUV[32] = 0x41
+if let c = Ctap.check(authData: noUV, rpId: "webauthn.io") {
+    check(c.problems(uvRequired: true, creating: true).count == 1 && c.problems(uvRequired: false, creating: true).isEmpty, "check: UV only matters when required")
+} else { check(false, "check: parses 3") }
 
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

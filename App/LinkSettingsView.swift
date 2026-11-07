@@ -7,6 +7,7 @@ import SwiftUI
 
 struct LinkSettingsView: View {
     @ObservedObject var link: KeyLink
+    @ObservedObject private var nostr = NostrLink.shared
     @Binding var route: KeyRoute
     @State private var host = UserDefaults.standard.string(forKey: WifiTransport.hostKey) ?? ""
     @Environment(\.dismiss) private var dismiss
@@ -24,10 +25,10 @@ struct LinkSettingsView: View {
                             }
                             .pickerStyle(.segmented)
                             if route == .bluetooth {
-                                Text("Choose NOSTR BLUETOOTH on the KEY's Select Mode screen. The KEY never starts Wi-Fi; the app talks to it over the paired Bluetooth link and reaches relays over the phone's own internet.")
+                                Text("Choose NOSTR BT on the KEY's Select Mode screen and enter the NOSTR PIN. The KEY never starts Wi-Fi; the app reaches it over the paired Bluetooth link and reaches relays over this iPhone's own internet.")
                                     .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                                Text(BluetoothTransport.waiting)
-                                    .font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
+                                Text(btStatus)
+                                    .font(Brand.small).foregroundStyle(btStatusColour).fixedSize(horizontal: false, vertical: true)
                             } else {
                                 Text("Choose NOSTR on the KEY's Select Mode screen, on the same Wi-Fi as this iPhone. The address is filled in when you pair the KEY in the app's Settings, or type it here.")
                                     .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
@@ -58,9 +59,27 @@ struct LinkSettingsView: View {
                 }
             }
             .toolbarBackground(Brand.bg, for: .navigationBar)
-            .onChange(of: route) { _, r in KeyRoute.current = r }
+            .onChange(of: route) { _, r in
+                KeyRoute.current = r
+                if r == .wifi { nostr.disconnect() }
+            }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private var btStatus: String {
+        guard KeyLink.appPaired else { return "First pair the app with the KEY: PAIR THE APP below, with PAIR A PHONE open on the KEY (PASSKEY mode), or Settings > Network > Pair a phone in NOSTR BT." }
+        switch nostr.state {
+        case .ready: return "Connected to your KEY over Bluetooth."
+        case .connecting: return "Connecting to your KEY..."
+        case .failed(let why): return why
+        case .idle: return "App paired. The link opens when the Nostr client next calls the KEY."
+        }
+    }
+
+    private var btStatusColour: Color {
+        if case .failed = nostr.state { return Brand.danger }
+        return KeyLink.appPaired ? Brand.brass : Brand.grey
     }
 
     private func saveHost() {

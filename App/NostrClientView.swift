@@ -77,10 +77,17 @@ struct NostrClientView: UIViewRepresentable {
         init(_ p: NostrClientView) { parent = p }
 
         func pushRoute(_ text: String) {
-            guard text != lastRoute, let wv = webView else { return }
-            lastRoute = text
-            let arg = (try? String(data: JSONSerialization.data(withJSONObject: [text]), encoding: .utf8)) ?? "[\"\"]"
-            wv.evaluateJavaScript("window.__favillaSetRoute && window.__favillaSetRoute(\(arg)[0])")
+            let route = KeyRoute.current.rawValue
+            guard text + route != lastRoute, let wv = webView else { return }
+            lastRoute = text + route
+            let arg = (try? String(data: JSONSerialization.data(withJSONObject: [text, route]), encoding: .utf8)) ?? "[\"\", \"wifi\"]"
+            wv.evaluateJavaScript("window.__favillaSetRoute && window.__favillaSetRoute(\(arg)[0], \(arg)[1])")
+        }
+
+        // The page has loaded: give it the route (the Settings row and the Bluetooth Connect).
+        func webView(_ wv: WKWebView, didFinish navigation: WKNavigation!) {
+            lastRoute = ""
+            pushRoute(parent.routeText)
         }
 
         // A call to the KEY from the page (bridge.js). Answered with

@@ -20,6 +20,9 @@ enum AppChannel {
     static let fStart: UInt8 = 0x10
     static let fCont: UInt8 = 0x11
     static let msgMax = 1088
+    /// API requests and answers (9k) cross many reports: up to 32 KB of body plus
+    /// the path and headers. The start report's u16 length allows it.
+    static let msgMaxApi = 40_960
 
     // Requests
     static let pairCommit: UInt8 = 0x20
@@ -31,6 +34,7 @@ enum AppChannel {
     static let cList: UInt8 = 0x37
     static let cOtp: UInt8 = 0x38
     static let cTime: UInt8 = 0x39
+    static let cApi: UInt8 = 0x3A   // 9k: one /api call from the Nostr client
 
     // Answers
     static let rPairKey: UInt8 = 0xA0
@@ -42,17 +46,19 @@ enum AppChannel {
     static let rKeepalive: UInt8 = 0xB5
     static let rList: UInt8 = 0xB6
     static let rOtp: UInt8 = 0xB7
+    static let rApi: UInt8 = 0xB8   // 9k, encrypted
     static let rErr: UInt8 = 0xBF
 
     /// Answers whose body is encrypted.
-    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp]
+    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp, rApi]
 
     // MARK: - Reports
 
     /// One message as 64-byte reports: [0x10][len lo][len hi][61] then [0x11][i][62], zero padded.
-    static func reports(_ msg: Data) -> [Data] {
+    /// The index counts up from 1 and wraps from 255 to 0 (9k).
+    static func reports(_ msg: Data, limit: Int = msgMax) -> [Data] {
         let m = [UInt8](msg)
-        precondition(!m.isEmpty && m.count <= msgMax, "message size")
+        precondition(!m.isEmpty && m.count <= min(limit, 0xFFFF), "message size")
         var out: [Data] = []
         var r = [UInt8](repeating: 0, count: 64)
         r[0] = fStart; r[1] = UInt8(m.count & 0xFF); r[2] = UInt8(m.count >> 8)
@@ -72,8 +78,8 @@ enum AppChannel {
     }
 
     /// Put whole reports together into writes of up to `perWrite` reports each.
-    static func writes(_ msg: Data, perWrite: Int) -> [Data] {
-        let rs = reports(msg), k = max(1, perWrite)
+    static func writes(_ msg: Data, perWrite: Int, limit: Int = msgMax) -> [Data] {
+        let rs = reports(msg, limit: limit), k = max(1, perWrite)
         return stride(from: 0, to: rs.count, by: k).map { rs[$0..<min($0 + k, rs.count)].reduce(Data(), +) }
     }
 
@@ -82,6 +88,9 @@ enum AppChannel {
         private var want = 0
         private var buf: [UInt8] = []
         private var next: UInt8 = 0
+        private let limit: Int
+
+        init(limit: Int = AppChannel.msgMax) { self.limit = limit }
 
         enum Failure: Error, Equatable { case order, length }
 
@@ -97,7 +106,7 @@ enum AppChannel {
                 if h == AppChannel.fStart {
                     guard r.count >= 3 else { throw Failure.length }
                     let len = Int(r[1]) | Int(r[2]) << 8
-                    guard len > 0, len <= AppChannel.msgMax else { reset(); throw Failure.length }
+                    guard len > 0, len <= limit else { reset(); throw Failure.length }
                     want = len; buf = Array(r[3...].prefix(min(61, len))); next = 1
                 } else if h == AppChannel.fCont {
                     guard want > 0, r.count >= 2, r[1] == next else { reset(); throw Failure.order }

@@ -1,5 +1,5 @@
 // Tests for CBOR.swift, Ctap.swift and KeyApi.swift (no Bluetooth). CI compiles and runs:
-//   swiftc Shared/CBOR.swift Shared/Ctap.swift Shared/KeyLink.swift App/KeyApi.swift Tests/main.swift -o ctaptests && ./ctaptests
+//   swiftc Shared/CBOR.swift Shared/Ctap.swift Shared/KeyLink.swift App/KeyApi.swift App/NostrLink.swift Tests/main.swift -o ctaptests && ./ctaptests
 
 import CryptoKit
 import Foundation
@@ -194,6 +194,11 @@ check(WifiTransport.isLocal("172.20.1.1") && !WifiTransport.isLocal("172.32.1.1"
 check(!WifiTransport.isLocal("relay.damus.io") && !WifiTransport.isLocal("8.8.8.8") && !WifiTransport.isLocal("favillakey.io"), "Wi-Fi: internet hosts refused")
 check(WifiTransport.target(for: "192.168.1.9") == "192.168.1.9" && WifiTransport.target(for: "example.com") == nil, "Wi-Fi: page host used only when local")
 
+extension Optional {
+    struct Nil: Error {}
+    func unwrap() throws -> Wrapped { guard let v = self else { throw Nil() }; return v }
+}
+
 // --- App channel (9g-9j): the firmware's tests/app_chan_vector.py and a pairing vector
 let chK = Data((0..<32).map { UInt8($0) }), chCid = hex("0102030405060708")
 let chCreds = Credentials(key: chK, clientId: chCid)
@@ -263,6 +268,28 @@ do {   // the firmware's own pairing vector (tests/app_pair_vector.py, issue #2,
     var tampered = [UInt8](hex("a1a1a2a3a4a5a6a7a80000000000f25fd59a50bed1987b5e5dd15c8b68d3")); tampered[13] = 0x0B
     check((try? AppChannel.open(Data(tampered), c)) == nil, "pair vector: R_PAIR_DONE with a changed status fails the mac")
 } catch { check(false, "pair vector threw \(error)") }
+
+do {   // NOSTR over Bluetooth (9k): the API request and its encrypted answer on the app channel
+    let r = ApiRequest(method: "POST", host: "key.bluetooth", path: "/api/sign",
+                       headers: ["X-Favilla-Session": "ab", "X-Favilla-Ctr": "7"], body: Data("{}".utf8), timeout: 10)
+    let body = try ApiWire.encode(r).unwrap()
+    check(hx(AppChannel.request(AppChannel.cApi, chCreds, ctr: 9, body: body)) == "3a0102030405060708090000000209002f6170692f7369676e0201020061620301003702007b7db3a5818f1917445f2fb1a6c10a87a601",
+          "API on the channel: 0x3A request with mac (firmware app_chan_vector functions)")
+    let a = try AppChannel.open(hex("b80102030405060708090000004304df428bf8220c3b568bdb6a78dd36c4129891e9aefc"), chCreds)
+    check(a.rsp == AppChannel.rApi && a.ctr == 9, "API answer: 0xB8, counter echoed")
+    check(ApiWire.decodeAnswer(a.body) == ApiResponse(status: 200, contentType: "application/json", body: Data("{}".utf8)), "API answer: decrypts to 200 JSON {}")
+    // A 20 KB body: over 255 reports, so the index wraps from 255 to 0.
+    var big = r; big.body = Data((0..<20_000).map { UInt8($0 & 0xFF) })
+    let msg = AppChannel.request(AppChannel.cApi, chCreds, ctr: 10, body: try ApiWire.encode(big).unwrap())
+    let reps = AppChannel.reports(msg, limit: AppChannel.msgMaxApi)
+    check(reps.count == 1 + Int((Double(msg.count - 61) / 62).rounded(.up)) && reps[255][1] == 255 && reps[256][1] == 0 && reps[257][1] == 1, "API: report index wraps 255 to 0")
+    var ra = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
+    var got: [Data] = []
+    for w in AppChannel.writes(msg, perWrite: 8, limit: AppChannel.msgMaxApi) { got += try ra.feed(w) }
+    check(got == [msg], "API: 20 KB message reassembles across the wrap")
+    var small = AppChannel.Reassembler()
+    check((try? small.feed(reps[0])) == nil, "API: the default reassembler still refuses messages over 1088 bytes")
+} catch { check(false, "API channel threw \(error)") }
 
 do {   // answer bodies: OTP and LIST
     check((try? AppChannel.parseOtp(hex("0006313233343536"))) == "123456", "OTP body: the code")

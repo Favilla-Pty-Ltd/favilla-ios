@@ -127,11 +127,29 @@
     hub.insertBefore(list, first);
     hub.insertBefore(grp, list);
   }
-  // The app sets the row's subtitle to the current route ("Bluetooth" / "Wi-Fi: 192.168.1.20").
-  window.__favillaSetRoute = function (text) {
+  // The app sets the row's subtitle ("Bluetooth" / "Wi-Fi: 192.168.1.20") and the route.
+  var route = 'wifi';
+  window.__favillaSetRoute = function (text, r) {
+    if (r) route = r;
     var s = document.getElementById('fv-iphone-sub');
     if (s && text) s.textContent = text;
   };
+
+  // On Bluetooth the KEY's address means nothing (the app sends every /api call
+  // to the paired KEY), and the PWA's Connect with an empty address box scans
+  // ~1,270 network addresses at once. So on Bluetooth, Connect gets a fixed
+  // name first and goes straight to the KEY.
+  var BT_HOST = 'key.bluetooth';
+  document.addEventListener('click', function (ev) {
+    if (route !== 'bluetooth') return;
+    var btn = ev.target && ev.target.closest && ev.target.closest('#pair-connect-btn');
+    if (!btn) return;
+    var inp = document.getElementById('pair-host-input');
+    if (inp && !inp.value.trim()) inp.value = BT_HOST;
+  }, true);
+  document.addEventListener('focusin', function (ev) {
+    if (route === 'bluetooth' && ev.target && ev.target.id === 'pair-host-input') ev.target.placeholder = 'Bluetooth: leave blank and tap Connect';
+  }, true);
 
   // ---- 4. status bar strip follows the page's theme ------------------------------
   var lastBg = '';

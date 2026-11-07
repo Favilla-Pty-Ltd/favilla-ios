@@ -171,19 +171,13 @@ final class WifiTransport: KeyTransport {
 
 // MARK: - Bluetooth
 
-/// The KEY's NOSTR Bluetooth life over the paired app channel. One request at a
-/// time: the KEY's API serves one call at a time anyway, and the answer echoes
-/// the counter, so serialising keeps the matching simple.
-///
-/// Not live yet in the app: the KEY side is in drop 9k and the app channel is in
-/// KeyLink; joining them (a long-lived channel link for the web view) is the
-/// next app step. Until then it says so, and the page shows the KEY as not reachable.
+/// The KEY's NOSTR BT life over the paired app channel (NostrLink): each call is
+/// one API request (0x3A), its answer one encrypted 0xB8 (KEY drop 9k).
 final class BluetoothTransport: KeyTransport {
-    static let waiting = "Bluetooth for Nostr is coming in the next app update. Use Wi-Fi until then."
-
     func send(_ r: ApiRequest) async throws -> ApiResponse {
-        guard ApiWire.encode(r) != nil else { throw KeyApiError.refused("request too large or not an /api/ call") }
-        throw KeyApiError.notReady(BluetoothTransport.waiting)
+        guard let body = ApiWire.encode(r) else { throw KeyApiError.refused("request too large or not an /api/ call") }
+        guard Credentials.isPaired else { throw KeyApiError.notReady(NostrLink.notPaired) }
+        return try await NostrLink.shared.send(body)
     }
 }
 

@@ -352,6 +352,12 @@ final class KeyLink: NSObject, ObservableObject {
     static let notConfirmed = "This iPhone isn't confirmed on the KEY. On the KEY open PAIR A PHONE, then tap FIND MY KEY in the Favilla app and accept the code."
     static let pairTheApp = "Your KEY now answers only the paired Favilla app. On the KEY open PAIR A PHONE, then in the Favilla app open Settings > This iPhone and tap PAIR THE APP."
     static let needsChannel = "This needs the Favilla app paired with your KEY. On the KEY open PAIR A PHONE, then in the Favilla app open Settings > This iPhone and tap PAIR THE APP."
+    /// The KEY forgot this phone (reflashed, or Forget phones) but iOS kept its keys.
+    static func keyForgotPhone(_ e: Error?) -> Bool {
+        guard let n = e as NSError? else { return false }
+        return n.domain == CBErrorDomain && n.code == CBError.peerRemovedPairingInformation.rawValue
+    }
+    static let forgetOnPhone = "Your KEY no longer has this iPhone's pairing, but the iPhone still does. On the KEY set Settings > Bluetooth to App and keyboard and press a button. On the iPhone open Settings > Bluetooth, tap (i) next to Favilla KEY and tap Forget This Device. On the KEY set Bluetooth back to App only, open PAIR A PHONE, then tap PAIR THE APP in the Favilla app."
     static let oldFirmware = "Your KEY needs firmware 9g or later for this. If it has it, restart the KEY."
     static let unreadable = "The KEY's reply didn't make sense. Try again."
 
@@ -629,11 +635,13 @@ extension KeyLink: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
+        if KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
         finish(.failed("Couldn't connect to your KEY. Try again."), "Could not connect: \(error?.localizedDescription ?? "unknown")")
     }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
+        if busy, KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
         if busy { finish(.failed("Your KEY dropped the link. Try again."), "The KEY dropped the link: \(error?.localizedDescription ?? "no reason given")") }
     }
 }

@@ -45,7 +45,7 @@ struct NostrClientView: UIViewRepresentable {
         wv.isOpaque = false
         wv.backgroundColor = .black
         wv.scrollView.backgroundColor = .black
-        wv.scrollView.contentInsetAdjustmentBehavior = .never   // the view starts below the status bar; the page pads the bottom with env()
+        wv.scrollView.contentInsetAdjustmentBehavior = .never   // below the status bar to the bottom edge, no insets: as the home-screen PWA
         wv.allowsBackForwardNavigationGestures = false
         #if DEBUG
         if #available(iOS 16.4, *) { wv.isInspectable = true }

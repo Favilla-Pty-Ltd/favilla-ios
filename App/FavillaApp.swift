@@ -27,8 +27,8 @@ struct RootView: View {
 
     var body: some View {
         // The page starts below the status bar, as the home-screen PWA does (its
-        // header has no top safe-area padding); it runs to the bottom edge and
-        // clears the home indicator itself. The strip behind the status bar takes
+        // header has no top safe-area padding) and runs to the bottom edge with no
+        // safe-area inset, so the bottom bar sits where the home-screen PWA's does. The strip behind the status bar takes
         // the page's background, and the status bar text follows its brightness.
         NostrClientView(onOpenSettings: { showSettings = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
             .ignoresSafeArea(.container, edges: .bottom)

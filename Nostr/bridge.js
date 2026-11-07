@@ -10,9 +10,9 @@
 //    (TypeError), which the PWA already handles.
 // 2. The page is told it runs installed (navigator.standalone), as on the home
 //    screen. Like the home-screen app, the web view starts below the status bar
-//    (the PWA's header does not pad for it); viewport-fit=cover is set so the
-//    bottom bar still clears the home indicator via env(safe-area-inset-bottom).
-//    The page's background colour is sent to the app, which paints the status
+//    and runs to the bottom edge, with the page's viewport left as it is (no
+//    viewport-fit=cover): the home-screen PWA gets no safe-area insets, so its
+//    bottom bar sits over the home indicator, and the app must match. The page's background colour is sent to the app, which paints the status
 //    bar strip with it and picks light or dark status bar text.
 // 3. A "This iPhone" row is added to the PWA's Settings hub; it opens the app's
 //    own settings (how the phone reaches the KEY, pairing, AutoFill).
@@ -103,10 +103,6 @@
 
   // ---- 2. installed, full screen ------------------------------------------------
   try { Object.defineProperty(navigator, 'standalone', { value: true, configurable: true }); } catch (e) {}
-  function coverViewport() {
-    var m = document.querySelector('meta[name="viewport"]');
-    if (m && m.content.indexOf('viewport-fit') < 0) m.content += ', viewport-fit=cover';
-  }
 
   // ---- 3. "This iPhone" in Settings ---------------------------------------------
   function addSettingsRow() {
@@ -156,7 +152,7 @@
     } catch (e) {}
   }
 
-  function onReady() { coverViewport(); addSettingsRow(); watchTheme(); }
+  function onReady() { addSettingsRow(); watchTheme(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

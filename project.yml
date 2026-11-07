@@ -76,6 +76,7 @@ targets:
             ASCredentialProviderExtensionCapabilities:
               ProvidesPasswords: true
               ProvidesPasskeys: true    # KEY drop 9a: passkeys over Bluetooth (BLE_PASSKEY_PROTOCOL.md)
+              ProvidesOneTimeCodes: true    # KEY drop 9i: one-time codes (iOS 18 and later)
     entitlements:
       path: AutoFill/FavillaAutoFill.entitlements
       properties:

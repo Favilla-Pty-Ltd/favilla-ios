@@ -8,6 +8,12 @@
 // sends CTAP2 getAssertion and hands the KEY's signature to iOS; creation sends
 // makeCredential and hands iOS the attestation object (as "none").
 //
+// One-time codes (KEY 9i, iOS 18 and later): OTP on the app channel; the owner
+// picks the code on the KEY; hand iOS the digits as an ASOneTimeCodeCredential.
+//
+// Once the app is paired with the KEY (9g), all of these go over the app
+// channel (KeyLink); the KEY then refuses the raw paths.
+//
 // Two ways in (option 1, ruled 6 Nov 2026):
 //  - the generic Favilla entry (key icon > Favilla, or Other Options): iOS says
 //    only the site, the KEY shows its matches;
@@ -79,6 +85,13 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                           uv: requestParameters.userVerificationPreference, allow: requestParameters.allowedCredentials)
     }
 
+    // One-time codes (iOS 18+): the code field's site or app.
+    @available(iOS 18.0, *)
+    override func prepareOneTimeCodeCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
+        let (site, isApp) = Self.pick(serviceIdentifiers)
+        oneTimeCode(site: site, isApp: isApp)
+    }
+
     // An account iOS listed: always needs the KEY, so ask for the sheet.
     override func provideCredentialWithoutUserInteraction(for credentialRequest: ASCredentialRequest) {
         extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain,
@@ -87,6 +100,11 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     // An account iOS listed, with the sheet.
     override func prepareInterfaceToProvideCredential(for credentialRequest: ASCredentialRequest) {
+        if #available(iOS 18.0, *), credentialRequest.type == .oneTimeCode {
+            let (site, isApp) = Self.pick([credentialRequest.credentialIdentity.serviceIdentifier])
+            oneTimeCode(site: site, isApp: isApp)
+            return
+        }
         if let p = credentialRequest as? ASPasskeyCredentialRequest, let id = p.credentialIdentity as? ASPasskeyCredentialIdentity {
             signInWithPasskey(rp: id.relyingPartyIdentifier, user: id.userName, clientDataHash: p.clientDataHash,
                               uv: p.userVerificationPreference, allow: [id.credentialID])
@@ -152,6 +170,31 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         }
         retry = { [weak self] in self?.link.fill() }
         link.fill()
+    }
+
+    // MARK: - One-time codes
+
+    @available(iOS 18.0, *)
+    private func oneTimeCode(site: String, isApp: Bool) {
+        purpose = .oneTimeCode
+        user = ""
+        link.site = site
+        link.siteIsAppName = isApp
+        link.fillUser = ""
+        show()
+        let host = (isApp ? KeyLink.cleanAppName(site) : KeyLink.cleanSite(site)) ?? site
+        watch = link.$outcome.sink { [weak self] o in
+            guard let self else { return }
+            if case .failed? = o { LastRequest.save("One-time code for \(host)", self.link.lines); return }
+            guard case .otp(let code)? = o else { return }
+            defer { self.link.clearAnswer() }   // the code is not kept past here
+            self.link.note("Code from the KEY (\(code.count) digits); handing it to iOS")
+            LastRequest.save("One-time code for \(host)", self.link.lines)
+            self.closed = true
+            self.extensionContext.completeOneTimeCodeRequest(using: ASOneTimeCodeCredential(code: code), completionHandler: nil)
+        }
+        retry = { [weak self] in self?.link.oneTimeCode() }
+        link.oneTimeCode()
     }
 
     // MARK: - Passkeys

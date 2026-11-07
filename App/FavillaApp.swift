@@ -52,6 +52,8 @@ struct HomeBody: View {
     @State private var listOn = AccountList.isOn
     @State private var count = AccountList.entries.count
     @State private var showLast = false
+    @State private var appPaired = KeyLink.appPaired
+    @State private var listNote: String?
     @Environment(\.scenePhase) private var phase
 
     var body: some View {
@@ -68,6 +70,40 @@ struct HomeBody: View {
                     }
                     Text("To pair a KEY: open PAIR A PHONE on the KEY, tap FIND MY KEY, check the code matches, tap Pair, then press ENTER on the KEY.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+                .background(Brand.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                // The app channel (KEY 9g): the KEY answers only this paired app.
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("This app").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                        Spacer()
+                        Text(appPaired ? "Paired" : "Not paired").font(Brand.body).foregroundStyle(appPaired ? Brand.brass : Brand.grey)
+                    }
+                    if let code = link.appCode {
+                        Text(code).font(Brand.font(30, .bold)).monospacedDigit().foregroundStyle(Brand.brass).accessibilityLabel("Code \(code)")
+                        Text("On the KEY: if PAIR THE APP shows the same number, press ENTER.")
+                            .font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if appPaired {
+                        Text("Passwords, passkeys, one-time codes and the account list go over the app's own locked channel. Other apps on this iPhone can't ask the KEY for anything.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            link.forgetApp(); appPaired = false
+                        } label: {
+                            Text("Forget the app's pairing").font(Brand.body).foregroundStyle(Brand.danger).frame(minHeight: 44)
+                        }
+                    } else {
+                        if link.appCode == nil {
+                            Text("Needs KEY firmware 9g or later. On the KEY open PAIR A PHONE, then tap PAIR THE APP here.")
+                                .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        }
+                        BrandButton(title: link.busy && link.mode == .pairApp ? "CANCEL" : "PAIR THE APP", filled: !link.busy) {
+                            link.busy ? link.cancel() : link.pairApp()
+                        }
+                    }
                 }
                 .padding(16)
                 .background(Brand.card)
@@ -109,6 +145,13 @@ struct HomeBody: View {
                     }
                     .background(Brand.card)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
+                    if appPaired {
+                        BrandButton(title: link.busy && link.mode == .list ? "CANCEL" : "FILL THE LIST FROM MY KEY", filled: false) {
+                            link.busy ? link.cancel() : link.list()
+                        }
+                        Text(listNote ?? "The KEY asks first (Share list?): press ENTER on the KEY. Only site names and usernames come over, never passwords.")
+                            .font(Brand.small).foregroundStyle(listNote == nil ? Brand.grey : Brand.ink).fixedSize(horizontal: false, vertical: true)
+                    }
                     Text("It fills as you sign in through Favilla. Off: Favilla is one entry under the key icon, and iOS holds no account names.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -130,7 +173,20 @@ struct HomeBody: View {
             }
         }
         .onChange(of: phase) { _, p in
-            if p == .active { listOn = AccountList.isOn; count = AccountList.entries.count }
+            if p == .active { listOn = AccountList.isOn; count = AccountList.entries.count; appPaired = KeyLink.appPaired }
+        }
+        .onReceive(link.$outcome) { o in
+            appPaired = KeyLink.appPaired   // also catches a pairing the KEY forgot (0x08)
+            switch o {
+            case .list(let l)?:
+                AccountList.replace(with: l) { n in
+                    count = AccountList.entries.count
+                    listNote = n == l.count ? "\(n) accounts from your KEY." : "\(n) of the KEY's \(l.count) accounts listed (iOS lists websites only)."
+                }
+            case .failed(let why)? where link.mode == .list:
+                listNote = why
+            default: break
+            }
         }
     }
 }

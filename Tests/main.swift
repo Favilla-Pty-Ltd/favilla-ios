@@ -245,5 +245,24 @@ do {   // pairing: fixed keys (scalars 0x11.. and 0x22..), nonce 00..0f; vector 
     check(code == "465988" && AppChannel.spaced(code) == "465 988", "pairing: 6-digit code")
 } catch { check(false, "pairing threw \(error)") }
 
+do {   // answer bodies: OTP and LIST
+    check((try? AppChannel.parseOtp(hex("0006313233343536"))) == "123456", "OTP body: the code")
+    check((try? AppChannel.parseOtp(hex("03"))) == nil, "OTP body: no code saved throws")
+    check((try? AppChannel.parseOtp(hex("000631323334353"))) == nil, "OTP body: short throws")
+    var l = hex("00000203")                                   // total 2, count 2
+    l += hex("00") + Data([10]) + Data("github.com".utf8) + Data([4]) + Data("josh".utf8)
+    l += hex("01") + Data([11]) + Data("webauthn.io".utf8) + Data([2]) + Data("jc".utf8)
+    l += hex("22") + Data(repeating: 0xAB, count: 34) + Data([3]) + hex("010203")
+    l += hex("00")
+    l[3] = 2
+    let page = try AppChannel.parseList(l)
+    check(page.total == 2 && !page.more && page.entries.count == 2, "LIST body: header and more")
+    check(page.entries[0] == AppChannel.ListEntry(passkey: false, site: "github.com", user: "josh"), "LIST body: password entry")
+    check(page.entries[1].passkey && page.entries[1].site == "webauthn.io" && page.entries[1].credentialID == Data(repeating: 0xAB, count: 34) && page.entries[1].userHandle == hex("010203"), "LIST body: passkey entry")
+    check((try? AppChannel.parseList(l.dropLast())) == nil, "LIST body: missing more byte throws")
+    check((try? AppChannel.parseList(hex("02"))) == nil, "LIST body: refused throws")
+    check((try? AppChannel.parseList(hex("0000000001"))).map { $0.entries.isEmpty && $0.more } == true, "LIST body: empty page with more")
+} catch { check(false, "answer bodies threw \(error)") }
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -192,6 +192,73 @@ enum AppChannel {
     /// LIST: [start hi][start lo].
     static func listBody(start: Int) -> Data { Data([UInt8((start >> 8) & 0xFF), UInt8(start & 0xFF)]) }
 
+    // MARK: - Answer bodies
+
+    /// A status byte instead of the asked-for thing (0x02 refused or timed out,
+    /// 0x03 nothing saved, 0x05 locked), or a body that doesn't parse.
+    enum BodyFailure: Error, Equatable { case status(UInt8), malformed }
+
+    /// 0xB7 body: [0x00][n][n ASCII digits].
+    static func parseOtp(_ body: Data) throws -> String {
+        let b = [UInt8](body)
+        guard let st = b.first else { throw BodyFailure.malformed }
+        guard st == 0x00 else { throw BodyFailure.status(st) }
+        guard b.count >= 2, (4...10).contains(Int(b[1])), b.count == 2 + Int(b[1]),
+              b[2...].allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }) else { throw BodyFailure.malformed }
+        return String(decoding: b[2...], as: UTF8.self)
+    }
+
+    struct ListEntry: Equatable {
+        var passkey: Bool
+        var site: String
+        var user: String
+        var credentialID: Data?
+        var userHandle: Data?
+    }
+
+    struct ListPage: Equatable {
+        var total: Int
+        var entries: [ListEntry]
+        var more: Bool
+    }
+
+    /// 0xB6 body: [0x00][total hi][total lo][count] entries [more].
+    /// Password [0x00][sLen][site][uLen][user]; passkey
+    /// [0x01][sLen][site][uLen][name][0x22][credential id 34][hLen][handle].
+    static func parseList(_ body: Data) throws -> ListPage {
+        let b = [UInt8](body)
+        guard let st = b.first else { throw BodyFailure.malformed }
+        guard st == 0x00 else { throw BodyFailure.status(st) }
+        guard b.count >= 5 else { throw BodyFailure.malformed }
+        let total = Int(b[1]) << 8 | Int(b[2]), count = Int(b[3])
+        var i = 4
+        func take(_ n: Int) throws -> [UInt8] {
+            guard n >= 0, i + n <= b.count else { throw BodyFailure.malformed }
+            defer { i += n }
+            return Array(b[i..<i + n])
+        }
+        func text() throws -> String { String(decoding: try take(Int(try take(1)[0])), as: UTF8.self) }
+        var out: [ListEntry] = []
+        for _ in 0..<count {
+            let kind = try take(1)[0]
+            let site = try text(), user = try text()
+            switch kind {
+            case 0x00:
+                out.append(ListEntry(passkey: false, site: site, user: user))
+            case 0x01:
+                let idLen = Int(try take(1)[0])
+                let id = Data(try take(idLen))
+                let handle = Data(try take(Int(try take(1)[0])))
+                out.append(ListEntry(passkey: true, site: site, user: user, credentialID: id, userHandle: handle))
+            default:
+                throw BodyFailure.malformed
+            }
+        }
+        let more = try take(1)[0]
+        guard i == b.count else { throw BodyFailure.malformed }
+        return ListPage(total: total, entries: out, more: more == 1)
+    }
+
     // MARK: - Pairing
 
     /// One pairing attempt (needs PAIR A PHONE open on the KEY).

@@ -13,6 +13,7 @@ enum SheetPurpose: Equatable {
     case password
     case passkeySignIn(rp: String)
     case passkeyCreate(rp: String, user: String)
+    case oneTimeCode
 }
 
 struct SignInView: View {
@@ -30,7 +31,7 @@ struct SignInView: View {
 
     private var place: String {
         switch purpose {
-        case .password: return (link.siteIsAppName ? KeyLink.cleanAppName(link.site) : KeyLink.cleanSite(link.site)) ?? link.site
+        case .password, .oneTimeCode: return (link.siteIsAppName ? KeyLink.cleanAppName(link.site) : KeyLink.cleanSite(link.site)) ?? link.site
         case .passkeySignIn(let rp), .passkeyCreate(let rp, _): return rp
         }
     }
@@ -39,11 +40,18 @@ struct SignInView: View {
         if notice != nil { return "Not available yet" }
         if link.pairing { return "Check the code on your KEY" }
         switch link.outcome {
+        case .otp?: return "Code sent"
         case .answer?, .ctap?: return creating ? "Passkey made" : "Signed in"
         case .failed?: return creating ? "No passkey made" : "Not signed in"
         case .cancelled?: return "Cancelled"
         default:
-            if link.waitingOnKey { return purpose == .password ? "Choose the login on your KEY" : "Approve on your KEY" }
+            if link.waitingOnKey {
+                switch purpose {
+                case .password: return "Choose the login on your KEY"
+                case .oneTimeCode: return "Choose the code on your KEY"
+                default: return "Approve on your KEY"
+                }
+            }
             return "Connecting to your KEY"
         }
     }
@@ -56,8 +64,9 @@ struct SignInView: View {
         case .password: second = "Pick the login on the KEY, press ENTER"
         case .passkeySignIn: second = "Check the site on the KEY, press to sign in"
         case .passkeyCreate: second = "Check the site on the KEY, press to make it"
+        case .oneTimeCode: second = "Pick the code on the KEY, press ENTER"
         }
-        let third = creating ? "The site saves your passkey" : "Safari signs you in"
+        let third = creating ? "The site saves your passkey" : purpose == .oneTimeCode ? "iOS fills in the code" : "Safari signs you in"
         return [("Connected to your KEY", connected ? 2 : 1),
                 (second, done ? 2 : (connected ? 1 : 0)),
                 (third, done ? 2 : 0)]
@@ -73,7 +82,7 @@ struct SignInView: View {
             Text(headline).font(Brand.headline).foregroundStyle(Brand.ink)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(creating ? "MAKING A PASSKEY FOR" : "SIGNING IN TO").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
+                Text(creating ? "MAKING A PASSKEY FOR" : purpose == .oneTimeCode ? "ONE-TIME CODE FOR" : "SIGNING IN TO").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
                 Text(place).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
                 if !user.isEmpty { Text("as \(user)").font(Brand.body).foregroundStyle(Brand.grey) }
             }
@@ -140,5 +149,5 @@ private struct StepRow: View {
 
 extension KeyLink.Outcome {
     /// The KEY answered (password or passkey).
-    var isReply: Bool { switch self { case .answer, .ctap: return true; default: return false } }
+    var isReply: Bool { switch self { case .answer, .ctap, .otp: return true; default: return false } }
 }

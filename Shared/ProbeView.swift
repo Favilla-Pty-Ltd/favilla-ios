@@ -34,10 +34,12 @@ struct ProbeView: View {
 /// Words for the link check, shared by the probe screen and the app's KEY card.
 enum KeyStatus {
     static func headline(_ link: KeyLink) -> String {
-        if link.pairing { return "Check the code on your KEY" }
-        if link.busy { return "Connecting to your KEY" }
+        if link.pairing || link.appCode != nil { return "Check the code on your KEY" }
+        if link.busy { return link.mode == .pairApp ? "Pairing the app" : "Connecting to your KEY" }
         switch link.outcome {
         case .ok?: return "Your KEY is paired"
+        case .appPaired?: return "The app is paired"
+        case .list(let l)?: return "\(l.count) accounts from your KEY"
         case .failed?: return "Couldn't reach your KEY"
         default: return "Check the link to your KEY"
         }
@@ -45,7 +47,9 @@ enum KeyStatus {
 
     static func detail(_ link: KeyLink) -> String? {
         if link.pairing { return "If the numbers in iOS's prompt match the KEY's screen, tap Pair, then press ENTER on the KEY." }
+        if let c = link.appCode { return "The KEY shows PAIR THE APP. If its number is \(c), press ENTER on the KEY." }
         switch link.outcome {
+        case .appPaired?: return "Passwords, passkeys, codes and the account list now go over the app's own locked channel."
         case .ok(let t)?: return t
         case .failed(let why)?: return why
         default: return nil

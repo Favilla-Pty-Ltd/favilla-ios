@@ -8,8 +8,8 @@
 // and Safari's passkey prompt offers Favilla first. No password or key is ever
 // in the list. Switching it off removes everything from iOS and from here.
 //
-// A one-go "fill the list from my KEY" needs a list request on the KEY (not in
-// firmware 9c); until then the list grows as accounts are used.
+// From KEY 9h the list can also be filled in one go from the KEY (LIST on the
+// app channel, "Fill the list from my KEY"): it then replaces what is here.
 
 import AuthenticationServices
 import Foundation
@@ -44,6 +44,30 @@ enum AccountList {
         if on { done(true); return }
         save([])
         ASCredentialIdentityStore.shared.removeAllCredentialIdentities { ok, _ in DispatchQueue.main.async { done(ok) } }
+    }
+
+    /// Replace the list with the KEY's (LIST, 9h). Entries iOS can't list under a
+    /// website (an app's name, a passkey without its id) are left out.
+    static func replace(with list: [AppChannel.ListEntry], done: @escaping (Int) -> Void) {
+        guard isOn else { done(0); return }
+        let e: [Entry] = list.compactMap { x in
+            let site = x.site.lowercased()
+            guard !x.user.isEmpty, site.contains("."), !site.contains(" ") else { return nil }
+            if x.passkey {
+                guard let id = x.credentialID, !id.isEmpty, let h = x.userHandle else { return nil }
+                return Entry(passkey: true, site: site, user: x.user, credentialID: id, userHandle: h)
+            }
+            return Entry(passkey: false, site: site, user: x.user)
+        }
+        save(e)
+        ASCredentialIdentityStore.shared.removeAllCredentialIdentities { _, _ in
+            ASCredentialIdentityStore.shared.getState { state in
+                guard state.isEnabled, !e.isEmpty else { DispatchQueue.main.async { done(e.count) }; return }
+                ASCredentialIdentityStore.shared.saveCredentialIdentities(e.map(identity)) { _, _ in
+                    DispatchQueue.main.async { done(e.count) }
+                }
+            }
+        }
     }
 
     /// Record an account if the list is on, then call `then` once iOS has it

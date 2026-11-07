@@ -248,7 +248,7 @@ do {   // pairing: fixed keys (scalars 0x11.. and 0x22..), nonce 00..0f; vector 
 do {   // answer bodies: OTP and LIST
     check((try? AppChannel.parseOtp(hex("0006313233343536"))) == "123456", "OTP body: the code")
     check((try? AppChannel.parseOtp(hex("03"))) == nil, "OTP body: no code saved throws")
-    check((try? AppChannel.parseOtp(hex("000631323334353"))) == nil, "OTP body: short throws")
+    check((try? AppChannel.parseOtp(hex("0006313233"))) == nil, "OTP body: short throws")
     var l = hex("00000203")                                   // total 2, count 2
     l += hex("00") + Data([10]) + Data("github.com".utf8) + Data([4]) + Data("josh".utf8)
     l += hex("01") + Data([11]) + Data("webauthn.io".utf8) + Data([2]) + Data("jc".utf8)

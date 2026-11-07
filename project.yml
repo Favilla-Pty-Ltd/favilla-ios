@@ -18,7 +18,11 @@ targets:
   Favilla:
     type: application
     platform: iOS
-    sources: [App, Shared]
+    sources:
+      - App
+      - Shared
+      - path: Nostr          # the Nostr client: the KEY's PWA + bridge.js (NostrClientView)
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.favillakey.app
@@ -36,6 +40,12 @@ targets:
         UIRequiresFullScreen: true
         ITSAppUsesNonExemptEncryption: false
         NSBluetoothAlwaysUsageDescription: Favilla uses Bluetooth to reach your Favilla KEY when you sign in.
+        # The Nostr client (7 Nov 2026): the KEY on Wi-Fi, the pairing QR and calls.
+        NSLocalNetworkUsageDescription: Favilla reaches your Favilla KEY on your Wi-Fi when the Nostr client is set to Wi-Fi.
+        NSCameraUsageDescription: Favilla uses the camera to scan your Favilla KEY's pairing code and QR codes in Nostr.
+        NSMicrophoneUsageDescription: Favilla uses the microphone for voice and video calls in Nostr.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true    # the KEY's API is plain HTTP on the local network
     entitlements:
       path: App/Favilla.entitlements
       properties:

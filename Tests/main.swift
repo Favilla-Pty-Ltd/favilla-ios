@@ -1,5 +1,5 @@
-// Tests for CBOR.swift and Ctap.swift (no Bluetooth). CI compiles and runs:
-//   swiftc Shared/CBOR.swift Shared/Ctap.swift Shared/KeyLink.swift Tests/main.swift -o ctaptests && ./ctaptests
+// Tests for CBOR.swift, Ctap.swift and KeyApi.swift (no Bluetooth). CI compiles and runs:
+//   swiftc Shared/CBOR.swift Shared/Ctap.swift Shared/KeyLink.swift App/KeyApi.swift Tests/main.swift -o ctaptests && ./ctaptests
 
 import CryptoKit
 import Foundation
@@ -165,6 +165,34 @@ var noUV = good; noUV[32] = 0x41
 if let c = Ctap.check(authData: noUV, rpId: "webauthn.io") {
     check(c.problems(uvRequired: true, creating: true).count == 1 && c.problems(uvRequired: false, creating: true).isEmpty, "check: UV only matters when required")
 } else { check(false, "check: parses 3") }
+
+
+// --- Nostr over Bluetooth: the API request bytes (KeyApi.swift, ApiWire) ----------
+do {
+    let r = ApiRequest(method: "POST", host: "localhost", path: "/api/sign",
+                       headers: ["x-favilla-session": "ab", "Content-Type": "application/json", "X-Favilla-Ctr": "7"],
+                       body: Data("{}".utf8), timeout: 10)
+    // 02 | 0900 "/api/sign" | 02 hdrs: 01 0200 "ab", 03 0100 "7" | 0200 "{}"
+    check(ApiWire.encode(r).map(hx) == "02" + "0900" + hx(Data("/api/sign".utf8)) + "02" + "010200" + hx(Data("ab".utf8)) + "030100" + hx(Data("7".utf8)) + "0200" + hx(Data("{}".utf8)),
+          "API: POST /api/sign with two KEY headers, Content-Type dropped")
+    var g = r; g.method = "get"; g.headers = [:]; g.body = Data()
+    check(ApiWire.encode(g).map(hx) == "01" + "0900" + hx(Data("/api/sign".utf8)) + "00" + "0000", "API: GET, no headers, empty body")
+    var bad = r; bad.path = "/index.html"
+    check(ApiWire.encode(bad) == nil, "API: only /api/ paths")
+    bad = r; bad.method = "PUT"
+    check(ApiWire.encode(bad) == nil, "API: only GET and POST")
+    bad = r; bad.body = Data(count: ApiWire.bodyMax + 1)
+    check(ApiWire.encode(bad) == nil, "API: body over 32 KB refused")
+    let ans = hex("c800" + "01" + "0200") + Data("{}".utf8)
+    check(ApiWire.decodeAnswer(ans) == ApiResponse(status: 200, contentType: "application/json", body: Data("{}".utf8)), "API answer: 200 JSON")
+    check(ApiWire.decodeAnswer(hex("9101" + "00" + "0000")) == ApiResponse(status: 401, contentType: "", body: Data()), "API answer: 401 empty")
+    check(ApiWire.decodeAnswer(hex("c800" + "01" + "0300") + Data("{}".utf8)) == nil, "API answer: length mismatch refused")
+    check(ApiWire.decodeAnswer(hex("0000" + "01" + "0000")) == nil, "API answer: status 0 refused")
+}
+check(WifiTransport.isLocal("192.168.20.24") && WifiTransport.isLocal("favilla-8fc17c68.local") && WifiTransport.isLocal("10.0.0.5:80"), "Wi-Fi: local addresses")
+check(WifiTransport.isLocal("172.20.1.1") && !WifiTransport.isLocal("172.32.1.1"), "Wi-Fi: 172.16/12 only")
+check(!WifiTransport.isLocal("relay.damus.io") && !WifiTransport.isLocal("8.8.8.8") && !WifiTransport.isLocal("favillakey.io"), "Wi-Fi: internet hosts refused")
+check(WifiTransport.target(for: "192.168.1.9") == "192.168.1.9" && WifiTransport.target(for: "example.com") == nil, "Wi-Fi: page host used only when local")
 
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

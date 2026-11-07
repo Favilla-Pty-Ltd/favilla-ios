@@ -459,6 +459,13 @@ extension KeyLink: CBPeripheralDelegate {
                 awaitPairing { p.writeValue(body, for: ch, type: .withResponse) }; return
             }
             let code = e.domain == CBATTErrorDomain ? e.code : -1
+            // A KEY before 9d refuses FILL with a username as a bad request (0x87):
+            // ask again without it, and the KEY shows the site's matches as before.
+            if mode == .fill, code == 0x87, !fillUser.isEmpty {
+                add("This KEY doesn't take a username yet (firmware before 9d): asking for the site's logins instead")
+                fillUser = ""
+                if let body = KeyLink.fillBody(site: site, appName: siteIsAppName) { p.writeValue(body, for: ch, type: .withResponse); return }
+            }
             if code >= 0x80 { finish(.failed(KeyLink.refusal(code)), "KEY refused: code \(code)") }
             else if code == 0x05 { finish(.failed(KeyLink.notConfirmed), "Write refused: not a confirmed phone") }
             else { finish(.failed("The KEY refused the request."), "Write refused: \(e.localizedDescription)") }

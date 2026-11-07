@@ -17,7 +17,9 @@
 import CoreBluetooth
 import Foundation
 
-final class NostrLink: NSObject, ObservableObject {
+/// All state is touched only on the main queue (CoreBluetooth delegate queue .main,
+/// and every entry point hops there), hence @unchecked Sendable.
+final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = NostrLink()
 
     enum State: Equatable { case idle, connecting, ready, failed(String) }

@@ -245,6 +245,25 @@ do {   // pairing: fixed keys (scalars 0x11.. and 0x22..), nonce 00..0f; vector 
     check(code == "465988" && AppChannel.spaced(code) == "465 988", "pairing: 6-digit code")
 } catch { check(false, "pairing threw \(error)") }
 
+do {   // the firmware's own pairing vector (tests/app_pair_vector.py, issue #2, 7 Nov 2026), byte for byte
+    let ext = try P256.KeyAgreement.PrivateKey(rawRepresentation: Data(repeating: 0x11, count: 32))
+    let keyP = try P256.KeyAgreement.PrivateKey(rawRepresentation: Data(repeating: 0x22, count: 32))
+    let p = AppChannel.Pairing(priv: ext, nonce: Data((0x30..<0x40).map { UInt8($0) }))
+    check(hx(p.commit) == "20854b2f2a3661f931f55ebc63ad519fcd2a4da9ab460c1ac5aafa054d2cbcebf5", "pair vector: 1. PAIR_COMMIT")
+    let a0 = hex("a004d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf350185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285a1a2a3a4a5a6a7a8")
+    check(a0 == Data([0xA0]) + keyP.publicKey.x963Representation + hex("a1a2a3a4a5a6a7a8"), "pair vector: 2. R_PAIR_KEY is the KEY's public key and client id")
+    check(hx(p.reveal) == "22040217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e5794303132333435363738393a3b3c3d3e3f", "pair vector: 3. PAIR_REVEAL")
+    let (c, code) = try p.derive(a0)
+    check(hx(c.key) == "123bc42d720cc86a8479e8bd7bbc559bdf29049cf8488b8cc543a6b20de16884", "pair vector: K")
+    check(hx(c.clientId) == "a1a2a3a4a5a6a7a8", "pair vector: clientId")
+    check(AppChannel.spaced(code) == "465 988", "pair vector: code 465 988")
+    let done = try AppChannel.open(hex("a1a1a2a3a4a5a6a7a80000000000f25fd59a50bed1987b5e5dd15c8b68d3"), c)
+    check(done.rsp == AppChannel.rPairDone && done.ctr == 0 && done.body == Data([0x00]), "pair vector: 4. R_PAIR_DONE paired, mac checks with K")
+    check(hx(AppChannel.request(AppChannel.cHello, c, ctr: 1)) == "30a1a2a3a4a5a6a7a8010000007de3085ed4b493e255cfa9a3d2a6090c", "pair vector: 5. HELLO ctr 1")
+    var tampered = [UInt8](hex("a1a1a2a3a4a5a6a7a80000000000f25fd59a50bed1987b5e5dd15c8b68d3")); tampered[13] = 0x0B
+    check((try? AppChannel.open(Data(tampered), c)) == nil, "pair vector: R_PAIR_DONE with a changed status fails the mac")
+} catch { check(false, "pair vector threw \(error)") }
+
 do {   // answer bodies: OTP and LIST
     check((try? AppChannel.parseOtp(hex("0006313233343536"))) == "123456", "OTP body: the code")
     check((try? AppChannel.parseOtp(hex("03"))) == nil, "OTP body: no code saved throws")

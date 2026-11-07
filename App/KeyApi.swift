@@ -61,24 +61,24 @@ protocol KeyTransport {
 // MARK: - The API request over the app channel (Bluetooth)
 
 /// The bytes of an API request and answer inside the app channel's
-/// [cmd][client 8][ctr u32 LE][body][mac16]. Proposed to the firmware chat in
-/// the "NOSTR over Bluetooth" issue; only the firmware chat's doc is final.
+/// [cmd][client 8][ctr u32 LE][body][mac16], as built in KEY drop 9k
+/// (docs/BLE_PASSKEY_PROTOCOL.md, "NOSTR over Bluetooth", issue #7).
 ///
-/// Request body (cmd 0x38 API):
+/// Request body (cmd 0x3A API):
 ///   [method 1: 0x01 GET, 0x02 POST]
-///   [path length u16 LE][path, UTF-8, "/api/..." with query]
+///   [path length u16 LE][path, printable ASCII, "/api/..." with query, at most 2048]
 ///   [header count 1] then per header [header id 1][value length u16 LE][value]
 ///       ids: 0x01 X-Favilla-Session, 0x02 X-Favilla-Auth, 0x03 X-Favilla-Ctr
 ///       (the headers the KEY's API reads; any other header is not sent)
 ///   [body length u16 LE][body]
-/// Answer body (0xB7 R_API, encrypted like R_CTAP):
+/// Answer body (0xB8 R_API, encrypted like 0xB4):
 ///   [status u16 LE][content type 1: 0x00 none, 0x01 JSON, 0x02 text]
 ///   [body length u16 LE][body]
 enum ApiWire {
-    static let cmdApi: UInt8 = 0x38
-    static let rspApi: UInt8 = 0xB7
+    static let cmdApi: UInt8 = 0x3A
+    static let rspApi: UInt8 = 0xB8
     static let bodyMax = 32_768
-    static let pathMax = 512
+    static let pathMax = 2048
     static let headerIds: [(UInt8, String)] = [(0x01, "X-Favilla-Session"), (0x02, "X-Favilla-Auth"), (0x03, "X-Favilla-Ctr")]
 
     static func encode(_ r: ApiRequest) -> Data? {
@@ -175,12 +175,11 @@ final class WifiTransport: KeyTransport {
 /// time: the KEY's API serves one call at a time anyway, and the answer echoes
 /// the counter, so serialising keeps the matching simple.
 ///
-/// Not live yet: it needs (1) the KEY drop with the NOSTR Bluetooth life and the
-/// API request (firmware issue "NOSTR over Bluetooth") and (2) the app channel's
-/// pairing and MAC bytes in the protocol doc (firmware issue #2). Until both land
-/// it says so, and the page shows the KEY as not reachable.
+/// Not live yet in the app: the KEY side is in drop 9k and the app channel is in
+/// KeyLink; joining them (a long-lived channel link for the web view) is the
+/// next app step. Until then it says so, and the page shows the KEY as not reachable.
 final class BluetoothTransport: KeyTransport {
-    static let waiting = "Bluetooth for Nostr needs the KEY firmware with the NOSTR Bluetooth life. Use Wi-Fi until then."
+    static let waiting = "Bluetooth for Nostr is coming in the next app update. Use Wi-Fi until then."
 
     func send(_ r: ApiRequest) async throws -> ApiResponse {
         guard ApiWire.encode(r) != nil else { throw KeyApiError.refused("request too large or not an /api/ call") }

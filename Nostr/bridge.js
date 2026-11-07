@@ -9,7 +9,11 @@
 //    A transport failure looks to the page exactly like a network failure
 //    (TypeError), which the PWA already handles.
 // 2. The page is told it runs installed (navigator.standalone), as on the home
-//    screen, and its viewport covers the whole screen (safe areas via env()).
+//    screen. Like the home-screen app, the web view starts below the status bar
+//    (the PWA's header does not pad for it); viewport-fit=cover is set so the
+//    bottom bar still clears the home indicator via env(safe-area-inset-bottom).
+//    The page's background colour is sent to the app, which paints the status
+//    bar strip with it and picks light or dark status bar text.
 // 3. A "This iPhone" row is added to the PWA's Settings hub; it opens the app's
 //    own settings (how the phone reaches the KEY, pairing, AutoFill).
 (function () {
@@ -133,7 +137,26 @@
     if (s && text) s.textContent = text;
   };
 
-  function onReady() { coverViewport(); addSettingsRow(); }
+  // ---- 4. status bar strip follows the page's theme ------------------------------
+  var lastBg = '';
+  function sendBg() {
+    try {
+      var bg = getComputedStyle(document.body || document.documentElement).backgroundColor;
+      if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') bg = getComputedStyle(document.documentElement).backgroundColor;
+      if (bg && bg !== lastBg) { lastBg = bg; mh.favillaApp.postMessage({ bg: bg }); }
+    } catch (e) {}
+  }
+  function watchTheme() {
+    sendBg();
+    try {
+      var mo = new MutationObserver(function () { setTimeout(sendBg, 50); });
+      var opts = { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] };
+      mo.observe(document.documentElement, opts);
+      if (document.body) mo.observe(document.body, opts);
+    } catch (e) {}
+  }
+
+  function onReady() { coverViewport(); addSettingsRow(); watchTheme(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

@@ -16,6 +16,8 @@ import WebKit
 
 struct NostrClientView: UIViewRepresentable {
     var onOpenSettings: () -> Void
+    /// The page's background colour (status bar strip) as it changes with the theme.
+    var onPageColour: (UIColor) -> Void = { _ in }
     @Binding var routeText: String
 
     static let scheme = "favilla"
@@ -43,7 +45,7 @@ struct NostrClientView: UIViewRepresentable {
         wv.isOpaque = false
         wv.backgroundColor = .black
         wv.scrollView.backgroundColor = .black
-        wv.scrollView.contentInsetAdjustmentBehavior = .never   // the page uses env(safe-area-inset-*)
+        wv.scrollView.contentInsetAdjustmentBehavior = .never   // the view starts below the status bar; the page pads the bottom with env()
         wv.allowsBackForwardNavigationGestures = false
         #if DEBUG
         if #available(iOS 16.4, *) { wv.isInspectable = true }
@@ -122,7 +124,18 @@ struct NostrClientView: UIViewRepresentable {
                 tasks[id]?.cancel(); tasks[id] = nil
             } else if message.name == "favillaApp", m["open"] as? String == "settings" {
                 parent.onOpenSettings()
+            } else if message.name == "favillaApp", let bg = m["bg"] as? String, let c = Coordinator.colour(css: bg) {
+                webView?.backgroundColor = c
+                webView?.scrollView.backgroundColor = c
+                parent.onPageColour(c)
             }
+        }
+
+        /// "rgb(r, g, b)" or "rgba(r, g, b, a)" from getComputedStyle.
+        static func colour(css: String) -> UIColor? {
+            let n = css.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).compactMap(Double.init)
+            guard css.hasPrefix("rgb"), n.count >= 3 else { return nil }
+            return UIColor(red: n[0] / 255, green: n[1] / 255, blue: n[2] / 255, alpha: 1)
         }
 
         // Only the bundled page loads here. Links go to Safari; the PWA's one

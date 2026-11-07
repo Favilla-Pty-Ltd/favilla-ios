@@ -13,7 +13,7 @@ struct FavillaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(link: link).preferredColorScheme(.dark)
+            RootView(link: link)
         }
     }
 }
@@ -23,14 +23,27 @@ struct RootView: View {
     @State private var showSettings = false
     @State private var route = KeyRoute.current
     @State private var routeText = LinkSettingsView.routeText(KeyRoute.current)
+    @State private var pageColour = UIColor.black
 
     var body: some View {
-        NostrClientView(onOpenSettings: { showSettings = true }, routeText: $routeText)
-            .ignoresSafeArea()
-            .background(Color.black.ignoresSafeArea())
+        // The page starts below the status bar, as the home-screen PWA does (its
+        // header has no top safe-area padding); it runs to the bottom edge and
+        // clears the home indicator itself. The strip behind the status bar takes
+        // the page's background, and the status bar text follows its brightness.
+        NostrClientView(onOpenSettings: { showSettings = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
+            .ignoresSafeArea(.container, edges: .bottom)
+            .ignoresSafeArea(.keyboard)
+            .background(Color(uiColor: pageColour).ignoresSafeArea())
+            .preferredColorScheme(RootView.isLight(pageColour) ? .light : .dark)
             .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route) }) {
                 LinkSettingsView(link: link, route: $route)
             }
+    }
+
+    static func isLight(_ c: UIColor) -> Bool {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        c.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return 0.299 * r + 0.587 * g + 0.114 * b > 0.6
     }
 }
 

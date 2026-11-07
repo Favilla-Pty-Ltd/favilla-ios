@@ -76,7 +76,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         pump()
     }
 
-    static let notPaired = ""Pair the app with the KEY first: Settings > This iPhone > PAIR THE APP."
+    static let notPaired = "Pair the app with the KEY first: Settings > This iPhone > PAIR THE APP."
     static let notNostrBT = "Your KEY isn't in NOSTR BT. Restart it and choose NOSTR BT at Select Mode."
     static let locked = "Your KEY is locked. Enter the NOSTR PIN on the KEY."
     static let notFound = "Can't find your KEY. Check it's on, in NOSTR BT, and near this iPhone."

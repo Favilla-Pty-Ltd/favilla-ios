@@ -4,9 +4,13 @@ The iPhone app for the Favilla KEY: an AutoFill provider that signs you in with
 passkeys and passwords held on the KEY, reached over Bluetooth. Keys never
 leave the KEY; the app only relays requests and answers.
 
-**Stage: passwords and passkeys (KEY firmware 9c).** Built against
+**Stage: Nostr client (Wi-Fi now, Bluetooth with the KEY's NOSTR Bluetooth life, firmware issue #7), passwords and passkeys (KEY firmware 9c).** Built against
 favilla-key-firmware `docs/BLE_PASSKEY_PROTOCOL.md`.
 
+- Nostr: the app opens on the KEY's own PWA (Nostr/pwa.html, refreshed with
+  scripts/sync_pwa.sh). Its calls to the KEY go through Nostr/bridge.js to
+  App/KeyApi.swift: Wi-Fi today, Bluetooth on the app channel once the KEY has
+  the NOSTR Bluetooth life. Settings > This iPhone picks the route.
 - Passwords: pick Favilla in Safari's sign-in sheet, pick the login on the KEY;
   the KEY sends it to the sheet and iOS fills the fields (FILL on 8F1A0003,
   answer on 8F1A0004).

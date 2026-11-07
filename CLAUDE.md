@@ -24,6 +24,7 @@
 ## Rulings that shape the app
 - Passwords: the KEY sends the login to the AutoFill sheet (FILL 0x34, answer on 8F1A0004), which hands it to iOS and keeps nothing.
 - Passkeys: CTAP2 over the FIDO Bluetooth framing on 8F1A0010-12. iOS only accepts a "none" attestation from a provider, so the app re-encodes the KEY's reply.
+- Nostr client (7 Nov 2026): the app opens on the KEY's own PWA, unchanged, in a web view; bridge.js tunnels its `/api/` calls. Route Wi-Fi now; Bluetooth = the KEY's NOSTR Bluetooth life over the paired app channel only (firmware issue #7, API 0x38 / R_API 0xB7). Don't edit Nostr/pwa.html by hand: refresh it with scripts/sync_pwa.sh.
 - The account list above the keyboard is opt-in, off by default, and never holds a password.
 - Brand: Archivo, brass #C9A45C, ink #F4F2EE, the Entropy Ember and the FAVILLA KEY wordmark (Shared/Brand.swift), taken from favillakey.io.
 - Josh's instructions: every step names the app or site and device first, written out in full, commands in separate code blocks, no em dashes.

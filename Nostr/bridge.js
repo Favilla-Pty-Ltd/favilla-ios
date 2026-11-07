@@ -128,7 +128,7 @@
     hub.insertBefore(grp, list);
   }
   // The app sets the row's subtitle ("Bluetooth" / "Wi-Fi: 192.168.1.20") and the route.
-  var route = 'wifi';
+  var route = window.__favillaInitialRoute === 'bluetooth' ? 'bluetooth' : 'wifi';
   window.__favillaSetRoute = function (text, r) {
     if (r) route = r;
     var s = document.getElementById('fv-iphone-sub');
@@ -140,6 +140,11 @@
   // ~1,270 network addresses at once. So on Bluetooth, Connect gets a fixed
   // name first and goes straight to the KEY.
   var BT_HOST = 'key.bluetooth';
+  // On Bluetooth the PWA needs a saved host for its launch reconnect to run at
+  // all (it skips with none). Any name reaches the paired KEY; give it one.
+  if (route === 'bluetooth') {
+    try { if (!localStorage.getItem('kv_host')) localStorage.setItem('kv_host', BT_HOST); } catch (e) {}
+  }
   document.addEventListener('click', function (ev) {
     if (route !== 'bluetooth') return;
     var btn = ev.target && ev.target.closest && ev.target.closest('#pair-connect-btn');

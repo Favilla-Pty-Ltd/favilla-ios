@@ -50,7 +50,33 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var connectTimer: DispatchWorkItem?
     private let store = UserDefaults(suiteName: "group.io.favillakey.app") ?? .standard
 
-    static let notPaired = "Pair the app with the KEY first: Settings > This iPhone > PAIR THE APP."
+    /// While KeyLink runs an operation (PAIR THE APP, a sign-in) this link steps
+    /// aside: the KEY serves one request at a time, and pairing replaces K.
+    private var paused = false
+    private var observers: [NSObjectProtocol] = []
+
+    override init() {
+        super.init()
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: KeyLink.didStart, object: nil, queue: .main) { [weak self] _ in self?.pause() })
+        observers.append(nc.addObserver(forName: KeyLink.didFinish, object: nil, queue: .main) { [weak self] _ in self?.resume() })
+    }
+
+    private func pause() {
+        paused = true
+        if current != nil || peripheral != nil {
+            drop()
+            state = .idle
+            if current != nil { finishCurrent(.failure(KeyApiError.notReady("The KEY is busy with the Favilla app."))) }
+        }
+    }
+
+    private func resume() {
+        paused = false
+        pump()
+    }
+
+    static let notPaired = ""Pair the app with the KEY first: Settings > This iPhone > PAIR THE APP."
     static let notNostrBT = "Your KEY isn't in NOSTR BT. Restart it and choose NOSTR BT at Select Mode."
     static let locked = "Your KEY is locked. Enter the NOSTR PIN on the KEY."
     static let notFound = "Can't find your KEY. Check it's on, in NOSTR BT, and near this iPhone."
@@ -93,8 +119,21 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func pump() {
-        guard current == nil, !queue.isEmpty else { return }
-        guard state == .ready, peripheral?.state == .connected, chanIn != nil, creds != nil else { connectIfNeeded(); return }
+        guard current == nil, !queue.isEmpty, !paused else { return }
+        // The pairing is read from the Keychain before every request: PAIR THE APP
+        // (or the AutoFill sheet) may have replaced it since the link opened. A
+        // link opened with an old pairing would be refused, so start again.
+        let fresh = Credentials.load()
+        if fresh == nil {
+            state = .failed(NostrLink.notPaired)
+            failAll(KeyApiError.notReady(NostrLink.notPaired)); return
+        }
+        if fresh != creds, creds != nil {
+            drop()
+            state = .idle
+        }
+        creds = fresh
+        guard state == .ready, peripheral?.state == .connected, chanIn != nil else { connectIfNeeded(); return }
         var j = queue.removeFirst()
         j.ctr = Credentials.nextCounter()
         current = j
@@ -105,8 +144,16 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         guard let c = creds else { return }
         let msg = AppChannel.request(AppChannel.cApi, c, ctr: j.ctr, body: j.body)
         guard msg.count <= AppChannel.msgMaxApi else { finishCurrent(.failure(KeyApiError.refused("request too large"))); return }
-        // The KEY answers within 10 s; give the transfer of a large body time on top.
-        arm(15 + Double(msg.count) / 8_000) { [weak self] in self?.finishCurrent(.failure(KeyApiError.timedOut)) }
+        // The KEY's handlers answer at once (doc 9k); 32 KB crosses in about a
+        // second. No answer in that time means the link is dead (the KEY restarted
+        // or walked off, and iOS hasn't noticed yet): drop it so the next request
+        // reconnects at once instead of every call waiting out a long timeout.
+        arm(6 + Double(msg.count) / 8_000) { [weak self] in
+            guard let self else { return }
+            self.drop()
+            self.state = .idle
+            self.finishCurrent(.failure(KeyApiError.timedOut))
+        }
         sendMessage(msg)
     }
 
@@ -152,12 +199,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     // MARK: - Connecting
 
     private func connectIfNeeded() {
-        guard state != .connecting else { return }
-        guard let c = Credentials.load() else {
-            state = .failed(NostrLink.notPaired)
-            failAll(KeyApiError.notReady(NostrLink.notPaired)); return
-        }
-        creds = c
+        guard state != .connecting, !paused else { return }
+        guard creds != nil else { return }
         state = .connecting
         connectTimer?.cancel()
         let t = DispatchWorkItem { [weak self] in
@@ -206,7 +249,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private func subscribed() {
         guard let c = creds else { return }
         timeCtr = Credentials.nextCounter()
-        arm(10) { [weak self] in self?.ready() }      // no answer to TIME: carry on regardless
+        arm(3) { [weak self] in self?.ready() }      // no answer to TIME: carry on regardless
         sendMessage(AppChannel.request(AppChannel.cTime, c, ctr: timeCtr, body: AppChannel.timeBody()))
     }
 
@@ -225,16 +268,19 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         let a: AppChannel.Answer
         do {
             a = try AppChannel.open(m, c)
-        } catch AppChannel.Failure.unauthenticated(_, let st) {
+        } catch AppChannel.Failure.unauthenticated(let cmd, let st) {
+            // Only refusals of our own commands count: PAIR THE APP shares 8F1A0006.
+            guard cmd == AppChannel.cApi || cmd == AppChannel.cTime else { return }
             if st == 0x08 {
-                Credentials.forget()
+                // Forget the pairing only if it is still the one this link used: a
+                // re-pair saved meanwhile must survive the old link's refusal.
+                if Credentials.load() == c { Credentials.forget() }
                 lost(AppChannel.statusText(st)); return
             }
             if timeCtr != 0 { ready(); return }
             finishCurrent(.failure(KeyApiError.notReady(NostrLink.message(st)))); return
         } catch {
-            if timeCtr == 0 { finishCurrent(.failure(KeyApiError.badAnswer)) }
-            return
+            return   // not for this pairing (PAIR THE APP's messages share the characteristic), or damaged: wait for ours
         }
         if timeCtr != 0, a.ctr == timeCtr { ready(); return }          // TIME taken (or refused): go on
         guard var j = current, a.ctr == j.ctr else { return }           // an answer to a cancelled or older request

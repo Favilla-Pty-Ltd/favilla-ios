@@ -35,6 +35,10 @@ final class KeyLink: NSObject, ObservableObject {
     static let fidoCPLen  = CBUUID(string: "8F1A0012-6B2E-4C8D-9A3E-5F7C2D1E0B4A")   // control point length: read, 2 bytes BE
     static let hidService = CBUUID(string: "1812")
     static let keyName    = "Favilla KEY"
+    /// Posted when an operation starts and ends, so the Nostr client's link
+    /// (NostrLink, app only) can step aside while this one has the KEY.
+    static let didStart = Notification.Name("FavillaKeyLinkDidStart")
+    static let didFinish = Notification.Name("FavillaKeyLinkDidFinish")
     private static let savedIdKey = "keyPeripheralId"
     private static let groupId    = "group.io.favillakey.app"
     private static let cmdFill: UInt8 = 0x34
@@ -169,6 +173,7 @@ final class KeyLink: NSObject, ObservableObject {
         guard !busy else { return }
         mode = m
         busy = true
+        NotificationCenter.default.post(name: KeyLink.didStart, object: self)
         result = nil
         outcome = nil
         lines = []
@@ -251,6 +256,7 @@ final class KeyLink: NSObject, ObservableObject {
         pairing = false
         appCode = nil
         busy = false
+        NotificationCenter.default.post(name: KeyLink.didFinish, object: self)
     }
 
     // MARK: - Pairing on demand

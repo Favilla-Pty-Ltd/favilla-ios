@@ -32,9 +32,7 @@ struct NostrClientView: UIViewRepresentable {
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
         let uc = cfg.userContentController
-        if let url = Bundle.main.url(forResource: "bridge", withExtension: "js"), let js = try? String(contentsOf: url, encoding: .utf8) {
-            uc.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        }
+        context.coordinator.installScripts(uc)
         uc.addScriptMessageHandler(context.coordinator, contentWorld: .page, name: "favillaKey")
         uc.add(context.coordinator, name: "favillaKeyCancel")
         uc.add(context.coordinator, name: "favillaApp")
@@ -57,6 +55,13 @@ struct NostrClientView: UIViewRepresentable {
 
     func updateUIView(_ wv: WKWebView, context: Context) {
         context.coordinator.parent = self
+        // A new route: start the page again with it, so the PWA's launch (saved
+        // host, reconnect) runs against the right link from its first call.
+        if context.coordinator.loadedRoute != KeyRoute.current {
+            context.coordinator.installScripts(wv.configuration.userContentController)
+            wv.reload()
+            return
+        }
         context.coordinator.pushRoute(routeText)
     }
 
@@ -74,7 +79,20 @@ struct NostrClientView: UIViewRepresentable {
         private var tasks: [Int: Task<Void, Never>] = [:]
         private var lastRoute = ""
 
+        private(set) var loadedRoute = KeyRoute.current
+
         init(_ p: NostrClientView) { parent = p }
+
+        /// The route goes in ahead of bridge.js, so the bridge knows it before the
+        /// PWA's own scripts run (its launch reconnect happens at parse time).
+        func installScripts(_ uc: WKUserContentController) {
+            uc.removeAllUserScripts()
+            loadedRoute = KeyRoute.current
+            uc.addUserScript(WKUserScript(source: "window.__favillaInitialRoute = '\(loadedRoute.rawValue)';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            if let url = Bundle.main.url(forResource: "bridge", withExtension: "js"), let js = try? String(contentsOf: url, encoding: .utf8) {
+                uc.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            }
+        }
 
         func pushRoute(_ text: String) {
             let route = KeyRoute.current.rawValue

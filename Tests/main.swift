@@ -192,7 +192,11 @@ do {
 check(WifiTransport.isLocal("192.168.20.24") && WifiTransport.isLocal("favilla-8fc17c68.local") && WifiTransport.isLocal("10.0.0.5:80"), "Wi-Fi: local addresses")
 check(WifiTransport.isLocal("172.20.1.1") && !WifiTransport.isLocal("172.32.1.1"), "Wi-Fi: 172.16/12 only")
 check(!WifiTransport.isLocal("relay.damus.io") && !WifiTransport.isLocal("8.8.8.8") && !WifiTransport.isLocal("favillakey.io"), "Wi-Fi: internet hosts refused")
+UserDefaults.standard.removeObject(forKey: WifiTransport.hostKey)
 check(WifiTransport.target(for: "192.168.1.9") == "192.168.1.9" && WifiTransport.target(for: "example.com") == nil, "Wi-Fi: page host used only when local")
+UserDefaults.standard.set("192.168.20.24", forKey: WifiTransport.hostKey)
+check(WifiTransport.target(for: "key.bluetooth") == "192.168.20.24" && WifiTransport.target(for: "relay.damus.io") == "192.168.20.24", "Wi-Fi: a non-local page host goes to the saved KEY address, never the internet")
+UserDefaults.standard.removeObject(forKey: WifiTransport.hostKey)
 
 extension Optional {
     struct Nil: Error {}

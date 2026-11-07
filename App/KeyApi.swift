@@ -135,7 +135,11 @@ final class WifiTransport: KeyTransport {
             let saved = UserDefaults.standard.string(forKey: hostKey) ?? ""
             return saved.isEmpty ? nil : saved
         }
-        return isLocal(h) ? pageHost : nil
+        if isLocal(h) { return pageHost }
+        // Not a local address (e.g. key.bluetooth left by the Bluetooth route):
+        // the saved Wi-Fi address, never the internet.
+        let saved = UserDefaults.standard.string(forKey: hostKey) ?? ""
+        return saved.isEmpty ? nil : saved
     }
 
     /// Only the local network: an IP in a private range, or a .local name. The

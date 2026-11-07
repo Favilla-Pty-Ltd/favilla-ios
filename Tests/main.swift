@@ -194,5 +194,56 @@ check(WifiTransport.isLocal("172.20.1.1") && !WifiTransport.isLocal("172.32.1.1"
 check(!WifiTransport.isLocal("relay.damus.io") && !WifiTransport.isLocal("8.8.8.8") && !WifiTransport.isLocal("favillakey.io"), "Wi-Fi: internet hosts refused")
 check(WifiTransport.target(for: "192.168.1.9") == "192.168.1.9" && WifiTransport.target(for: "example.com") == nil, "Wi-Fi: page host used only when local")
 
+// --- App channel (9g-9j): the firmware's tests/app_chan_vector.py and a pairing vector
+let chK = Data((0..<32).map { UInt8($0) }), chCid = hex("0102030405060708")
+let chCreds = Credentials(key: chK, clientId: chCid)
+let chSite = Data("github.com".utf8)
+let chFill = AppChannel.request(AppChannel.cFill, chCreds, ctr: 1, body: Data([UInt8(chSite.count)]) + chSite + Data([0]))
+check(hx(chFill) == "340102030405060708010000000a6769746875622e636f6d00265b05341089fecfecbf38a64ad8cd9b", "channel: FILL request matches the firmware vector")
+let chReps = AppChannel.reports(chFill)
+check(chReps.count == 1 && hx(chReps[0]) == "102900340102030405060708010000000a6769746875622e636f6d00265b05341089fecfecbf38a64ad8cd9b0000000000000000000000000000000000000000", "channel: FILL as one 64-byte report")
+do {
+    let a = try AppChannel.open(hex("b301020304050607080100000028d19f4993eeb43c3a8a7c7b42a0f5460751b18c72ecec29f5e994ab94"), chCreds)
+    check(a.rsp == 0xB3 && a.ctr == 1, "channel: login answer type and counter")
+    let l = try Ctap.parseFill(a.body)
+    check(l.user == "josh" && l.password == "secret", "channel: login answer decrypts to josh / secret")
+} catch { check(false, "channel: open threw \(error)") }
+var chBad = [UInt8](hex("b301020304050607080100000028d19f4993eeb43c3a8a7c7b42a0f5460751b18c72ecec29f5e994ab94")); chBad[14] ^= 1
+check((try? AppChannel.open(Data(chBad), chCreds)) == nil, "channel: a changed answer fails the mac")
+do { _ = try AppChannel.open(hex("bf3408"), chCreds); check(false, "unmac'd error should throw") }
+catch AppChannel.Failure.unauthenticated(let c, let st) { check(c == 0x34 && st == 0x08, "channel: [0xBF][cmd][status] without a mac") }
+catch { check(false, "channel: wrong error \(error)") }
+check(hx(AppChannel.request(AppChannel.cTime, chCreds, ctr: 2, body: AppChannel.timeBody(Date(timeIntervalSince1970: 1794000000)))) == "39010203040506070802000000000000006aee4480813ed68562427b5fe1b240e6ed18367a", "channel: TIME request (time big endian)")
+check(hx(AppChannel.request(AppChannel.cList, chCreds, ctr: 3, body: AppChannel.listBody(start: 12))) == "37010203040506070803000000000ccdcd0ca6e038e4d7eca92ee3fa998c03", "channel: LIST request (start big endian)")
+do {
+    let a = try AppChannel.open(hex("b7010203040506070804000000ecc2f50768fb54d5011dbb3f7c5ca3ba09c7144bf9e72eae"), chCreds)
+    check(a.rsp == 0xB7 && hx(a.body) == "0006313233343536", "channel: OTP answer decrypts to 123456")
+    let b = try AppChannel.open(hex("b6010203040506070805000000388634416e9c9536a3ea657f23b492b99746e0c4a56aee256fe01d61c8d780474c529226d5f4f5d829a7533c035b23cf96bef1437c149f6bb705e9be7ef3e1164ded441738ed50ca4cb3bcf67698baf4d358"), chCreds)
+    check(b.body == Data([0x00, 0x40]) + Data((0..<64).map { UInt8($0) }), "channel: a 66-byte answer decrypts across keystream blocks")
+} catch { check(false, "channel: OTP/LIST open threw \(error)") }
+do {   // a long message: reports and reassembly, several reports per notification
+    let long = Data((0..<300).map { UInt8($0 & 0xFF) })
+    let rs = AppChannel.reports(long)
+    check(rs.count == 5 && rs.allSatisfy { $0.count == 64 } && rs[1][0] == 0x11 && rs[1][1] == 1, "channel: 300 bytes is 5 reports")
+    var r = AppChannel.Reassembler()
+    var got: [Data] = []
+    for w in AppChannel.writes(long, perWrite: 2) { got += try r.feed(w) }
+    check(got == [long], "channel: reassembles from multi-report notifications")
+    var r2 = AppChannel.Reassembler()
+    check((try? r2.feed(rs[0] + rs[2])) == nil, "channel: a skipped report is refused")
+} catch { check(false, "channel: reassembly threw \(error)") }
+do {   // pairing: fixed keys (scalars 0x11.. and 0x22..), nonce 00..0f; vector from the doc's formulas
+    let ext = try P256.KeyAgreement.PrivateKey(rawRepresentation: Data(repeating: 0x11, count: 32))
+    let keyP = try P256.KeyAgreement.PrivateKey(rawRepresentation: Data(repeating: 0x22, count: 32))
+    let p = AppChannel.Pairing(priv: ext, nonce: Data((0..<16).map { UInt8($0) }))
+    check(hx(p.extPub) == "040217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e5794", "pairing: extPub")
+    check(hx(p.commit) == "20" + "37f30e77e7bf6bb078fef09cc2d457eb6fc34ab7183fac0e6762f6d3effb2beb", "pairing: commitment")
+    check(p.reveal.count == 1 + 65 + 16 && p.reveal.first == 0x22, "pairing: reveal")
+    let a0 = Data([0xA0]) + keyP.publicKey.x963Representation + chCid
+    let (c, code) = try p.derive(a0)
+    check(hx(c.key) == "123bc42d720cc86a8479e8bd7bbc559bdf29049cf8488b8cc543a6b20de16884" && c.clientId == chCid, "pairing: channel key")
+    check(code == "465988" && AppChannel.spaced(code) == "465 988", "pairing: 6-digit code")
+} catch { check(false, "pairing threw \(error)") }
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

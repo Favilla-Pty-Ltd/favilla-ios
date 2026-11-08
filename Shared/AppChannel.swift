@@ -120,6 +120,9 @@ enum AppChannel {
         }
 
         mutating func reset() { want = 0; buf = []; next = 0 }
+
+        /// For the log: bytes held of the message being put together, and its length (0, 0 when idle).
+        var progress: (have: Int, want: Int) { (buf.count, want) }
     }
 
     // MARK: - MACs and the keystream
@@ -140,7 +143,11 @@ enum AppChannel {
 
     /// XOR with the keystream: Ke = H(K, "FAVILLA-CHAN-ENC-1"),
     /// block i = H(Ke, rsp || clientId || ctr || i). The same call decrypts.
+    /// The block index is one byte (encBody on the KEY refuses more), issue #9.
+    static let keystreamMax = 255 * 32
+
     static func keystream(_ body: Data, rsp: UInt8, ctr: UInt32, _ creds: Credentials) -> Data {
+        precondition(body.count <= keystreamMax, "keystream: body over 255 blocks")
         let ke = h(creds.key, Data("FAVILLA-CHAN-ENC-1".utf8))
         var out = [UInt8](body)
         var i = 0
@@ -164,6 +171,7 @@ enum AppChannel {
         case badMac
         case wrongClient
         case short
+        case tooLong   // an encrypted body over 255 x 32 bytes: the keystream's block index is one byte
     }
 
     /// Check an answer's mac and client, decrypt its body if it is an encrypted type.
@@ -177,7 +185,10 @@ enum AppChannel {
         guard Data(b[1..<9]) == creds.clientId else { throw Failure.wrongClient }
         let ctr = UInt32(b[9]) | UInt32(b[10]) << 8 | UInt32(b[11]) << 16 | UInt32(b[12]) << 24
         var body = Data(b[13..<(b.count - 16)])
-        if encrypted.contains(b[0]) { body = keystream(body, rsp: b[0], ctr: ctr, creds) }
+        if encrypted.contains(b[0]) {
+            guard body.count <= keystreamMax else { throw Failure.tooLong }
+            body = keystream(body, rsp: b[0], ctr: ctr, creds)
+        }
         return Answer(rsp: b[0], ctr: ctr, body: body)
     }
 

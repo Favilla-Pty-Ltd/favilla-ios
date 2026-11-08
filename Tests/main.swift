@@ -1,5 +1,5 @@
 // Tests for CBOR.swift, Ctap.swift and KeyApi.swift (no Bluetooth). CI compiles and runs:
-//   swiftc Shared/CBOR.swift Shared/Ctap.swift Shared/KeyLink.swift App/KeyApi.swift App/NostrLink.swift Tests/main.swift -o ctaptests && ./ctaptests
+//   swiftc Shared/CBOR.swift Shared/Ctap.swift Shared/KeyLink.swift App/KeyApi.swift App/NostrLink.swift App/LinkLog.swift Tests/main.swift -o ctaptests && ./ctaptests
 
 import CryptoKit
 import Foundation
@@ -294,6 +294,31 @@ do {   // NOSTR over Bluetooth (9k): the API request and its encrypted answer on
     var small = AppChannel.Reassembler()
     check((try? small.feed(reps[0])) == nil, "API: the default reassembler still refuses messages over 1088 bytes")
 } catch { check(false, "API channel threw \(error)") }
+
+do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 reports), the log, the keystream limit
+    let body = Data([0xC8, 0x00, 0x01]) + Data([0x90, 0x04]) + Data(repeating: 0x41, count: 1168)   // 200, JSON, 1168 bytes
+    var m = Data([AppChannel.rApi]) + chCreds.clientId + Data([9, 0, 0, 0]) + AppChannel.keystream(body, rsp: AppChannel.rApi, ctr: 9, chCreds)
+    m += AppChannel.h(chCreds.key, Data("RSP".utf8) + m).prefix(16)
+    check(m.count == 1202, "issue #9: the answer is 1202 bytes, as on the bench")
+    let reps = AppChannel.reports(m, limit: AppChannel.msgMaxApi)
+    check(reps.count == 20, "issue #9: 20 reports")
+    let notes = [Data(reps[0..<8].joined()), Data(reps[8..<16].joined()), Data(reps[16..<20].joined())]
+    check(LinkLog.describe(notes[0]) == "start 1202, cont 1-7" && LinkLog.describe(notes[2]) == "cont 16-19", "log: notification report headers")
+    var ra = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
+    var got: [Data] = []
+    for (i, n) in notes.enumerated() {
+        got += try ra.feed(n)
+        if i == 0 { check(ra.progress.have == 495 && ra.progress.want == 1202, "log: progress after the first notification") }
+    }
+    check(got == [m], "issue #9: three notifications reassemble to the answer")
+    let a = try AppChannel.open(got[0], chCreds)
+    check(a.rsp == AppChannel.rApi && a.ctr == 9 && ApiWire.decodeAnswer(a.body)?.body.count == 1168, "issue #9: opens and decodes to 200 with 1168 bytes")
+    var big = Data([AppChannel.rApi]) + chCreds.clientId + Data([9, 0, 0, 0]) + Data(count: AppChannel.keystreamMax + 1)
+    big += AppChannel.h(chCreds.key, Data("RSP".utf8) + big).prefix(16)
+    check((try? AppChannel.open(big, chCreds)) == nil, "issue #9: an encrypted body over 8160 bytes is refused, not a crash")
+    do { _ = try AppChannel.open(big, chCreds) } catch { check(error as? AppChannel.Failure == .tooLong, "issue #9: refused as tooLong") }
+    check(LinkLog.path(of: try ApiWire.encode(ApiRequest(method: "GET", host: "", path: "/api/pair/sas?pair_id=7", headers: [:], body: Data(), timeout: 5)).unwrap()) == "GET /api/pair/sas", "log: path without its query")
+} catch { check(false, "issue #9 tests threw \(error)") }
 
 do {   // answer bodies: OTP and LIST
     check((try? AppChannel.parseOtp(hex("0006313233343536"))) == "123456", "OTP body: the code")

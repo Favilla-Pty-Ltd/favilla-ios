@@ -48,6 +48,7 @@ struct LinkSettingsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                     HomeBody(link: link)
+                    BluetoothLogSection()
                 }
                 .padding(20)
             }
@@ -92,5 +93,52 @@ struct LinkSettingsView: View {
         if r == .bluetooth { return "Bluetooth" }
         let h = UserDefaults.standard.string(forKey: WifiTransport.hostKey) ?? ""
         return h.isEmpty ? "Wi-Fi" : "Wi-Fi: \(h)"
+    }
+}
+
+
+/// Settings > This iPhone > Bluetooth log (issue #9): what the Nostr client's
+/// Bluetooth link did, to copy and send. Lengths, counters and reasons only.
+struct BluetoothLogSection: View {
+    @ObservedObject private var log = LinkLog.shared
+    @State private var open = false
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("BLUETOOTH LOG").font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("What the Nostr client's Bluetooth link did: connects, requests, notifications, answers and why any failed. No keys or message contents.")
+                    .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Button(copied ? "Copied" : "Copy log") {
+                        UIPasteboard.general.string = log.text
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                    }
+                    .font(Brand.button).foregroundStyle(Brand.brass)
+                    .disabled(log.lines.isEmpty)
+                    Button(open ? "Hide" : "Show (\(log.lines.count) lines)") { open.toggle() }
+                        .font(Brand.button).foregroundStyle(Brand.ink)
+                    Spacer()
+                    Button("Clear") { log.clear() }
+                        .font(Brand.button).foregroundStyle(Brand.grey)
+                        .disabled(log.lines.isEmpty)
+                }
+                if open {
+                    ScrollView([.horizontal, .vertical]) {
+                        Text(log.lines.suffix(200).joined(separator: "\n"))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Brand.ink)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: true, vertical: true)
+                    }
+                    .frame(height: 360)
+                }
+            }
+            .padding(16)
+            .background(Brand.card)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
     }
 }

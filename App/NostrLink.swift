@@ -45,6 +45,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var busyRetries = 0
     private var timeCtr: UInt32 = 0          // the TIME request, while it is out
     private var queue: [Job] = []
+    private var notes = 0                    // notifications since the last message went out (log)
     private var current: Job?
     private var timer: DispatchWorkItem?
     private var connectTimer: DispatchWorkItem?
@@ -137,6 +138,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         var j = queue.removeFirst()
         j.ctr = Credentials.nextCounter()
         current = j
+        LinkLog.shared.add("request ctr \(j.ctr): \(LinkLog.path(of: j.body)), \(j.body.count) bytes, \(queue.count) waiting")
         transmit(j)
     }
 
@@ -150,6 +152,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         // reconnects at once instead of every call waiting out a long timeout.
         arm(6 + Double(msg.count) / 8_000) { [weak self] in
             guard let self else { return }
+            let pr = self.reasm.progress
+            LinkLog.shared.add("TIMEOUT ctr \(j.ctr) after \(String(format: "%.1f", 6 + Double(msg.count) / 8_000)) s: \(self.notes) notifications since the request, holding \(pr.have) of \(pr.want) bytes; dropping the link")
             self.drop()
             self.state = .idle
             self.finishCurrent(.failure(KeyApiError.timedOut))
@@ -161,6 +165,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         timer?.cancel(); timer = nil
         guard let j = current else { return }
         current = nil
+        switch r {
+        case .success(let a): LinkLog.shared.add("answer ctr \(j.ctr): status \(a.status), \(a.body.count) bytes")
+        case .failure(let e): LinkLog.shared.add("failed ctr \(j.ctr): \(e)")
+        }
         j.done(r)
         pump()
     }
@@ -185,6 +193,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private func sendMessage(_ msg: Data) {
         guard let p = peripheral else { return }
         let per = max(1, min(8, p.maximumWriteValueLength(for: .withoutResponse) / 64))
+        notes = 0
         writes = AppChannel.writes(msg, perWrite: per, limit: AppChannel.msgMaxApi)
         busyRetries = 0
         writeNext()
@@ -202,6 +211,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         guard state != .connecting, !paused else { return }
         guard creds != nil else { return }
         state = .connecting
+        LinkLog.shared.add("connecting")
         connectTimer?.cancel()
         let t = DispatchWorkItem { [weak self] in
             guard let self, self.state == .connecting else { return }
@@ -240,6 +250,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func lost(_ why: String) {
+        LinkLog.shared.add("lost: \(why)")
         drop()
         state = .failed(why)
         failAll(KeyApiError.notReady(why))
@@ -249,6 +260,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private func subscribed() {
         guard let c = creds else { return }
         timeCtr = Credentials.nextCounter()
+        LinkLog.shared.add("subscribed to 8F1A0006; TIME ctr \(timeCtr)")
         arm(3) { [weak self] in self?.ready() }      // no answer to TIME: carry on regardless
         sendMessage(AppChannel.request(AppChannel.cTime, c, ctr: timeCtr, body: AppChannel.timeBody()))
     }
@@ -257,6 +269,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         timer?.cancel(); timer = nil
         timeCtr = 0
         connectTimer?.cancel(); connectTimer = nil
+        if state != .ready { LinkLog.shared.add("ready") }
         state = .ready
         pump()
     }
@@ -266,9 +279,13 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private func received(_ m: Data) {
         guard let c = creds else { return }
         let a: AppChannel.Answer
+        let head = [UInt8](m.prefix(13))
+        let mctr = head.count >= 13 ? UInt32(head[9]) | UInt32(head[10]) << 8 | UInt32(head[11]) << 16 | UInt32(head[12]) << 24 : 0
+        LinkLog.shared.add(String(format: "message %d bytes, type %02x", m.count, head.first ?? 0) + (head.count >= 13 ? ", ctr \(mctr)" : ""))
         do {
             a = try AppChannel.open(m, c)
         } catch AppChannel.Failure.unauthenticated(let cmd, let st) {
+            LinkLog.shared.add(String(format: "  refused: command %02x, status %02x", cmd, st))
             // Only refusals of our own commands count: PAIR THE APP shares 8F1A0006.
             guard cmd == AppChannel.cApi || cmd == AppChannel.cTime else { return }
             if st == 0x08 {
@@ -280,10 +297,16 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             if timeCtr != 0 { ready(); return }
             finishCurrent(.failure(KeyApiError.notReady(NostrLink.message(st)))); return
         } catch {
-            return   // not for this pairing (PAIR THE APP's messages share the characteristic), or damaged: wait for ours
+            // Not for this pairing (PAIR THE APP's messages share the characteristic), or damaged: wait for ours.
+            let cid = head.count >= 9 ? (Data(head[1..<9]) == c.clientId ? "this client" : "another client") : "?"
+            LinkLog.shared.add("  NOT OPENED (\(error)), \(cid)" + (current.map { ", waiting for ctr \($0.ctr)" } ?? ""))
+            return
         }
         if timeCtr != 0, a.ctr == timeCtr { ready(); return }          // TIME taken (or refused): go on
-        guard var j = current, a.ctr == j.ctr else { return }           // an answer to a cancelled or older request
+        guard var j = current, a.ctr == j.ctr else {                    // an answer to a cancelled or older request
+            LinkLog.shared.add("  ignored: no request waits for ctr \(a.ctr)" + (current.map { " (waiting for \($0.ctr))" } ?? ""))
+            return
+        }
         if a.rsp == AppChannel.rErr {
             let b = [UInt8](a.body)
             if b.count >= 5, b[0] == 0x09, j.replays < 2 {               // replay: continue above the KEY's floor
@@ -298,6 +321,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             finishCurrent(.failure(KeyApiError.notReady(NostrLink.message(b.first ?? 0xFF)))); return
         }
         guard a.rsp == AppChannel.rApi, let r = ApiWire.decodeAnswer(a.body) else {
+            LinkLog.shared.add(String(format: "  bad API answer: type %02x, body %d bytes", a.rsp, a.body.count))
             finishCurrent(.failure(KeyApiError.badAnswer)); return
         }
         finishCurrent(.success(r))
@@ -339,6 +363,8 @@ extension NostrLink: CBCentralManagerDelegate {
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
         c.stopScan()
         store.set(p.identifier.uuidString, forKey: "keyPeripheralId")
+        let wnr = p.maximumWriteValueLength(for: .withoutResponse), wr = p.maximumWriteValueLength(for: .withResponse)
+        LinkLog.shared.add("connected: ATT MTU \(wnr + 3) (write without response \(wnr), with response \(wr)); requests go \(max(1, min(8, wnr / 64))) reports per write")
         p.discoverServices([KeyLink.favService])
     }
 
@@ -349,6 +375,7 @@ extension NostrLink: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
+        LinkLog.shared.add("disconnected" + (error.map { ": \($0.localizedDescription)" } ?? ""))
         if KeyLink.keyForgotPhone(error) { lost(KeyLink.forgetOnPhone); return }
         // Keep the queue: the next request reconnects. Only the one in flight fails.
         drop()
@@ -387,6 +414,7 @@ extension NostrLink: CBPeripheralDelegate {
         if let e = error as? CBATTError {
             if e.code.rawValue == 0x86, busyRetries < 20 {                // busy: the KEY hasn't taken the last one yet
                 busyRetries += 1
+                LinkLog.shared.add("write busy, retry \(busyRetries)")
                 let w = writing
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                     guard let self, let ci = self.chanIn else { return }
@@ -396,7 +424,8 @@ extension NostrLink: CBPeripheralDelegate {
             }
             if e.code.rawValue == 0x84 || e.code.rawValue == 0x8F { lost(NostrLink.notNostrBT); return }
         }
-        if error != nil {
+        if let e = error {
+            LinkLog.shared.add("write failed: \(e.localizedDescription)")
             if timeCtr != 0 { ready() } else { finishCurrent(.failure(KeyApiError.notReady("The KEY didn't take the request."))) }
             return
         }
@@ -406,9 +435,13 @@ extension NostrLink: CBPeripheralDelegate {
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
         guard ch.uuid == KeyLink.chanOutChar, let v = ch.value else { return }
+        notes += 1
+        let pr0 = reasm.progress
+        LinkLog.shared.add("notify \(v.count) bytes: \(LinkLog.describe(v))" + (pr0.want > 0 ? " (holding \(pr0.have) of \(pr0.want))" : "") + (error.map { ", error \($0.localizedDescription)" } ?? ""))
         do {
             for m in try reasm.feed(v) { received(m) }
         } catch {
+            LinkLog.shared.add("  REASSEMBLY FAILED (\(error)), holding \(pr0.have) of \(pr0.want); starting over")
             reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
             if timeCtr == 0 { finishCurrent(.failure(KeyApiError.badAnswer)) }
         }

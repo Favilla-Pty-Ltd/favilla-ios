@@ -48,6 +48,11 @@ jobs:
             test -f "$APP/PlugIns/FavillaAutoFill.appex/$f.ttf" || { echo "::error::$f.ttf missing from the AutoFill extension"; exit 1; }
           done
           echo "fonts present in both"
+      - name: Check the push test extension is embedded
+        run: |
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -type d -name Favilla.app -path "*Debug-iphonesimulator*" | head -1)
+          test -d "$APP/PlugIns/FavillaPushProbe.appex" || { echo "::error::FavillaPushProbe.appex missing"; ls "$APP/PlugIns"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$APP/PlugIns/FavillaPushProbe.appex/Info.plist"
       - name: Check the Nostr client is bundled
         run: |
           APP=$(find ~/Library/Developer/Xcode/DerivedData -type d -name Favilla.app -path "*Debug-iphonesimulator*" | head -1)

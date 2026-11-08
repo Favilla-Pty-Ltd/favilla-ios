@@ -9,7 +9,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.5.2"
+    MARKETING_VERSION: "1.6.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
@@ -51,8 +51,10 @@ targets:
       properties:
         com.apple.developer.authentication-services.autofill-credential-provider: true
         com.apple.security.application-groups: [group.io.favillakey.app]
+        aps-environment: development   # push test (9 Nov 2026); the App Store export signs it as production
     dependencies:
       - target: FavillaAutoFill
+      - target: FavillaPushProbe
   FavillaAutoFill:
     type: app-extension
     platform: iOS
@@ -81,4 +83,30 @@ targets:
       path: AutoFill/FavillaAutoFill.entitlements
       properties:
         com.apple.developer.authentication-services.autofill-credential-provider: true
+        com.apple.security.application-groups: [group.io.favillakey.app]
+  # The push test (9 Nov 2026): a notification service extension that tries to
+  # reach the KEY over Bluetooth by itself when a push arrives (PushProbe/).
+  FavillaPushProbe:
+    type: app-extension
+    platform: iOS
+    sources:
+      - PushProbe
+      - path: Shared
+        excludes: ["Fonts/**"]   # an extension has a 24 MB memory limit; no UI here
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.favillakey.app.pushprobe
+    info:
+      path: PushProbe/Info.plist
+      properties:
+        CFBundleDisplayName: Favilla
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSBluetoothAlwaysUsageDescription: Favilla uses Bluetooth to reach your Favilla KEY when a request arrives.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: PushProbe/FavillaPushProbe.entitlements
+      properties:
         com.apple.security.application-groups: [group.io.favillakey.app]

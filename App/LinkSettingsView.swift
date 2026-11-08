@@ -49,6 +49,7 @@ struct LinkSettingsView: View {
                     }
                     HomeBody(link: link)
                     BluetoothLogSection()
+                    PushTestSection()
                 }
                 .padding(20)
             }

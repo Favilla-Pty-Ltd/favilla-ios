@@ -9,6 +9,7 @@ import SwiftUI
 
 @main
 struct FavillaApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate   // push token (PushTest.swift)
     @StateObject private var link = KeyLink()
 
     var body: some Scene {

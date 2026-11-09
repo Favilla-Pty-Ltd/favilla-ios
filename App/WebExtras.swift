@@ -62,7 +62,7 @@ enum LinkPreview {
             for try await b in bytes {
                 data.append(b)
                 if data.count > 524_288 { break }
-                if b == UInt8(ascii: ">"), data.count > 7, data.suffix(7).lowercased() == "</head>" { break }
+                if b == UInt8(ascii: ">"), data.count > 7, String(decoding: data.suffix(7), as: UTF8.self).lowercased() == "</head>" { break }
             }
             let html = String(decoding: data, as: UTF8.self)
             return parse(html, base: h.url ?? url)

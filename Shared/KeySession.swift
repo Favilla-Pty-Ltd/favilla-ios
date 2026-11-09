@@ -217,6 +217,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     private var timeCtr: UInt32 = 0
+    private var timeRetried = false
     private func timeDone(_ s: String) {
         guard timeCtr != 0 else { return }
         timeCtr = 0
@@ -244,7 +245,15 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private func received(_ m: Data) {
         do {
             let a = try AppChannel.open(m, creds)
-            if timeCtr != 0, a.ctr == timeCtr { timeDone("clock set"); return }
+            if timeCtr != 0, a.ctr == timeCtr {
+                if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body), !timeRetried {
+                    timeRetried = true
+                    Credentials.raiseCounter(above: f)
+                    mark("TIME refused as a replay: again above \(f)")
+                    sendTime(); return
+                }
+                timeDone("clock set"); return
+            }
             guard let w = waiting, a.ctr == w.ctr else { return }
             timer?.cancel()
             waiting = nil

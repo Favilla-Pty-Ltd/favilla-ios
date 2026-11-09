@@ -48,8 +48,8 @@ async def main():
 
     pushes = []
 
-    async def sender(token, env, pk, n, round_=0):
-        pushes.append((token, env, pk, n, time.time(), round_))
+    async def sender(token, env, pk, n, round_=0, events=None):
+        pushes.append((token, env, pk, n, time.time(), round_, events))
         return 200, ""
 
     d = tempfile.mkdtemp()
@@ -73,6 +73,10 @@ async def main():
     await asyncio.sleep(0.3)
     ok([e["id"] for e in br.pending.get(KEY)] == [f"{1:064x}"], "keeps one request; drops duplicate, other kinds, other keys")
     ok(len(pushes) == 1 and pushes[0][:4] == (TOK, "production", KEY, 1), "one push to the phone with the waiting count")
+    ok([e["id"] for e in pushes[0][6]] == [f"{1:064x}"], "the request rides in the push")
+    big = [dict(ev(i), content="x" * 1200) for i in range(5)]
+    fit = B.fit_events(big)
+    ok(len(fit) == 2 and fit[-1]["id"] == big[-1]["id"], "only the newest requests that fit 4 KB ride along")
 
     # a burst: one trailing push after the gap, not one per request
     for i in range(10, 15):
@@ -94,7 +98,7 @@ async def main():
     B.KEEP_S = keep
 
     # a dead token is dropped
-    async def gone(token, env, pk, n, round_=0):
+    async def gone(token, env, pk, n, round_=0, events=None):
         return 410, "Unregistered"
     br.sender = gone
     br.last_push.clear()

@@ -389,14 +389,40 @@ struct Credentials: Equatable {
     static var isPaired: Bool { load() != nil }
 
     /// The next counter (strictly rising across the app and the extension).
+    /// The app and the notification extension are two processes, and app-group
+    /// UserDefaults don't sync between them at once: each could hand out the same
+    /// counter and the KEY refuses the second as a replay (issue #9, 9 Nov). So the
+    /// counter lives in a file in the app group, read and written under a lock.
     static func nextCounter() -> UInt32 {
-        let n = UInt32(clamping: defaults.integer(forKey: ctrKey) + 1)
-        defaults.set(Int(n), forKey: ctrKey)
-        return n
+        var n = 0
+        withCounter { $0 += 1; n = $0 }
+        return UInt32(clamping: n)
     }
 
     /// After a replay refusal: continue above the KEY's floor.
     static func raiseCounter(above floor: UInt32) {
-        if defaults.integer(forKey: ctrKey) <= Int(floor) { defaults.set(Int(floor), forKey: ctrKey) }
+        withCounter { if $0 <= Int(floor) { $0 = Int(floor) } }
+    }
+
+    private static func withCounter(_ f: (inout Int) -> Void) {
+        guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.io.favillakey.app")?
+                .appendingPathComponent("app-channel-counter") else {
+            var v = defaults.integer(forKey: ctrKey); f(&v); defaults.set(v, forKey: ctrKey); return
+        }
+        let fd = Darwin.open(url.path, O_RDWR | O_CREAT, 0o600)
+        guard fd >= 0 else { var v = defaults.integer(forKey: ctrKey); f(&v); defaults.set(v, forKey: ctrKey); return }
+        defer { Darwin.close(fd) }
+        flock(fd, LOCK_EX)
+        defer { flock(fd, LOCK_UN) }
+        var buf = [UInt8](repeating: 0, count: 24)
+        let got = Darwin.read(fd, &buf, buf.count)
+        let text = got > 0 ? String(decoding: buf.prefix(got), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        var v = max(Int(text) ?? 0, defaults.integer(forKey: ctrKey))     // the defaults value: the counter before 9 Nov
+        f(&v)
+        let out = Array(String(v).utf8)
+        _ = ftruncate(fd, 0)
+        _ = lseek(fd, 0, SEEK_SET)
+        _ = out.withUnsafeBufferPointer { Darwin.write(fd, $0.baseAddress, $0.count) }
+        defaults.set(v, forKey: ctrKey)
     }
 }

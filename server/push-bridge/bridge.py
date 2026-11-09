@@ -160,12 +160,17 @@ class Apns:
                                    algorithm="ES256", headers={"kid": self.key_id})
         return self._jwt
 
-    async def send(self, device, env, pubkey, waiting, round_=0):
+    async def send(self, device, env, pubkey, waiting, round_=0, events=None):
         host = "api.sandbox.push.apple.com" if env == "development" else "api.push.apple.com"
         text = "Signing request from a Nostr app"
+        # time-sensitive: iOS delivers it at once, through Focus and summaries.
+        # The requests themselves ride along when they fit (APNs allows 4 KB), so
+        # the phone has nothing to fetch before it talks to the KEY.
         body = {"aps": {"alert": {"title": "Favilla", "body": text},
-                        "mutable-content": 1, "thread-id": "bunker"},
+                        "mutable-content": 1, "thread-id": "bunker", "interruption-level": "time-sensitive"},
                 "fv": {"pk": pubkey, "n": waiting, "r": round_}}
+        if events:
+            body["fv"]["evs"] = events
         r = await self.http.post(f"https://{host}/3/device/{device}", json=body, headers={
             "authorization": "bearer " + self.token(), "apns-topic": self.topic,
             "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": "0",
@@ -177,6 +182,21 @@ class Apns:
             except ValueError:
                 reason = r.text[:100]
         return r.status_code, reason
+
+
+PUSH_BUDGET = 3700      # bytes of request events carried in a push (APNs max payload 4096)
+
+
+def fit_events(evs, budget=PUSH_BUDGET):
+    """The newest waiting requests that fit in a push, oldest first."""
+    out, used = [], 0
+    for ev in reversed(evs):
+        n = len(json.dumps(ev, separators=(",", ":")))
+        if used + n + 1 > budget:
+            break
+        out.insert(0, ev)
+        used += n + 1
+    return out
 
 
 # ---------------------------------------------------------------- bridge -----
@@ -271,7 +291,8 @@ class Bridge:
     async def _send(self, pk, token, env):
         self.last_push[token] = time.time()
         try:
-            status, reason = await self.sender(token, env, pk, len(self.pending.get(pk)))
+            evs = self.pending.get(pk)
+            status, reason = await self.sender(token, env, pk, len(evs), 0, fit_events(evs))
         except Exception as e:  # noqa: BLE001
             log.warning("push to %s…: %s", token[:8], e)
             self.stats["push_errors"] += 1
@@ -304,7 +325,8 @@ class Bridge:
         async def later():
             await asyncio.sleep(wait)
             try:
-                status, reason = await self.sender(token, env, pk, len(self.pending.get(pk)), round_)
+                evs = self.pending.get(pk)
+                status, reason = await self.sender(token, env, pk, len(evs), round_, fit_events(evs))
                 if status != 200:
                     log.warning("follow-up push to %s…: HTTP %s %s", token[:8], status, reason)
             except Exception as e:  # noqa: BLE001

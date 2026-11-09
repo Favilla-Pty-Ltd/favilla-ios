@@ -46,6 +46,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var busyRetries = 0
     private var timeCtr: UInt32 = 0          // the TIME request, while it is out
     private var lastTimeCtr: UInt32 = 0      // the last TIME sent: its answer may come after we moved on (#9 item 5)
+    private var helloCtr: UInt32 = 0         // HELLO, while it is out: which life the KEY is in (#9, 9 Nov)
+    private var timeRetried = false
     private var lastPer = 0                  // reports per write last used (#9 item 2: the MTU grows after connect)
     private var skipToStart = false          // after a failed message: drop its leftover reports until the next start (#9 item 3)
     private var skipped = 0
@@ -273,7 +275,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         peripheral = nil; chanIn = nil; chanOut = nil
         reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
-        writes = []; timeCtr = 0; lastPer = 0; skipToStart = false; skipped = 0
+        writes = []; timeCtr = 0; helloCtr = 0; lastPer = 0; skipToStart = false; skipped = 0
     }
 
     private func lost(_ why: String) {
@@ -283,12 +285,23 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         failAll(KeyApiError.notReady(why))
     }
 
-    /// Subscribed: set the KEY's clock, then serve the queue.
+    /// Subscribed: ask which life the KEY is in (HELLO), set its clock (TIME),
+    /// then serve the queue. API and the bunker are the NOSTR Bluetooth life's
+    /// only: in another life nothing is sent (issue #9, 9 Nov).
     private func subscribed() {
+        guard let c = creds else { return }
+        helloCtr = Credentials.nextCounter()
+        timeRetried = false
+        LinkLog.shared.add("subscribed to 8F1A0006; HELLO ctr \(helloCtr)")
+        arm(2) { [weak self] in self?.helloCtr = 0; self?.sendTime() }    // no answer to HELLO: carry on
+        sendMessage(AppChannel.request(AppChannel.cHello, c, ctr: helloCtr, body: Data()))
+    }
+
+    private func sendTime() {
         guard let c = creds else { return }
         timeCtr = Credentials.nextCounter()
         lastTimeCtr = timeCtr
-        LinkLog.shared.add("subscribed to 8F1A0006; TIME ctr \(timeCtr)")
+        LinkLog.shared.add("TIME ctr \(timeCtr)")
         arm(3) { [weak self] in self?.ready() }      // no answer to TIME: carry on regardless
         sendMessage(AppChannel.request(AppChannel.cTime, c, ctr: timeCtr, body: AppChannel.timeBody()))
     }
@@ -322,6 +335,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                 if Credentials.load() == c { Credentials.forget() }
                 lost(AppChannel.statusText(st)); return
             }
+            if helloCtr != 0, cmd == AppChannel.cHello { helloCtr = 0; sendTime(); return }
             if timeCtr != 0 { ready(); return }
             finishCurrent(.failure(KeyApiError.notReady(NostrLink.message(st)))); return
         } catch {
@@ -330,7 +344,28 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             LinkLog.shared.add("  NOT OPENED (\(error)), \(cid)" + (current.map { ", waiting for ctr \($0.ctr)" } ?? ""))
             return
         }
-        if timeCtr != 0, a.ctr == timeCtr { ready(); return }          // TIME taken (or refused): go on
+        if helloCtr != 0, a.ctr == helloCtr {
+            helloCtr = 0
+            let b = [UInt8](a.body)
+            if a.rsp == AppChannel.rHello, b.count >= 2 {
+                LinkLog.shared.add(String(format: "  HELLO: life %02x", b[1]))
+                if b[1] != 0x03 { lost(NostrLink.notNostrBT); return }
+            } else if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body) {
+                LinkLog.shared.add("  HELLO refused as a replay: counter raised above \(f)")
+                Credentials.raiseCounter(above: f)
+            }
+            sendTime(); return
+        }
+        if timeCtr != 0, a.ctr == timeCtr {                               // TIME taken (or refused)
+            if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body), !timeRetried {
+                // A stale counter after a reconnect: the clock wasn't set. Again, above the KEY's floor.
+                LinkLog.shared.add("  TIME refused as a replay: again above \(f)")
+                Credentials.raiseCounter(above: f)
+                timeRetried = true
+                sendTime(); return
+            }
+            ready(); return
+        }
         if a.ctr == lastTimeCtr, a.ctr != current?.ctr {                // TIME's answer after its 3 s wait: nothing waits for it
             LinkLog.shared.add("  late TIME answer (ctr \(a.ctr)), ignored")
             return

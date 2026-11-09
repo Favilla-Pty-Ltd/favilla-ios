@@ -37,7 +37,9 @@ final class NotificationService: UNNotificationServiceExtension {
         content = request.content.mutableCopy() as? UNMutableNotificationContent
         let fv = request.content.userInfo["fv"] as? [String: Any]
         Task {
-            if let pk = fv?["pk"] as? String { await bunker(pk, round: (fv?["r"] as? Int) ?? 0) } else { await probe() }
+            if let pk = fv?["pk"] as? String {
+                await bunker(pk, round: (fv?["r"] as? Int) ?? 0, carried: NotificationService.events(fv?["evs"]))
+            } else { await probe() }
         }
     }
 
@@ -65,7 +67,22 @@ final class NotificationService: UNNotificationServiceExtension {
 
     // MARK: - Bunker
 
-    private func bunker(_ pk: String, round: Int) async {
+    /// Connect to the KEY; nil, or why not.
+    static func open(_ s: KeySession) async -> String? {
+        do { try await s.open(); return nil } catch { return "\(error)" }
+    }
+
+    /// The requests the bridge put in the push itself (when they fit in 4 KB).
+    static func events(_ any: Any?) -> [(String, Data)] {
+        guard let evs = any as? [[String: Any]] else { return [] }
+        return evs.compactMap { e in
+            guard let id = e["id"] as? String, id.count == 64, e["kind"] as? Int == 24133, !Bunker.seen(id),
+                  let d = try? JSONSerialization.data(withJSONObject: e) else { return nil }
+            return (id, d)
+        }
+    }
+
+    private func bunker(_ pk: String, round: Int, carried: [(String, Data)]) async {
         let title = "Favilla bunker"
         quiet = round > 0
         best = (title, "Signing request from a Nostr app. Open Favilla to answer it.")
@@ -87,23 +104,25 @@ final class NotificationService: UNNotificationServiceExtension {
             deliver(title, "Signing request from a Nostr app. Approve it on your KEY if it asks.")
             return
         }
-        let reqs: [(String, Data)]
-        do { reqs = try await Bunker.pending(pubkey: pk) } catch {
-            Bunker.log("extension: bridge unreachable: \(error.localizedDescription)")
-            deliver(title, "Couldn't fetch the request: \(error.localizedDescription)"); return
-        }
-        // A follow-up push (round 1 and on) comes with nothing new: it is here to
-        // collect replies the KEY finished after the last run (an approval).
-        guard !reqs.isEmpty || round > 0 else { deliver(title, "Nothing waiting: the request was already answered."); return }
-        Bunker.log("extension: " + (round > 0 ? "follow-up \(round), " : "") + "\(reqs.count) request\(reqs.count == 1 ? "" : "s") waiting")
-
+        // Bluetooth first, in parallel with everything else: the connect is the
+        // slow, variable part (issue #11, 9 Nov). The requests usually came in the
+        // push itself; the bridge is asked as well, for any that didn't fit.
         let s = KeySession(creds)
         session = s
-        do { try await s.open() } catch {
-            Bunker.log("extension: \(error) (\(ms) ms, \(s.how))")
-            deliver(title, "Couldn't reach your KEY. \(error)"); return
+        async let opening: String? = NotificationService.open(s)
+        async let fetched: [(String, Data)]? = try? await Bunker.pending(pubkey: pk)
+        var reqs = carried
+        let more = await fetched
+        for r in more ?? [] where !reqs.contains(where: { $0.0 == r.0 }) { reqs.append(r) }
+        if more == nil { Bunker.log("extension: bridge unreachable, \(carried.count) request(s) from the push") }
+        if let e = await opening {
+            Bunker.log("extension: \(e) (\(ms) ms, \(s.how))")
+            deliver(title, "Couldn't reach your KEY. \(e)"); return
         }
-        Bunker.log("extension: KEY open in \(ms) ms (\(s.how))")
+        // A follow-up push (round 1 and on) may come with nothing new: it is here
+        // to collect replies the KEY finished after the last run (an approval).
+        guard !reqs.isEmpty || round > 0 else { s.close(); deliver(title, "Nothing waiting: the request was already answered."); return }
+        Bunker.log("extension: " + (round > 0 ? "follow-up \(round), " : "") + "KEY open in \(ms) ms (\(s.how)), \(reqs.count) request\(reqs.count == 1 ? "" : "s") (\(carried.count) in the push)")
         // iOS shows the notification only when this finishes. The first run hands
         // the request over and stops within about 6 s (time for the KEY to sign on
         // its own), so "approve it on your KEY" shows at once; follow-up runs then

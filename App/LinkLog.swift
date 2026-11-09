@@ -16,6 +16,7 @@ final class LinkLog: ObservableObject, @unchecked Sendable {
     static let max = 600
 
     @Published private(set) var lines: [String] = []
+    private var buf: [String] = []          // the real log, under lock; `lines` is its copy for the UI
     private let lock = NSLock()
     private let file: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("bluetooth-log.txt")
     private let stamp: DateFormatter = {
@@ -27,7 +28,8 @@ final class LinkLog: ObservableObject, @unchecked Sendable {
 
     private init() {
         if let f = file, let s = try? String(contentsOf: f, encoding: .utf8) {
-            lines = Array(s.split(separator: "\n").map(String.init).suffix(LinkLog.max))
+            buf = Array(s.split(separator: "\n").map(String.init).suffix(LinkLog.max))
+            lines = buf
         }
     }
 
@@ -35,12 +37,12 @@ final class LinkLog: ObservableObject, @unchecked Sendable {
     func add(_ s: String) {
         lock.lock()
         let line = stamp.string(from: Date()) + " " + s
-        var l = lines
-        l.append(line)
-        if l.count > LinkLog.max { l.removeFirst(l.count - LinkLog.max) }
+        buf.append(line)
+        if buf.count > LinkLog.max { buf.removeFirst(buf.count - LinkLog.max) }
+        let l = buf
         let text = l.joined(separator: "\n")
-        lock.unlock()
         if let f = file { try? text.write(to: f, atomically: true, encoding: .utf8) }
+        lock.unlock()
         DispatchQueue.main.async { self.lines = l }
         #if DEBUG
         print("[BT] " + s)
@@ -50,7 +52,8 @@ final class LinkLog: ObservableObject, @unchecked Sendable {
     var text: String { lines.joined(separator: "\n") }
 
     func clear() {
-        lock.lock(); lines = []; lock.unlock()
+        lock.lock(); buf = []; lock.unlock()
+        DispatchQueue.main.async { self.lines = [] }
         if let f = file { try? FileManager.default.removeItem(at: f) }
     }
 
@@ -84,6 +87,16 @@ final class LinkLog: ObservableObject, @unchecked Sendable {
     }
 
     /// The path of an ApiWire request, without its query (no ids or values in the log).
+    /// What a request was, for the log: the API path, or the bunker command.
+    static func what(_ cmd: UInt8, _ body: Data) -> String {
+        switch cmd {
+        case Bunker.cNip46: return "NIP46 request"
+        case Bunker.cPoll: return "NIP46 poll"
+        case Bunker.cInfo: return "BUNKER_INFO"
+        default: return path(of: body)
+        }
+    }
+
     static func path(of body: Data) -> String {
         let b = [UInt8](body)
         guard b.count >= 3 else { return "?" }

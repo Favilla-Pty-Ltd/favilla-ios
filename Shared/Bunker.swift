@@ -126,7 +126,8 @@ enum Bunker {
         switch st {
         case 0x04: return "Your KEY isn't in Bluetooth mode. On the KEY: Settings > Network > Change mode > Bluetooth."   // S_NOT_HERE
         case 0x05: return "Your KEY is locked. Enter the NOSTR PIN on the KEY."                                              // S_LOCKED
-        case 0x07: return "This KEY doesn't have the Bluetooth bunker yet (firmware issue #11)."
+        case 0x06: return "An approval is on the KEY's screen, or it has 8 requests waiting. Trying again shortly."   // S_BUSY
+        case 0x07: return "The KEY couldn't read that request."                                                         // S_BAD_REQUEST
         default: return AppChannel.statusText(st)
         }
     }
@@ -139,7 +140,14 @@ enum Bunker {
         var replies = 0        // replies the KEY gave
         var waiting = false    // the KEY still had more to come (an approval on the KEY) when time ran out
         var error: String?
+        var later: [(String, Data)] = []   // refused busy (S_BUSY): not taken, try again
+
+        static func == (a: Outcome, b: Outcome) -> Bool {
+            a.taken == b.taken && a.sent == b.sent && a.replies == b.replies && a.waiting == b.waiting && a.error == b.error && a.later.map { $0.0 } == b.later.map { $0.0 }
+        }
     }
+
+    static let sBusy: UInt8 = 0x06, sBadRequest: UInt8 = 0x07
 
     /// Hand each request to the KEY, publish its replies as they come, and poll
     /// while the KEY says more is coming (a request waiting for approval on the
@@ -163,21 +171,39 @@ enum Bunker {
                 return true
             }
         }
-        for (id, ev) in reqs {
-            guard ev.count <= 32_768 else { log("request \(id.prefix(8)) too large, skipped"); markSeen([id]); continue }
-            do {
-                let a = try await k.request(cNip46, ev, timeout: 6)
-                guard await take(a) else { break }
-                markSeen([id])
-                o.taken += 1
-                log("request \(id.prefix(8)) taken by the KEY")
-            } catch {
-                o.error = "\(error)"; break
+        var pending = reqs
+        while true {
+            o.later = []
+            for (i, (id, ev)) in pending.enumerated() {
+                guard ev.count <= 32_768 else { log("request \(id.prefix(8)) too large, skipped"); markSeen([id]); continue }
+                do {
+                    let a = try await k.request(cNip46, ev, timeout: 12)
+                    if a.rsp == AppChannel.rErr, let st = a.body.first, st == sBusy {
+                        // An approval on the KEY's screen, or its queue is full: this and the rest wait.
+                        o.later = Array(pending[i...])
+                        more = true
+                        log("KEY busy: \(o.later.count) request\(o.later.count == 1 ? "" : "s") wait")
+                        break
+                    }
+                    if a.rsp == AppChannel.rErr, let st = a.body.first, st == sBadRequest {
+                        markSeen([id]); log("request \(id.prefix(8)) refused as unreadable"); continue
+                    }
+                    guard await take(a) else { break }
+                    markSeen([id])
+                    o.taken += 1
+                    log("request \(id.prefix(8)) taken by the KEY")
+                } catch {
+                    o.error = "\(error)"; break
+                }
             }
-        }
-        while more, o.error == nil, deadline.timeIntervalSinceNow > 0.6 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            do { guard await take(try await k.request(cPoll, Data(), timeout: 4)) else { break } } catch { o.error = "\(error)"; break }
+            // Replies the KEY finishes later (an approval, encrypt/decrypt on its worker).
+            while more, o.error == nil, deadline.timeIntervalSinceNow > 0.6 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                do { guard await take(try await k.request(cPoll, Data(), timeout: 12)) else { break } } catch { o.error = "\(error)"; break }
+            }
+            // The KEY is free again: the requests it was too busy for, once more.
+            guard !o.later.isEmpty, !more, o.error == nil, deadline.timeIntervalSinceNow > 2 else { break }
+            pending = o.later
         }
         o.waiting = more && o.error == nil
         return o

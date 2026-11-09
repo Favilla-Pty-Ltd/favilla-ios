@@ -157,7 +157,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         var j = queue.removeFirst()
         j.ctr = Credentials.nextCounter()
         current = j
-        LinkLog.shared.add("request ctr \(j.ctr): \(LinkLog.path(of: j.body)), \(j.body.count) bytes, \(queue.count) waiting")
+        LinkLog.shared.add("request ctr \(j.ctr): \(LinkLog.what(j.cmd, j.body)), \(j.body.count) bytes, \(queue.count) waiting")
         transmit(j)
     }
 
@@ -169,10 +169,13 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         // second. No answer in that time means the link is dead (the KEY restarted
         // or walked off, and iOS hasn't noticed yet): drop it so the next request
         // reconnects at once instead of every call waiting out a long timeout.
-        arm(6 + Double(msg.count) / 8_000) { [weak self] in
+        // A NIP46 request waits up to 4 s on the KEY (10p), and a bunker answer can
+        // carry up to 40 KB back: give those 12 s.
+        let limit = (j.cmd == Bunker.cNip46 || j.cmd == Bunker.cPoll ? 12 : 6) + Double(msg.count) / 8_000
+        arm(limit) { [weak self] in
             guard let self else { return }
             let pr = self.reasm.progress
-            LinkLog.shared.add("TIMEOUT ctr \(j.ctr) after \(String(format: "%.1f", 6 + Double(msg.count) / 8_000)) s: \(self.notes) notifications since the request, holding \(pr.have) of \(pr.want) bytes; dropping the link")
+            LinkLog.shared.add("TIMEOUT ctr \(j.ctr) after \(String(format: "%.1f", limit)) s: \(self.notes) notifications since the request, holding \(pr.have) of \(pr.want) bytes; dropping the link")
             self.drop()
             self.state = .idle
             self.finishCurrent(.failure(KeyApiError.timedOut))

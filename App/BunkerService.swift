@@ -206,7 +206,12 @@ final class BunkerService: ObservableObject {
                 Bunker.log("app: taken \(o.taken), replies \(o.replies), accepted \(o.sent)" + (o.error.map { ", \($0)" } ?? ""))
             }
             if let e = o.error { status = e }
-        } while !queue.isEmpty
+            if !o.later.isEmpty, active {
+                // The KEY was busy for these and stayed busy: try again in a few seconds.
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                queue.append(contentsOf: o.later.filter { !Bunker.seen($0.0) })
+            }
+        } while !queue.isEmpty && active
     }
 }
 

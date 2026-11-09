@@ -387,6 +387,29 @@ do {
     check(out.taken == 2 && out.replies == 2 && !out.waiting && out.error == nil, "bunker: serve collects the late reply")
     check(Bunker.seen("r1") && Bunker.seen("r2"), "bunker: served requests are marked seen")
 
+    // 10p vectors (tests/app_chan_vector.py): NIP46_POLL at ctr 3, and the empty answer with more to come.
+    check(hx(AppChannel.request(Bunker.cPoll, chCreds, ctr: 3, body: Data())) == "3c01020304050607080300000041748c20e5ed9f20c16e01769edebd5c", "bunker: NIP46_POLL matches the firmware vector")
+    if let a = try? AppChannel.open(hex("b90102030405060708030000000100e0a682a02d7adeb6c2d4c79ecb3b7317"), chCreds) {
+        check(a.rsp == Bunker.rNip46 && Bunker.decodeReplies(a.body) == Bunker.Replies(more: true, messages: []), "bunker: the firmware's empty 0xB9 reads as more to come")
+    } else { check(false, "bunker: the firmware's 0xB9 vector opens") }
+
+    // S_BUSY: the request and the ones after it wait; polling continues; then they go again.
+    final class Busy: ChannelCaller, @unchecked Sendable {
+        var sent: [UInt8] = []; var n = 0
+        func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer {
+            sent.append(cmd); n += 1
+            if cmd == Bunker.cNip46 && n == 1 { return AppChannel.Answer(rsp: AppChannel.rErr, ctr: 1, body: Data([0x06])) }
+            return AppChannel.Answer(rsp: Bunker.rNip46, ctr: 1, body: hex("0000"))
+        }
+    }
+    let bz = Busy(), busyDone = DispatchSemaphore(value: 0)
+    Task {
+        box.o = await Bunker.serve([("b1", Data("{}".utf8)), ("b2", Data("{}".utf8))], via: bz, relays: [], until: Date().addingTimeInterval(10))
+        busyDone.signal()
+    }
+    busyDone.wait()
+    check(bz.sent == [Bunker.cNip46, Bunker.cPoll, Bunker.cNip46, Bunker.cNip46] && box.o.taken == 2 && box.o.later.isEmpty, "bunker: S_BUSY waits, polls, then sends both again")
+
     let refused = DispatchSemaphore(value: 0)
     final class Locked: ChannelCaller {
         func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer { AppChannel.Answer(rsp: AppChannel.rErr, ctr: 1, body: Data([0x05])) }

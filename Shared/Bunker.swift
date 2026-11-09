@@ -29,6 +29,10 @@ enum Bunker {
     static let cInfo: UInt8 = 0x3D
     static let rNip46: UInt8 = 0xB9
     static let rInfo: UInt8 = 0xBA
+    // 11i, path B: the KEY wakes the app over Bluetooth.
+    static let cNudgeSet: UInt8 = 0x3E     // body [seconds 1] (0 off, at most 60) -> 0xB1 [0x00]; per connection
+    static let rNudge: UInt8 = 0xBB        // unsolicited, macced, counter 0: [seq u32 LE][replies waiting 1]
+    static let nudgeSeconds: UInt8 = 5
 
     static let bridge = URL(string: "https://relay.favillakey.io/push")!
     private static let group = "group.io.favillakey.app"
@@ -64,6 +68,13 @@ enum Bunker {
         static let key = "bunkerInfo"
         static func load() -> Info? { store.data(forKey: key).flatMap { try? JSONDecoder().decode(Info.self, from: $0) } }
         func save() { Bunker.store.set(try? JSONEncoder().encode(self), forKey: Info.key) }
+    }
+
+    /// R_NUDGE body: (seq, replies waiting in the KEY's outbox).
+    static func decodeNudge(_ b: Data) -> (seq: UInt32, waiting: Int)? {
+        let v = [UInt8](b)
+        guard v.count >= 5 else { return nil }
+        return (UInt32(v[0]) | UInt32(v[1]) << 8 | UInt32(v[2]) << 16 | UInt32(v[3]) << 24, Int(v[4]))
     }
 
     static func decodeInfo(_ b: Data) -> Info? {
@@ -250,9 +261,11 @@ enum Bunker {
     }
 
     /// The requests waiting at the bridge that haven't been handled here yet: (id, event JSON).
-    static func pending(pubkey: String) async throws -> [(String, Data)] {
+    /// `link`: asked on a KEY nudge (path B). The bridge then holds its push back
+    /// for a few seconds, since this phone is taking requests itself.
+    static func pending(pubkey: String, link: Bool = false) async throws -> [(String, Data)] {
         var c = URLComponents(url: bridge.appendingPathComponent("pending"), resolvingAgainstBaseURL: false)!
-        c.queryItems = [URLQueryItem(name: "pubkey", value: pubkey)]
+        c.queryItems = [URLQueryItem(name: "pubkey", value: pubkey)] + (link ? [URLQueryItem(name: "via", value: "link")] : [])
         let (d, r) = try await URLSession.shared.data(for: URLRequest(url: c.url!, timeoutInterval: 8))
         guard (r as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],

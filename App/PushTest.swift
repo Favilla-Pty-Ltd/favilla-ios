@@ -64,6 +64,9 @@ final class PushTest: NSObject, ObservableObject, @unchecked Sendable {
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ app: UIApplication, didFinishLaunchingWithOptions o: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // The Bluetooth bunker keeps its link to the KEY up, also when iOS
+        // relaunches the app in the background to hand that link back.
+        Task { @MainActor in BunkerService.shared.start() }
         // Keep the token fresh once notifications are allowed (it can change).
         UNUserNotificationCenter.current().getNotificationSettings { s in
             if s.authorizationStatus == .authorized {

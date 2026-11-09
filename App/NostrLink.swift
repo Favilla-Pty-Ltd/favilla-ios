@@ -48,6 +48,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var lastTimeCtr: UInt32 = 0      // the last TIME sent: its answer may come after we moved on (#9 item 5)
     private var helloCtr: UInt32 = 0         // HELLO, while it is out: which life the KEY is in (#9, 9 Nov)
     private var timeRetried = false
+    private var nudgeSet = false             // NUDGE_SET sent on this connection (path B, KEY 11i)
+    private var nudges = 0
     private var lastPer = 0                  // reports per write last used (#9 item 2: the MTU grows after connect)
     private var skipToStart = false          // after a failed message: drop its leftover reports until the next start (#9 item 3)
     private var skipped = 0
@@ -82,6 +84,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private func resume() {
         paused = false
         pump()
+        stayUp()
     }
 
     static let notPaired = "Pair the app with the KEY first: Settings > This iPhone > PAIR THE APP."
@@ -102,7 +105,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     /// The commands that share this link: API, and the bunker's NIP46 / POLL / INFO.
-    static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo]
+    static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, AppChannel.cHello, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo, Bunker.cNudgeSet]
+
+    /// Posted on the main queue for each KEY nudge (path B): userInfo "waiting" (Int).
+    static let nudged = Notification.Name("NostrLink.nudged")
 
     /// One app-channel request on the shared link; the answer whatever its type
     /// (an API refusal becomes an error; for the bunker commands the caller reads 0xBF itself).
@@ -250,7 +256,35 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         }
         connectTimer = t
         DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: t)
-        if let c = central, c.state == .poweredOn { go(c) } else if central == nil { central = CBCentralManager(delegate: self, queue: .main) }
+        if let c = central, c.state == .poweredOn { go(c) } else if central == nil { makeCentral() }
+    }
+
+    /// With state restoration, so iOS keeps the link for the app in the background
+    /// and relaunches it to carry on (bluetooth-central background mode).
+    private func makeCentral() {
+        central = CBCentralManager(delegate: self, queue: .main, options: [
+            CBCentralManagerOptionRestoreIdentifierKey: NostrLink.restoreId,
+            CBCentralManagerOptionShowPowerAlertKey: false,
+        ])
+    }
+    static let restoreId = "io.favillakey.nostrlink"
+
+    /// Whether the link should stay up with nothing to send: the Bluetooth
+    /// bunker is on (path B: the KEY wakes the app over this link).
+    static var wantUp: Bool { Bunker.on && KeyRoute.current == .bluetooth && Credentials.isPaired }
+
+    /// Keep the link up for the bunker (app launch, foreground, after a drop). A
+    /// connect with no request waiting has no time limit: iOS completes it
+    /// whenever the KEY comes into range, even with the app in the background.
+    func stayUp() {
+        DispatchQueue.main.async {
+            guard NostrLink.wantUp, !self.paused, self.state != .connecting, self.state != .ready else { return }
+            self.creds = Credentials.load()
+            guard self.creds != nil else { return }
+            self.state = .connecting
+            LinkLog.shared.add("connecting (kept up for the bunker)")
+            if let c = self.central, c.state == .poweredOn { self.go(c) } else if self.central == nil { self.makeCentral() }
+        }
     }
 
     private func go(_ c: CBCentralManager) {
@@ -275,7 +309,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         peripheral = nil; chanIn = nil; chanOut = nil
         reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
-        writes = []; timeCtr = 0; helloCtr = 0; lastPer = 0; skipToStart = false; skipped = 0
+        writes = []; timeCtr = 0; helloCtr = 0; lastPer = 0; skipToStart = false; skipped = 0; nudgeSet = false
     }
 
     private func lost(_ why: String) {
@@ -312,6 +346,15 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         connectTimer?.cancel(); connectTimer = nil
         if state != .ready { LinkLog.shared.add("ready") }
         state = .ready
+        if Bunker.on, !nudgeSet {
+            nudgeSet = true
+            Task {
+                do {
+                    let a = try await self.call(Bunker.cNudgeSet, Data([Bunker.nudgeSeconds]))
+                    LinkLog.shared.add(a.rsp == AppChannel.rAck && a.body.first == 0 ? "nudges every \(Bunker.nudgeSeconds) s" : String(format: "NUDGE_SET answered %02x", a.rsp))
+                } catch { LinkLog.shared.add("NUDGE_SET: \(error)") }
+            }
+        }
         pump()
     }
 
@@ -322,6 +365,12 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         let a: AppChannel.Answer
         let head = [UInt8](m.prefix(13))
         let mctr = head.count >= 13 ? UInt32(head[9]) | UInt32(head[10]) << 8 | UInt32(head[11]) << 16 | UInt32(head[12]) << 24 : 0
+        if head.first == Bunker.rNudge, let n = try? AppChannel.open(m, c), let d = Bunker.decodeNudge(n.body) {
+            nudges += 1
+            if d.waiting > 0 || nudges % 60 == 1 { LinkLog.shared.add("nudge \(d.seq): \(d.waiting) repl\(d.waiting == 1 ? "y" : "ies") waiting (\(nudges) this session)") }
+            NotificationCenter.default.post(name: NostrLink.nudged, object: nil, userInfo: ["waiting": d.waiting])
+            return
+        }
         LinkLog.shared.add(String(format: "message %d bytes, type %02x", m.count, head.first ?? 0) + (head.count >= 13 ? ", ctr \(mctr)" : ""))
         do {
             a = try AppChannel.open(m, c)
@@ -407,9 +456,26 @@ extension NostrLink: ChannelCaller {
 // MARK: - CBCentralManagerDelegate
 
 extension NostrLink: CBCentralManagerDelegate {
+    /// iOS relaunched the app in the background to hand back the link it kept.
+    func centralManager(_ c: CBCentralManager, willRestoreState dict: [String: Any]) {
+        central = c
+        guard let p = (dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral])?.first else { return }
+        LinkLog.shared.add("restored by iOS: link \(p.state == .connected ? "connected" : "pending")")
+        creds = Credentials.load()
+        peripheral = p
+        p.delegate = self
+        state = .connecting
+    }
+
     func centralManagerDidUpdateState(_ c: CBCentralManager) {
         switch c.state {
-        case .poweredOn: if state == .connecting { go(c) }
+        case .poweredOn:
+            // After a restore: carry on with the link iOS kept (find the channel, subscribe, HELLO, TIME, NUDGE_SET).
+            if let p = peripheral, chanIn == nil, state == .connecting {
+                if p.state == .connected { p.discoverServices([KeyLink.favService]) } else { c.connect(p, options: nil) }
+                return
+            }
+            if state == .connecting { go(c) }
         case .unauthorized: lost("Bluetooth permission is off for Favilla. Turn it on in Settings > Favilla.")
         case .poweredOff: lost("Bluetooth is off on this iPhone. Turn it on in Control Centre.")
         default: break
@@ -449,6 +515,7 @@ extension NostrLink: CBCentralManagerDelegate {
         drop()
         state = .idle
         if current != nil { finishCurrent(.failure(KeyApiError.notReady("Your KEY dropped the link."))) } else { pump() }
+        if NostrLink.wantUp { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.stayUp() } }
     }
 }
 
@@ -517,7 +584,8 @@ extension NostrLink: CBPeripheralDelegate {
             v = v.subdata(in: off..<v.count)
         }
         let pr0 = reasm.progress
-        LinkLog.shared.add("notify \(v.count) bytes: \(LinkLog.describe(v))" + (pr0.want > 0 ? " (holding \(pr0.have) of \(pr0.want))" : "") + (error.map { ", error \($0.localizedDescription)" } ?? ""))
+        let quiet = v.count >= 4 && v[v.startIndex] == AppChannel.fStart && v[v.startIndex + 3] == Bunker.rNudge && pr0.want == 0
+        if !quiet { LinkLog.shared.add("notify \(v.count) bytes: \(LinkLog.describe(v))" + (pr0.want > 0 ? " (holding \(pr0.have) of \(pr0.want))" : "") + (error.map { ", error \($0.localizedDescription)" } ?? "")) }
         do {
             for m in try reasm.feed(v) { received(m) }
         } catch {

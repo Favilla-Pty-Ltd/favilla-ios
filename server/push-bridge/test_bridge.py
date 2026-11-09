@@ -138,6 +138,24 @@ async def main():
     r = await client.post("/push/again", json={"pubkey": KEY, "token": TOK, "round": 99})
     ok(r.status == 400, "again: round out of range refused")
 
+    # path B: a phone asking on KEY nudges takes the request itself; no push
+    B.LINK_GRACE_S = 0.3
+    br.last_push.clear()
+    store.add(KEY, TOK, "production", [url])
+    br.sync()
+    await asyncio.sleep(0.5)
+    ws = clients[-1]
+    await client.get("/push/pending", params={"pubkey": KEY, "via": "link"})
+    n0 = len(pushes)
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(200)]))
+    await asyncio.sleep(0.1)
+    await client.get("/push/pending", params={"pubkey": KEY, "via": "link"})
+    await asyncio.sleep(0.5)
+    ok(len(pushes) == n0 and [e["id"] for e in br.pending.get(KEY)][-1] == f"{200:064x}", "linked phone took the request: no push")
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(201)]))
+    await asyncio.sleep(0.6)
+    ok(len(pushes) == n0 + 1, "linked phone didn't take it in time: pushed")
+
     r = await client.post("/push/unregister", json={"pubkey": KEY, "token": TOK})
     ok(r.status == 200 and TOK not in store.reg.get(KEY, {}), "unregister")
     await client.close()

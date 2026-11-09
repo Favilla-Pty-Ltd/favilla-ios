@@ -410,6 +410,12 @@ do {
     busyDone.wait()
     check(bz.sent == [Bunker.cNip46, Bunker.cPoll, Bunker.cNip46, Bunker.cNip46] && box.o.taken == 2 && box.o.later.isEmpty, "bunker: S_BUSY waits, polls, then sends both again")
 
+    // 11i vectors: NUDGE_SET every 5 s at ctr 6, and an R_NUDGE (seq 1, nothing waiting) at counter 0.
+    check(hx(AppChannel.request(Bunker.cNudgeSet, chCreds, ctr: 6, body: Data([5]))) == "3e01020304050607080600000005a85500f0d9aa5f1c069a2141a6363b06", "nudge: NUDGE_SET matches the firmware vector")
+    if let a = try? AppChannel.open(hex("bb0102030405060708000000000100000000477b24094a6a7a3b935234002c0f721f"), chCreds), let d = Bunker.decodeNudge(a.body) {
+        check(a.rsp == Bunker.rNudge && a.ctr == 0 && d.seq == 1 && d.waiting == 0, "nudge: R_NUDGE opens (seq 1, 0 waiting, counter 0)")
+    } else { check(false, "nudge: the firmware's R_NUDGE vector opens") }
+
     let refused = DispatchSemaphore(value: 0)
     final class Locked: ChannelCaller {
         func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer { AppChannel.Answer(rsp: AppChannel.rErr, ctr: 1, body: Data([0x05])) }

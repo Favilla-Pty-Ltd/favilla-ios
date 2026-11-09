@@ -22,6 +22,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import UserNotifications
 
 @MainActor
 final class BunkerService: ObservableObject {
@@ -42,6 +43,63 @@ final class BunkerService: ObservableObject {
     private var queue: [(String, Data)] = []
 
     init() { reloadLog() }
+
+    /// App launch (also a background relaunch by iOS for the Bluetooth link).
+    func start() {
+        guard nudgeObserver == nil else { return }
+        nudgeObserver = NotificationCenter.default.addObserver(forName: NostrLink.nudged, object: nil, queue: .main) { n in
+            let w = n.userInfo?["waiting"] as? Int ?? 0
+            Task { @MainActor in BunkerService.shared.nudged(waiting: w) }
+        }
+        NostrLink.shared.stayUp()
+    }
+
+    private var nudgeObserver: NSObjectProtocol?
+    private var nudging = false
+    private var askedApproval = Set<String>()
+
+    // MARK: - Path B: the KEY nudges the app over Bluetooth (KEY 11i)
+
+    /// A nudge from the KEY (every few seconds while the link is up). iOS gives
+    /// a backgrounded app about 10 s per nudge: ask the bridge for waiting
+    /// requests, collect replies the KEY already built, hand the requests over on
+    /// this link and publish the replies. In the foreground the relay listener
+    /// does this already, so only the KEY's outbox is collected here.
+    func nudged(waiting: Int) {
+        guard on, let i = info, !nudging else { return }
+        if active && waiting == 0 { return }
+        nudging = true
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "bunker-nudge") {}
+        Task {
+            defer {
+                nudging = false
+                UIApplication.shared.endBackgroundTask(bg)
+            }
+            var reqs: [(String, Data)] = []
+            if !active {
+                reqs = ((try? await Bunker.pending(pubkey: i.pubkey, link: true)) ?? []).filter { r in !queue.contains { $0.0 == r.0 } }
+            }
+            guard !reqs.isEmpty || waiting > 0 else { return }
+            if !reqs.isEmpty { Bunker.log("nudge: \(reqs.count) request\(reqs.count == 1 ? "" : "s") from the bridge") }
+            let o = await Bunker.serve(reqs, via: NostrLink.shared, relays: i.relays, until: Date().addingTimeInterval(8), poll: waiting > 0)
+            if o.taken + o.replies > 0 || o.error != nil {
+                Bunker.log("nudge: taken \(o.taken), replies \(o.replies), accepted \(o.sent)" + (o.waiting ? ", still waiting" : "") + (o.error.map { ", \($0)" } ?? ""))
+            }
+            // Waiting for a button press on the KEY: say so once (no push came).
+            let ids = Set(reqs.map { $0.0 })
+            if o.waiting, !ids.isEmpty, !ids.isSubset(of: askedApproval), !active {
+                askedApproval.formUnion(ids)
+                let c = UNMutableNotificationContent()
+                c.title = "Favilla bunker"
+                c.body = "Signing request from a Nostr app. Approve it on your KEY."
+                c.threadIdentifier = "bunker"
+                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "bunker-approve", content: c, trigger: nil))
+            }
+            if o.sent > 0 { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["bunker-approve"]) }
+            if askedApproval.count > 200 { askedApproval.removeAll() }
+            reloadLog()
+        }
+    }
 
     func reloadLog() { log = (Bunker.store.stringArray(forKey: "bunkerLog") ?? []).reversed() }
 
@@ -69,6 +127,8 @@ final class BunkerService: ObservableObject {
                 }
                 i.save(); info = i
                 Bunker.on = true; on = true
+                start()
+                NostrLink.shared.stayUp()
                 Bunker.log("turned on: \(i.relays.joined(separator: ", "))")
                 await registerPush()
                 startIfReady()
@@ -79,6 +139,7 @@ final class BunkerService: ObservableObject {
     }
 
     func turnOff() {
+        Task { _ = try? await NostrLink.shared.call(Bunker.cNudgeSet, Data([0])) }   // the KEY stops nudging
         let tok = PushTest.shared.token
         if let i = info, !tok.isEmpty { Task { await Bunker.unregister(token: tok, pubkey: i.pubkey) } }
         Bunker.on = false; on = false
@@ -115,12 +176,13 @@ final class BunkerService: ObservableObject {
     // MARK: - App open: listen here
 
     func appActive(_ yes: Bool) {
+        if yes { NostrLink.shared.stayUp() }
         active = yes
         if yes { startIfReady() } else { stop() }
     }
 
     /// The route changed: the listener only runs on Bluetooth.
-    func refresh() { stop(); if active { startIfReady() } }
+    func refresh() { stop(); if active { startIfReady() }; NostrLink.shared.stayUp() }
 
     private func startIfReady() {
         guard active, on, let i = info, KeyRoute.current == .bluetooth, Credentials.isPaired else { return }

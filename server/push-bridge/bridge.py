@@ -184,6 +184,8 @@ class Apns:
         return r.status_code, reason
 
 
+LINKED_S = 15           # a phone that asked over its Bluetooth link this recently is "linked" (path B)
+LINK_GRACE_S = 9        # how long a linked phone gets to take a request before the push goes anyway
 PUSH_BUDGET = 3700      # bytes of request events carried in a push (APNs max payload 4096)
 
 
@@ -210,6 +212,8 @@ class Bridge:
         self.last_push = {}          # token -> time
         self.trailing = set()        # tokens with a trailing push scheduled
         self.last_again = {}         # token -> time of the last follow-up
+        self.last_link = {}          # pubkey -> time the app last asked on a KEY nudge (path B)
+        self.fetched = collections.defaultdict(set)   # pubkey -> request ids handed out
         self.stats = collections.Counter()
 
     # relays
@@ -270,8 +274,35 @@ class Bridge:
             return
         self.stats["requests"] += 1
         log.info("request %s… for %s… via %s", ev["id"][:12], pk[:12], url)
+        # Path B (issue #11, 9 Nov): the KEY nudges the app over Bluetooth every
+        # few seconds and the app asks here. While it does, give it a moment to
+        # take the request itself; push only if it doesn't.
+        if time.time() - self.last_link.get(pk, 0) < LINKED_S:
+            asyncio.ensure_future(self._push_unless_taken(pk, ev["id"]))
+            return
+        await self.push_all(pk)
+
+    async def push_all(self, pk):
         for token, info in list(self.store.reg.get(pk, {}).items()):
             await self.push(pk, token, info["env"])
+
+    async def _push_unless_taken(self, pk, ev_id):
+        await asyncio.sleep(LINK_GRACE_S)
+        if ev_id in self.fetched.get(pk, ()):
+            self.stats["taken_over_link"] = self.stats.get("taken_over_link", 0) + 1
+            log.info("request %s… taken over the Bluetooth link, no push", ev_id[:12])
+            return
+        log.info("request %s… not taken over the link in %d s: push", ev_id[:12], LINK_GRACE_S)
+        await self.push_all(pk)
+
+    def handed_out(self, pk, evs, link):
+        if link:
+            self.last_link[pk] = time.time()
+        ids = self.fetched[pk]
+        ids.update(e["id"] for e in evs)
+        if len(ids) > 2000:
+            ids.clear()
+            ids.update(e["id"] for e in evs)
 
     # pushes
 
@@ -390,7 +421,9 @@ def make_app(bridge):
         pk = req.query.get("pubkey", "").lower()
         if not HEX64.match(pk):
             return web.json_response({"error": "bad pubkey"}, status=400)
-        return web.json_response({"events": bridge.pending.get(pk)})
+        evs = bridge.pending.get(pk)
+        bridge.handed_out(pk, evs, req.query.get("via") == "link")
+        return web.json_response({"events": evs})
 
     async def again(req):
         if limited(req):

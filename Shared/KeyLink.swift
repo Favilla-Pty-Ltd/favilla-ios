@@ -188,7 +188,7 @@ final class KeyLink: NSObject, ObservableObject {
             return
         }
         add("Starting Bluetooth")
-        armTimeout(m == .probe || m == .pairApp ? 60 : 30, "Your KEY didn't answer. Check it's on its home screen in PASSKEY mode with Bluetooth on. If its Bluetooth is set to App and keyboard, press a button on it first.")
+        armTimeout(m == .probe || m == .pairApp ? 60 : 30, "Your KEY didn't answer. Check it's on its home screen in VAULT mode with Bluetooth on. If its Bluetooth is set to App and keyboard, press a button on it first.")
         if let c = central, c.state == .poweredOn { go(c) } else { central = CBCentralManager(delegate: self, queue: .main) }
     }
 
@@ -345,8 +345,8 @@ final class KeyLink: NSObject, ObservableObject {
     /// What the KEY's refusal of a raw write means (ATT error 0x80 + status).
     static func refusal(_ code: Int) -> String {
         switch code - 0x80 {
-        case 4:  return "Your KEY isn't in PASSKEY mode. Restart it and choose PASSKEY."
-        case 5:  return "Your KEY is locked. Enter the passkey PIN on the KEY, then try again."
+        case 4:  return "Your KEY isn't in VAULT mode. Restart it and choose VAULT."
+        case 5:  return "Your KEY is locked. Enter the VAULT PIN on the KEY, then try again."
         case 6:  return "Your KEY is already showing a sign-in. Finish it on the KEY, then try again."
         case 7:  return "The KEY couldn't read this site's name."
         case 8:  return KeyLink.notConfirmed
@@ -369,8 +369,8 @@ final class KeyLink: NSObject, ObservableObject {
 
     static func lifeText(_ l: UInt8) -> String {
         switch l {
-        case 1: return "PASSKEY, locked"
-        case 2: return "PASSKEY, ready"
+        case 1: return "VAULT, locked"
+        case 2: return "VAULT, ready"
         case 3: return "NOSTR"
         default: return "another mode"
         }
@@ -379,7 +379,7 @@ final class KeyLink: NSObject, ObservableObject {
     static func otpMessage(_ s: UInt8) -> String {
         switch s {
         case 0x02: return "Cancelled on the KEY, or nobody picked a code in time."
-        case 0x03: return "No one-time code is saved on the KEY. Add one on the KEY: PASSKEY > Codes > ADD BY QR."
+        case 0x03: return "No one-time code is saved on the KEY. Add one on the KEY: VAULT > Codes > ADD BY QR."
         default: return AppChannel.statusText(s)
         }
     }

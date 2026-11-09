@@ -72,7 +72,7 @@ struct LinkSettingsView: View {
     }
 
     private var btStatus: String {
-        guard KeyLink.appPaired else { return "First pair the app with the KEY: PAIR THE APP below, with PAIR A PHONE open on the KEY (PASSKEY mode), or Settings > Network > Pair a phone in Bluetooth mode." }
+        guard KeyLink.appPaired else { return "First pair the app with the KEY: PAIR THE APP below, with PAIR A PHONE open on the KEY (VAULT mode), or Settings > Network > Pair a phone in Bluetooth mode." }
         switch nostr.state {
         case .ready: return "Connected to your KEY over Bluetooth."
         case .connecting: return "Connecting to your KEY..."

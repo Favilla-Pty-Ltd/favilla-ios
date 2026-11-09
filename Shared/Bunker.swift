@@ -289,39 +289,43 @@ enum Bunker {
                 g.addTask { await publish(messages, to: url, timeout: timeout) }
             }
             var best = 0
-            for await n in g { best = max(best, n) }
+            for await n in g {
+                best = max(best, n)
+                if best >= messages.count { g.cancelAll(); break }   // one relay took them all: enough
+            }
             return best
         }
     }
 
+    /// One relay, bounded by `timeout` whatever it does. (9 Nov: a relay that
+    /// never completes its handshake, relay.nsec.app all day, held the send and
+    /// receive forever; the waits were not cancellable, so a signed reply sat
+    /// unpublished until iOS stopped the extension.) Cancelling the socket is
+    /// what ends a pending send or receive, so the deadline and a cancel do that.
     private static func publish(_ messages: [Data], to url: URL, timeout: TimeInterval) async -> Int {
         let ws = URLSession.shared.webSocketTask(with: url)
         ws.resume()
-        defer { ws.cancel(with: .goingAway, reason: nil) }
-        var ids = Set<String>()
-        for m in messages {
-            guard let s = String(data: m, encoding: .utf8) else { continue }
-            if let j = try? JSONSerialization.jsonObject(with: m) as? [Any], j.count >= 2,
-               let ev = j[1] as? [String: Any], let id = ev["id"] as? String { ids.insert(id) }
-            do { try await ws.send(.string(s)) } catch { return 0 }
-        }
-        // Count the OKs that come back in time.
-        var accepted = 0
-        let deadline = Date().addingTimeInterval(timeout)
-        while accepted < ids.count, Date() < deadline {
-            let msg: URLSessionWebSocketTask.Message? = await withTaskGroup(of: URLSessionWebSocketTask.Message?.self) { g in
-                g.addTask { try? await ws.receive() }
-                g.addTask { try? await Task.sleep(nanoseconds: UInt64(max(0.1, deadline.timeIntervalSinceNow) * 1e9)); return nil }
-                let first = await g.next() ?? nil
-                g.cancelAll()
-                return first
+        let killer = Task { try? await Task.sleep(nanoseconds: UInt64(timeout * 1e9)); ws.cancel(with: .goingAway, reason: nil) }
+        defer { killer.cancel(); ws.cancel(with: .goingAway, reason: nil) }
+        return await withTaskCancellationHandler {
+            var ids = Set<String>()
+            for m in messages {
+                guard let s = String(data: m, encoding: .utf8) else { continue }
+                if let j = try? JSONSerialization.jsonObject(with: m) as? [Any], j.count >= 2,
+                   let ev = j[1] as? [String: Any], let id = ev["id"] as? String { ids.insert(id) }
+                do { try await ws.send(.string(s)) } catch { return 0 }
             }
-            guard let msg, case .string(let s) = msg else { break }
-            if let j = try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [Any], j.count >= 3,
-               j[0] as? String == "OK", let id = j[1] as? String, ids.contains(id), j[2] as? Bool == true {
-                accepted += 1
+            var accepted = 0
+            while accepted < ids.count {
+                guard let msg = try? await ws.receive() else { break }
+                guard case .string(let s) = msg,
+                      let j = try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [Any], j.count >= 3,
+                      j[0] as? String == "OK", let id = j[1] as? String, ids.contains(id) else { continue }
+                if j[2] as? Bool == true { accepted += 1 } else { break }
             }
+            return accepted
+        } onCancel: {
+            ws.cancel(with: .goingAway, reason: nil)
         }
-        return accepted
     }
 }

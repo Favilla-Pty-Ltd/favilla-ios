@@ -66,7 +66,11 @@ final class BunkerService: ObservableObject {
     /// this link and publish the replies. In the foreground the relay listener
     /// does this already, so only the KEY's outbox is collected here.
     func nudged(waiting: Int) {
-        guard on, let i = info, !nudging else { return }
+        guard !nudging else { return }
+        // KEY 11o (issue #13): the KEY also nudges for its own events (SHARE RUN
+        // in CIPHER), with the bunker off and without NUDGE_SET. Anything waiting
+        // in its outbox is collected and published whatever the bunker switch says.
+        guard on || waiting > 0 else { return }
         if active && waiting == 0 { return }
         nudging = true
         let bg = UIApplication.shared.beginBackgroundTask(withName: "bunker-nudge") {}
@@ -75,8 +79,14 @@ final class BunkerService: ObservableObject {
                 nudging = false
                 UIApplication.shared.endBackgroundTask(bg)
             }
+            // The relays: saved when the bunker was turned on, else asked now.
+            var known = info
+            if known == nil, let a = try? await NostrLink.shared.call(Bunker.cInfo, Data()), a.rsp == Bunker.rInfo, let got = Bunker.decodeInfo(a.body) {
+                got.save(); info = got; known = got
+            }
+            let i = known ?? Bunker.Info(pubkey: "", relays: ["wss://relay.favillakey.io"])
             var reqs: [(String, Data)] = []
-            if !active {
+            if on, !active, !i.pubkey.isEmpty {
                 reqs = ((try? await Bunker.pending(pubkey: i.pubkey, link: true)) ?? []).filter { r in !queue.contains { $0.0 == r.0 } }
             }
             guard !reqs.isEmpty || waiting > 0 else { return }
@@ -96,6 +106,15 @@ final class BunkerService: ObservableObject {
                 try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "bunker-approve", content: c, trigger: nil))
             }
             if o.sent > 0 { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["bunker-approve"]) }
+            // A CIPHER run the KEY handed over: the phone is the only side that sees the relays' answer.
+            if !o.shared.isEmpty || o.sharedRefused {
+                Bunker.log(o.shared.isEmpty ? "CIPHER run: no relay took it" : "CIPHER run shared: favillakey.io/cipher#run=\(o.shared[0])")
+                let c = UNMutableNotificationContent()
+                c.title = "CIPHER"
+                c.body = o.shared.isEmpty ? "The relays didn't take your run. Press SHARE RUN on the KEY again." : "Score shared."
+                c.threadIdentifier = "cipher"
+                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "cipher-share", content: c, trigger: nil))
+            }
             if askedApproval.count > 200 { askedApproval.removeAll() }
             reloadLog()
         }

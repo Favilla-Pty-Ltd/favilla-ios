@@ -151,6 +151,8 @@ enum Bunker {
         var replies = 0        // replies the KEY gave
         var waiting = false    // the KEY still had more to come (an approval on the KEY) when time ran out
         var error: String?
+        var shared: [String] = []          // ids of kind-1888 events (a CIPHER run) a relay accepted
+        var sharedRefused = false          // a run came out of the KEY and no relay took it
         var later: [(String, Data)] = []   // refused busy (S_BUSY): not taken, try again
 
         static func == (a: Outcome, b: Outcome) -> Bool {
@@ -174,8 +176,14 @@ enum Bunker {
                 more = r.more
                 o.replies += r.messages.count
                 if !r.messages.isEmpty {
-                    let n = await publish(r.messages, to: relays, timeout: max(1, min(5, deadline.timeIntervalSinceNow)))
+                    // The KEY's own events (KEY 11o: a CIPHER run, kind 1888, and its note,
+                    // kind 1) go to every relay and wait for each: relay.favillakey.io is
+                    // the one that keeps 1888. NIP-46 replies are done at the first OK.
+                    let own = r.messages.filter { kind(of: $0) != 24133 }
+                    let n = await publish(r.messages, to: relays, timeout: max(1, min(own.isEmpty ? 5 : 8, deadline.timeIntervalSinceNow + (own.isEmpty ? 0 : 6))), all: !own.isEmpty)
                     o.sent += n
+                    let runs = own.filter { kind(of: $0) == 1888 }.compactMap { eventId(of: $0) }
+                    if !runs.isEmpty { if n >= r.messages.count { o.shared += runs } else { o.sharedRefused = true } }
                     log("published \(r.messages.count) repl\(r.messages.count == 1 ? "y" : "ies"), \(n) accepted")
                 }
                 note?(o)
@@ -281,7 +289,14 @@ enum Bunker {
     /// Send each relay message to every relay; true if at least one relay took each.
     /// NIP-46 replies are ephemeral: the client is subscribed and waiting, so one
     /// relay accepting is enough.
-    static func publish(_ messages: [Data], to relays: [String], timeout: TimeInterval = 6) async -> Int {
+    private static func event(of m: Data) -> [String: Any]? {
+        guard let j = try? JSONSerialization.jsonObject(with: m) as? [Any], j.count >= 2, j[0] as? String == "EVENT" else { return nil }
+        return j[1] as? [String: Any]
+    }
+    static func kind(of m: Data) -> Int? { event(of: m)?["kind"] as? Int }
+    static func eventId(of m: Data) -> String? { event(of: m)?["id"] as? String }
+
+    static func publish(_ messages: [Data], to relays: [String], timeout: TimeInterval = 6, all: Bool = false) async -> Int {
         guard !messages.isEmpty else { return 0 }
         return await withTaskGroup(of: Int.self) { g in
             for r in relays {
@@ -291,7 +306,7 @@ enum Bunker {
             var best = 0
             for await n in g {
                 best = max(best, n)
-                if best >= messages.count { g.cancelAll(); break }   // one relay took them all: enough
+                if !all, best >= messages.count { g.cancelAll(); break }   // one relay took them all: enough
             }
             return best
         }

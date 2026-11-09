@@ -416,6 +416,19 @@ do {
         check(a.rsp == Bunker.rNudge && a.ctr == 0 && d.seq == 1 && d.waiting == 0, "nudge: R_NUDGE opens (seq 1, 0 waiting, counter 0)")
     } else { check(false, "nudge: the firmware's R_NUDGE vector opens") }
 
+    // KEY 11o (#13): a poll that returns the KEY's own events (a CIPHER run, kind 1888, and its note) is served too.
+    let run = Data(#"["EVENT",{"id":"cc","kind":1888}]"#.utf8), note = Data(#"["EVENT",{"id":"dd","kind":1}]"#.utf8)
+    check(Bunker.kind(of: run) == 1888 && Bunker.eventId(of: run) == "cc" && Bunker.kind(of: ev1) == 24133, "cipher: kind and id read from a relay message")
+    var two = Data([0, 2]); for m in [run, note] { two.append(UInt8(m.count & 0xFF)); two.append(UInt8(m.count >> 8)); two.append(m) }
+    let cipherKey = FakeKey([two])
+    let cipherDone = DispatchSemaphore(value: 0)
+    Task {
+        box.o = await Bunker.serve([], via: cipherKey, relays: [], until: Date().addingTimeInterval(5), poll: true)
+        cipherDone.signal()
+    }
+    cipherDone.wait()
+    check(cipherKey.sent.map { $0.0 } == [Bunker.cPoll] && box.o.replies == 2 && box.o.sharedRefused && box.o.shared.isEmpty, "cipher: a run with no relay to take it is reported as refused")
+
     let refused = DispatchSemaphore(value: 0)
     final class Locked: ChannelCaller {
         func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer { AppChannel.Answer(rsp: AppChannel.rErr, ctr: 1, body: Data([0x05])) }

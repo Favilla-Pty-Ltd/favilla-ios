@@ -339,5 +339,66 @@ do {   // answer bodies: OTP and LIST
     check((try? AppChannel.parseList(hex("0000000001"))).map { $0.entries.isEmpty && $0.more } == true, "LIST body: empty page with more")
 } catch { check(false, "answer bodies threw \(error)") }
 
+
+// MARK: - Bluetooth bunker (issue #11, proposed bytes)
+
+do {
+    let ev1 = Data(#"["EVENT",{"id":"aa","kind":24133}]"#.utf8)
+    let ev2 = Data(#"["EVENT",{"id":"bb","kind":24133}]"#.utf8)
+    var b = Data([0x01, 0x02])
+    b.append(UInt8(ev1.count & 0xFF)); b.append(UInt8(ev1.count >> 8)); b.append(ev1)
+    b.append(UInt8(ev2.count & 0xFF)); b.append(UInt8(ev2.count >> 8)); b.append(ev2)
+    check(Bunker.decodeReplies(b) == Bunker.Replies(more: true, messages: [ev1, ev2]), "bunker: 0xB9 with two replies and more-to-come")
+    check(Bunker.decodeReplies(hex("0000")) == Bunker.Replies(more: false, messages: []), "bunker: 0xB9 empty, nothing more")
+    check(Bunker.decodeReplies(b.dropLast()) == nil, "bunker: 0xB9 short reply refused")
+    check(Bunker.decodeReplies(b + hex("00")) == nil, "bunker: 0xB9 trailing byte refused")
+    check(Bunker.decodeReplies(hex("000100000000")) == nil, "bunker: 0xB9 zero-length reply refused")
+
+    var info = Data(repeating: 0xDC, count: 32) + Data([2])
+    for h in ["relay.favillakey.io", "nos.lol"] { info.append(UInt8(h.utf8.count)); info.append(Data(h.utf8)) }
+    check(Bunker.decodeInfo(info) == Bunker.Info(pubkey: String(repeating: "dc", count: 32), relays: ["wss://relay.favillakey.io", "wss://nos.lol"]), "bunker: 0xBA pubkey and relays")
+    check(Bunker.decodeInfo(Data(repeating: 0xDC, count: 32) + hex("00")) == nil, "bunker: 0xBA with no relays refused")
+    var bad = Data(repeating: 0xDC, count: 32) + Data([1]); bad.append(9); bad.append(Data("evil host".utf8))
+    check(Bunker.decodeInfo(bad) == nil, "bunker: 0xBA host with a space refused")
+    check(Bunker.decodeInfo(info + hex("00")) == nil, "bunker: 0xBA trailing byte refused")
+
+    // serve(): two requests, the second needs an approval on the KEY; the poll brings its reply.
+    final class FakeKey: ChannelCaller, @unchecked Sendable {
+        var sent: [(UInt8, Data)] = []
+        var answers: [Data]
+        init(_ a: [Data]) { answers = a }
+        func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer {
+            sent.append((cmd, body))
+            return AppChannel.Answer(rsp: Bunker.rNip46, ctr: 1, body: answers.isEmpty ? hex("0000") : answers.removeFirst())
+        }
+    }
+    func one(_ m: Data, more: Bool) -> Data { var d = Data([more ? 1 : 0, 1, UInt8(m.count & 0xFF), UInt8(m.count >> 8)]); d.append(m); return d }
+    let fk = FakeKey([one(ev1, more: false), hex("0100"), hex("0100"), one(ev2, more: false)])
+    final class Box: @unchecked Sendable { var o = Bunker.Outcome() }
+    let box = Box()
+    let done = DispatchSemaphore(value: 0)
+    Task {
+        box.o = await Bunker.serve([("r1", Data("{}".utf8)), ("r2", Data("{}".utf8))], via: fk, relays: [], until: Date().addingTimeInterval(10))
+        done.signal()
+    }
+    done.wait()
+    var out = box.o
+    check(fk.sent.map { $0.0 } == [Bunker.cNip46, Bunker.cNip46, Bunker.cPoll, Bunker.cPoll], "bunker: serve sends both requests, then polls while more is set")
+    check(out.taken == 2 && out.replies == 2 && !out.waiting && out.error == nil, "bunker: serve collects the late reply")
+    check(Bunker.seen("r1") && Bunker.seen("r2"), "bunker: served requests are marked seen")
+
+    let refused = DispatchSemaphore(value: 0)
+    final class Locked: ChannelCaller {
+        func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer { AppChannel.Answer(rsp: AppChannel.rErr, ctr: 1, body: Data([0x05])) }
+    }
+    Task {
+        box.o = await Bunker.serve([("r3", Data("{}".utf8))], via: Locked(), relays: [], until: Date().addingTimeInterval(5))
+        refused.signal()
+    }
+    refused.wait()
+    out = box.o
+    check(out.taken == 0 && out.error?.contains("locked") == true && !Bunker.seen("r3"), "bunker: a locked KEY is reported and the request kept for later")
+}
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

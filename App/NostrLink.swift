@@ -28,8 +28,9 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     private struct Job {
         let id: UInt64
-        let body: Data                       // ApiWire request
-        let done: (Result<ApiResponse, Error>) -> Void
+        let body: Data                       // ApiWire request (or a bunker body)
+        var cmd: UInt8 = AppChannel.cApi
+        let done: (Result<AppChannel.Answer, Error>) -> Void
         var ctr: UInt32 = 0
         var replays = 0
     }
@@ -90,12 +91,26 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     /// One API call: the ApiWire request body in, the ApiWire answer out.
     func send(_ body: Data) async throws -> ApiResponse {
+        let a = try await call(AppChannel.cApi, body)
+        guard a.rsp == AppChannel.rApi, let r = ApiWire.decodeAnswer(a.body) else {
+            LinkLog.shared.add(String(format: "  bad API answer: type %02x, body %d bytes", a.rsp, a.body.count))
+            throw KeyApiError.badAnswer
+        }
+        return r
+    }
+
+    /// The commands that share this link: API, and the bunker's NIP46 / POLL / INFO.
+    static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo]
+
+    /// One app-channel request on the shared link; the answer whatever its type
+    /// (an API refusal becomes an error; for the bunker commands the caller reads 0xBF itself).
+    func call(_ cmd: UInt8, _ body: Data) async throws -> AppChannel.Answer {
         let id = UInt64.random(in: 1...UInt64.max)
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (k: CheckedContinuation<ApiResponse, Error>) in
+            try await withCheckedThrowingContinuation { (k: CheckedContinuation<AppChannel.Answer, Error>) in
                 DispatchQueue.main.async {
                     var once = false
-                    let job = Job(id: id, body: body) { r in
+                    let job = Job(id: id, body: body, cmd: cmd) { r in
                         guard !once else { return }
                         once = true
                         k.resume(with: r)
@@ -148,7 +163,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     private func transmit(_ j: Job) {
         guard let c = creds else { return }
-        let msg = AppChannel.request(AppChannel.cApi, c, ctr: j.ctr, body: j.body)
+        let msg = AppChannel.request(j.cmd, c, ctr: j.ctr, body: j.body)
         guard msg.count <= AppChannel.msgMaxApi else { finishCurrent(.failure(KeyApiError.refused("request too large"))); return }
         // The KEY's handlers answer at once (doc 9k); 32 KB crosses in about a
         // second. No answer in that time means the link is dead (the KEY restarted
@@ -165,12 +180,12 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         sendMessage(msg)
     }
 
-    private func finishCurrent(_ r: Result<ApiResponse, Error>) {
+    private func finishCurrent(_ r: Result<AppChannel.Answer, Error>) {
         timer?.cancel(); timer = nil
         guard let j = current else { return }
         current = nil
         switch r {
-        case .success(let a): LinkLog.shared.add("answer ctr \(j.ctr): status \(a.status), \(a.body.count) bytes")
+        case .success(let a): LinkLog.shared.add(String(format: "answer ctr %u: type %02x, %d bytes", j.ctr, a.rsp, a.body.count))
         case .failure(let e): LinkLog.shared.add("failed ctr \(j.ctr): \(e)")
         }
         j.done(r)
@@ -297,7 +312,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         } catch AppChannel.Failure.unauthenticated(let cmd, let st) {
             LinkLog.shared.add(String(format: "  refused: command %02x, status %02x", cmd, st))
             // Only refusals of our own commands count: PAIR THE APP shares 8F1A0006.
-            guard cmd == AppChannel.cApi || cmd == AppChannel.cTime else { return }
+            guard NostrLink.ours.contains(cmd) else { return }
             if st == 0x08 {
                 // Forget the pairing only if it is still the one this link used: a
                 // re-pair saved meanwhile must survive the old link's refusal.
@@ -332,13 +347,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                 transmit(j)
                 return
             }
+            if j.cmd != AppChannel.cApi { finishCurrent(.success(a)); return }
             finishCurrent(.failure(KeyApiError.notReady(NostrLink.message(b.first ?? 0xFF)))); return
         }
-        guard a.rsp == AppChannel.rApi, let r = ApiWire.decodeAnswer(a.body) else {
-            LinkLog.shared.add(String(format: "  bad API answer: type %02x, body %d bytes", a.rsp, a.body.count))
-            finishCurrent(.failure(KeyApiError.badAnswer)); return
-        }
-        finishCurrent(.success(r))
+        finishCurrent(.success(a))
     }
 
     static func message(_ st: UInt8) -> String {
@@ -348,6 +360,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         default: return AppChannel.statusText(st)
         }
     }
+}
+
+extension NostrLink: ChannelCaller {
+    func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer { try await call(cmd, body) }
 }
 
 // MARK: - CBCentralManagerDelegate

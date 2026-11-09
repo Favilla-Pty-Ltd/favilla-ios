@@ -11,11 +11,14 @@ import SwiftUI
 struct FavillaApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate   // push token (PushTest.swift)
     @StateObject private var link = KeyLink()
+    @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
             RootView(link: link)
         }
+        // The Bluetooth bunker listens to the relays itself while the app is open (BunkerService).
+        .onChange(of: phase) { _, p in BunkerService.shared.appActive(p == .active) }
     }
 }
 

@@ -48,6 +48,7 @@ struct LinkSettingsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                     HomeBody(link: link)
+                    BunkerSection()
                     BluetoothLogSection()
                     PushTestSection()
                 }
@@ -64,6 +65,7 @@ struct LinkSettingsView: View {
             .onChange(of: route) { _, r in
                 KeyRoute.current = r
                 if r == .wifi { nostr.disconnect() }
+                BunkerService.shared.refresh()
             }
         }
         .preferredColorScheme(.dark)

@@ -1,208 +1,141 @@
-// NotificationService.swift - the push test (9 Nov 2026).
+// NotificationService.swift - the notification extension (9 Nov 2026).
 //
-// Question: can a notification service extension reach the KEY over Bluetooth
-// on its own, with the Favilla app in the background or closed? If it can, a
-// Bluetooth bunker (NIP-46 through the app) can sign without opening the app.
+// Two kinds of push run this:
 //
-// Each push with "mutable-content": 1 runs this. It loads the app channel
-// pairing, connects to the KEY, opens the channel (8F1A0005 / 8F1A0006), sends
-// one HELLO (0x30) and reads R_HELLO (0xB0: [status][life][drop 8]). Every step
-// is timed, and the result replaces the notification's text, so it shows on the
-// lock screen. The last 20 results are kept in the app group for the app's
-// Settings > This iPhone > Push test.
+//  - The Bluetooth bunker (payload "fv": {"pk": the KEY's pubkey}): the push
+//    bridge saw a NIP-46 request for this KEY on a relay. Fetch the waiting
+//    requests from the bridge, hand each to the KEY over the paired app channel
+//    (NIP46 0x3B), poll for replies the KEY finishes later (0x3C), publish every
+//    reply to the bunker relays, and say what happened in the notification.
+//    If the app is open with the bunker on, it already has them: leave the KEY
+//    to the app.
+//  - The push test (anything else): connect, HELLO, report the timings. Kept
+//    so the Push Notifications Console test still works.
 //
-// Nothing is signed: HELLO only asks the KEY which mode it is in.
+// iOS gives an extension about 30 s; the work stops at 24 s to leave room.
 
-import CoreBluetooth
+import Foundation
 import UserNotifications
 
-final class NotificationService: UNNotificationServiceExtension, CBCentralManagerDelegate, CBPeripheralDelegate {
+final class NotificationService: UNNotificationServiceExtension {
     static let resultsKey = "pushProbeResults"
     private static let group = "group.io.favillakey.app"
 
+    private let lock = NSLock()
     private var handler: ((UNNotificationContent) -> Void)?
     private var content: UNMutableNotificationContent?
-    private let q = DispatchQueue(label: "io.favillakey.pushprobe")
-    private var central: CBCentralManager?
-    private var peripheral: CBPeripheral?
-    private var chanIn: CBCharacteristic?
-    private var creds: Credentials?
-    private var ctr: UInt32 = 0
-    private var reasm = AppChannel.Reassembler()
-    private var writes: [Data] = []
-    private var t0 = Date()
-    private var steps: [String] = []
-    private var stage = "start"
-    private var finished = false
-    private var how = ""
-
-    // MARK: - Push in
+    private var _best: (String, String)?
+    private var best: (String, String)? {      // the text to show if time runs out
+        get { lock.lock(); defer { lock.unlock() }; return _best }
+        set { lock.lock(); _best = newValue; lock.unlock() }
+    }
+    private var session: KeySession?
+    private let t0 = Date()
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler h: @escaping (UNNotificationContent) -> Void) {
         handler = h
         content = request.content.mutableCopy() as? UNMutableNotificationContent
-        q.async { self.start() }
+        let fv = request.content.userInfo["fv"] as? [String: Any]
+        Task {
+            if let pk = fv?["pk"] as? String { await bunker(pk) } else { await probe() }
+        }
     }
 
     override func serviceExtensionTimeWillExpire() {
-        q.sync { self.finish(ok: false, "TIMED OUT at: \(self.stage)") }
+        session?.close()
+        let (t, b) = best ?? ("Favilla", "Ran out of time reaching your KEY.")
+        Bunker.log("extension: out of time")
+        deliver(t, b)
     }
 
-    // MARK: - Steps
-
-    private func mark(_ s: String) {
-        stage = s
-        steps.append(String(format: "%5.0f ms %@", Date().timeIntervalSince(t0) * 1000, s))
+    private func deliver(_ title: String, _ body: String) {
+        lock.lock()
+        let h = handler; handler = nil
+        lock.unlock()
+        guard let h, let c = content else { return }
+        c.title = title
+        c.body = body
+        h(c)
     }
 
-    private func start() {
-        t0 = Date()
-        mark("push received")
-        guard let c = Credentials.load() else { finish(ok: false, "the app isn't paired with the KEY (PAIR THE APP first)"); return }
-        creds = c
-        mark("pairing loaded")
-        central = CBCentralManager(delegate: self, queue: q, options: [CBCentralManagerOptionShowPowerAlertKey: false])
-        mark("waiting for Bluetooth")
+    private var ms: Int { Int(Date().timeIntervalSince(t0) * 1000) }
+
+    // MARK: - Bunker
+
+    private func bunker(_ pk: String) async {
+        let title = "Favilla bunker"
+        best = (title, "Signing request from a Nostr app. Open Favilla to answer it.")
+        guard Bunker.on, let info = Bunker.Info.load(), info.pubkey == pk else {
+            deliver(title, "Signing for other apps is off on this iPhone."); return
+        }
+        if Bunker.appActive {
+            deliver(title, "Answered in the Favilla app."); return
+        }
+        guard let creds = Credentials.load() else {
+            deliver(title, "Open Favilla and PAIR THE APP to sign for other apps."); return
+        }
+        let reqs: [(String, Data)]
+        do { reqs = try await Bunker.pending(pubkey: pk) } catch {
+            Bunker.log("extension: bridge unreachable: \(error.localizedDescription)")
+            deliver(title, "Couldn't fetch the request: \(error.localizedDescription)"); return
+        }
+        guard !reqs.isEmpty else { deliver(title, "Nothing waiting: the request was already answered."); return }
+        Bunker.log("extension: \(reqs.count) request\(reqs.count == 1 ? "" : "s") waiting")
+
+        let s = KeySession(creds)
+        session = s
+        do { try await s.open() } catch {
+            Bunker.log("extension: \(error) (\(ms) ms, \(s.how))")
+            deliver(title, "Couldn't reach your KEY. \(error)"); return
+        }
+        Bunker.log("extension: KEY open in \(ms) ms (\(s.how))")
+        let deadline = t0.addingTimeInterval(24)
+        let o = await Bunker.serve(reqs, via: s, relays: info.relays, until: deadline) { [weak self] o in
+            if o.sent > 0 { self?.best = (title, Self.text(o)) }
+            else if o.taken > 0 { self?.best = (title, "Approve it on your KEY.") }
+        }
+        s.close()
+        Bunker.log("extension: done in \(ms) ms: taken \(o.taken), replies \(o.replies), accepted \(o.sent)" + (o.waiting ? ", still waiting" : "") + (o.error.map { ", \($0)" } ?? ""))
+        if let e = o.error, o.taken == 0 { deliver(title, e); return }
+        deliver(title, Self.text(o))
     }
 
-    func centralManagerDidUpdateState(_ c: CBCentralManager) {
-        switch c.state {
-        case .poweredOn:
-            mark("Bluetooth on")
-            go(c)
-        case .unauthorized:
-            finish(ok: false, "Bluetooth NOT ALLOWED in the extension (unauthorized, auth \(CBManager.authorization.rawValue))")
-        case .unsupported:
-            finish(ok: false, "Bluetooth unsupported in the extension")
-        case .poweredOff:
-            finish(ok: false, "Bluetooth is off on this iPhone")
-        default:
-            mark("Bluetooth state \(c.state.rawValue)")
+    static func text(_ o: Bunker.Outcome) -> String {
+        if o.waiting { return o.sent > 0 ? "Answered \(o.sent). Another request is waiting for you on the KEY: approve it, then open Favilla to send the answer." : "Approve it on your KEY, then open Favilla to send the answer." }
+        if o.replies > 0 && o.sent == 0 { return "The KEY answered but no relay took the reply. Open Favilla to try again." }
+        if o.sent > 0 { return o.sent == 1 ? "Answered a Nostr app's request." : "Answered \(o.sent) Nostr app requests." }
+        return o.error ?? "The KEY took the request."
+    }
+
+    // MARK: - Push test
+
+    private func probe() async {
+        guard let creds = Credentials.load() else { finishProbe(false, "the app isn't paired with the KEY (PAIR THE APP first)", nil); return }
+        let s = KeySession(creds)
+        session = s
+        do {
+            try await s.open()
+            let a = try await s.request(AppChannel.cHello, Data(), timeout: 4)
+            guard a.rsp == AppChannel.rHello else { finishProbe(false, String(format: "KEY answered type %02x", a.rsp), s); return }
+            let b = [UInt8](a.body)
+            let life = b.count > 1 ? (b[1] == 0x03 ? "NOSTR, Bluetooth mode" : String(format: "life 0x%02x", b[1])) : "?"
+            let drop = b.count >= 10 ? String(bytes: b[2..<10].filter { $0 != 0 }, encoding: .ascii) ?? "?" : "?"
+            finishProbe(true, "KEY answered: \(life), drop \(drop)", s)
+        } catch {
+            finishProbe(false, "\(error)", s)
         }
     }
 
-    private func go(_ c: CBCentralManager) {
-        if let p = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService]).first {
-            how = "already connected to iOS"
-            connect(p, c); return
-        }
-        let store = UserDefaults(suiteName: NotificationService.group)
-        if let s = store?.string(forKey: "keyPeripheralId"), let id = UUID(uuidString: s), let p = c.retrievePeripherals(withIdentifiers: [id]).first {
-            how = "saved KEY, not connected"
-            connect(p, c); return
-        }
-        how = "scanning"
-        mark("scanning for the KEY")
-        c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
-    }
-
-    private func connect(_ p: CBPeripheral, _ c: CBCentralManager) {
-        mark("connecting (\(how))")
-        peripheral = p
-        p.delegate = self
-        c.connect(p, options: nil)
-    }
-
-    func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
-        guard peripheral == nil else { return }
-        c.stopScan()
-        mark("found by scan, RSSI \(rssi)")
-        connect(p, c)
-    }
-
-    func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
-        mark("connected, MTU \(p.maximumWriteValueLength(for: .withoutResponse) + 3)")
-        p.discoverServices([KeyLink.favService])
-    }
-
-    func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
-        finish(ok: false, "connect failed: \(error?.localizedDescription ?? "no reason")")
-    }
-
-    func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
-        if !finished { finish(ok: false, "disconnected: \(error?.localizedDescription ?? "no reason")") }
-    }
-
-    func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let s = p.services?.first(where: { $0.uuid == KeyLink.favService }) else { finish(ok: false, "no Favilla service on the KEY"); return }
-        mark("service found")
-        p.discoverCharacteristics([KeyLink.chanInChar, KeyLink.chanOutChar], for: s)
-    }
-
-    func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor s: CBService, error: Error?) {
-        let cs = s.characteristics ?? []
-        chanIn = cs.first { $0.uuid == KeyLink.chanInChar }
-        guard let out = cs.first(where: { $0.uuid == KeyLink.chanOutChar }), chanIn != nil else { finish(ok: false, "no app channel on the KEY (needs 9g or later)"); return }
-        mark("channel found")
-        p.setNotifyValue(true, for: out)
-    }
-
-    func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-        guard ch.uuid == KeyLink.chanOutChar else { return }
-        if let e = error { finish(ok: false, "subscribe failed: \(e.localizedDescription)"); return }
-        guard let c = creds else { return }
-        mark("subscribed")
-        ctr = Credentials.nextCounter()
-        let per = max(1, min(8, p.maximumWriteValueLength(for: .withoutResponse) / 64))
-        writes = AppChannel.writes(AppChannel.request(AppChannel.cHello, c, ctr: ctr), perWrite: per)
-        writeNext()
-        mark("HELLO sent, ctr \(ctr)")
-    }
-
-    private func writeNext() {
-        guard let p = peripheral, let ci = chanIn, !writes.isEmpty else { return }
-        p.writeValue(writes.removeFirst(), for: ci, type: .withResponse)
-    }
-
-    func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
-        if let e = error { finish(ok: false, "write failed: \(e.localizedDescription)"); return }
-        writeNext()
-    }
-
-    func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
-        guard ch.uuid == KeyLink.chanOutChar, let v = ch.value, let c = creds else { return }
-        guard let msgs = try? reasm.feed(v) else { reasm = AppChannel.Reassembler(); return }
-        for m in msgs {
-            do {
-                let a = try AppChannel.open(m, c)
-                guard a.ctr == ctr else { continue }
-                if a.rsp == AppChannel.rHello {
-                    let b = [UInt8](a.body)
-                    let life = b.count > 1 ? (b[1] == 0x03 ? "NOSTR, Bluetooth mode" : String(format: "life 0x%02x", b[1])) : "?"
-                    let drop = b.count >= 10 ? String(bytes: b[2..<10].filter { $0 != 0 }, encoding: .ascii) ?? "?" : "?"
-                    finish(ok: true, "KEY answered: \(life), drop \(drop)")
-                } else {
-                    finish(ok: false, String(format: "KEY answered type %02x", a.rsp))
-                }
-            } catch AppChannel.Failure.unauthenticated(_, let st) {
-                finish(ok: false, "KEY refused: " + AppChannel.statusText(st))
-            } catch {
-                continue   // not ours (another client's message on the shared characteristic)
-            }
-        }
-    }
-
-    // MARK: - Result
-
-    private func finish(ok: Bool, _ why: String) {
-        guard !finished else { return }
-        finished = true
-        mark(why)
-        let ms = Int(Date().timeIntervalSince(t0) * 1000)
-        if let p = peripheral { central?.cancelPeripheralConnection(p) }
-        central?.stopScan()
-
+    private func finishProbe(_ ok: Bool, _ why: String, _ s: KeySession?) {
+        s?.close()
+        let how = s?.how ?? ""
         let head = ok ? "KEY reached in \(ms) ms" : "KEY NOT reached (\(ms) ms)"
         let line = ISO8601DateFormatter().string(from: Date()) + " " + head + ". " + why + (how.isEmpty ? "" : " [\(how)]")
         if let d = UserDefaults(suiteName: NotificationService.group) {
             var all = d.stringArray(forKey: NotificationService.resultsKey) ?? []
-            all.append(line + "\n" + steps.joined(separator: "\n"))
+            all.append(line + "\n" + (s?.steps ?? []).joined(separator: "\n"))
             d.set(Array(all.suffix(20)), forKey: NotificationService.resultsKey)
         }
-        guard let c = content, let h = handler else { return }
-        c.title = "Favilla push test: " + (ok ? "OK" : "failed")
-        c.body = head + ". " + why + (how.isEmpty ? "" : " [\(how)]")
-        handler = nil
-        h(c)
+        deliver("Favilla push test: " + (ok ? "OK" : "failed"), head + ". " + why + (how.isEmpty ? "" : " [\(how)]"))
     }
 }

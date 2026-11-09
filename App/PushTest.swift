@@ -49,7 +49,11 @@ final class PushTest: NSObject, ObservableObject, @unchecked Sendable {
     func got(_ t: Data) {
         let hex = t.map { String(format: "%02x", $0) }.joined()
         store.set(hex, forKey: "pushToken")
-        DispatchQueue.main.async { self.token = hex; self.status = "Ready. Copy the token into the Push Notifications Console." }
+        DispatchQueue.main.async {
+            let changed = self.token != hex
+            self.token = hex; self.status = "Ready. Copy the token into the Push Notifications Console."
+            if changed || Bunker.on { Task { @MainActor in BunkerService.shared.tokenChanged() } }
+        }
     }
 
     func failed(_ e: Error) {
@@ -73,9 +77,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func application(_ app: UIApplication, didFailToRegisterForRemoteNotificationsWithError e: Error) { PushTest.shared.failed(e) }
 
     // A test push while the app is open still shows as a banner (the extension has already run).
+    // A bunker push while the app is open is the app's own work (it listens to the relays itself): no banner.
     func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification, withCompletionHandler h: @escaping (UNNotificationPresentationOptions) -> Void) {
-        DispatchQueue.main.async { PushTest.shared.reload() }
-        h([.banner, .list, .sound])
+        let bunker = n.request.content.userInfo["fv"] != nil
+        Task { @MainActor in PushTest.shared.reload(); BunkerService.shared.reloadLog() }
+        h(bunker ? [] : [.banner, .list, .sound])
     }
 }
 

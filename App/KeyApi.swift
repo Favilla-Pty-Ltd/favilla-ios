@@ -41,6 +41,16 @@ enum KeyApiError: Error, Equatable {
     case badAnswer
 }
 
+extension KeyApiError: CustomStringConvertible {
+    var description: String {
+        switch self {
+        case .notReady(let s), .refused(let s): return s
+        case .timedOut: return "The KEY didn't answer in time."
+        case .badAnswer: return "The KEY's answer couldn't be read."
+        }
+    }
+}
+
 /// How this iPhone reaches the KEY for the Nostr client.
 enum KeyRoute: String, CaseIterable {
     case bluetooth, wifi

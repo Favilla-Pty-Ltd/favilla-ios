@@ -129,11 +129,42 @@
   }
   // The app sets the row's subtitle ("Bluetooth" / "Wi-Fi: 192.168.1.20") and the route.
   var route = window.__favillaInitialRoute === 'bluetooth' ? 'bluetooth' : 'wifi';
-  window.__favillaSetRoute = function (text, r) {
+  var bunkerOn = false;
+  window.__favillaSetRoute = function (text, r, bunker) {
     if (r) route = r;
+    if (bunker) bunkerOn = bunker === 'on';
     var s = document.getElementById('fv-iphone-sub');
     if (s && text) s.textContent = text;
+    paintBunkerNote();
   };
+
+  // Connect apps (the KEY's NIP-46 bunker) works the same on Bluetooth, but the
+  // KEY has no internet there: this iPhone carries the requests, once "Sign for
+  // other apps" is on in This iPhone > Bunker. Say so at the top of the page.
+  function paintBunkerNote() {
+    var sec = document.getElementById('section-bunker');
+    if (!sec) return;
+    var n = document.getElementById('fv-bunker-note');
+    if (route !== 'bluetooth') { if (n) n.remove(); return; }
+    if (!n) {
+      n = document.createElement('div');
+      n.id = 'fv-bunker-note'; n.className = 'bk-card';
+      n.style.cssText = 'display:flex;align-items:center;gap:12px;margin:0 0 12px;padding:12px 14px;';
+      n.innerHTML = '<div style="flex:1;min-width:0"><b style="display:block;font-size:14px">Through this iPhone</b>' +
+        '<small id="fv-bunker-line" style="display:block;color:var(--muted);font-size:12px;line-height:1.45"></small></div>' +
+        '<button type="button" class="bk-pill" id="fv-bunker-open" style="cursor:pointer">Set up</button>';
+      n.querySelector('#fv-bunker-open').addEventListener('click', function (ev) {
+        ev.preventDefault(); ev.stopPropagation();
+        try { mh.favillaApp.postMessage({ open: 'settings' }); } catch (e) {}
+      });
+      var hero = sec.querySelector('.bk-hero');
+      if (hero && hero.nextSibling) sec.insertBefore(n, hero.nextSibling); else sec.appendChild(n);
+    }
+    n.querySelector('#fv-bunker-line').textContent = bunkerOn
+      ? 'Favilla reaches your KEY over Bluetooth, and passes each app\'s request to it and sends the answer back, even when Favilla is closed.'
+      : 'On Bluetooth your KEY has no internet, so other apps reach it through Favilla on this iPhone. Turn on This iPhone > Bunker > Sign for other apps.';
+    n.querySelector('#fv-bunker-open').textContent = bunkerOn ? 'On' : 'Set up';
+  }
 
   // On Bluetooth the KEY's address means nothing (the app sends every /api call
   // to the paired KEY), and the PWA's Connect with an empty address box scans
@@ -175,7 +206,7 @@
     } catch (e) {}
   }
 
-  function onReady() { addSettingsRow(); watchTheme(); }
+  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

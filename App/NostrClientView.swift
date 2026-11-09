@@ -96,10 +96,11 @@ struct NostrClientView: UIViewRepresentable {
 
         func pushRoute(_ text: String) {
             let route = KeyRoute.current.rawValue
-            guard text + route != lastRoute, let wv = webView else { return }
-            lastRoute = text + route
-            let arg = (try? String(data: JSONSerialization.data(withJSONObject: [text, route]), encoding: .utf8)) ?? "[\"\", \"wifi\"]"
-            wv.evaluateJavaScript("window.__favillaSetRoute && window.__favillaSetRoute(\(arg)[0], \(arg)[1])")
+            let bunker = Bunker.on ? "on" : "off"         // the Connect apps note (bridge.js)
+            guard text + route + bunker != lastRoute, let wv = webView else { return }
+            lastRoute = text + route + bunker
+            let arg = (try? String(data: JSONSerialization.data(withJSONObject: [text, route, bunker]), encoding: .utf8)) ?? "[\"\", \"wifi\", \"off\"]"
+            wv.evaluateJavaScript("window.__favillaSetRoute && window.__favillaSetRoute(\(arg)[0], \(arg)[1], \(arg)[2])")
         }
 
         // The page has loaded: give it the route (the Settings row and the Bluetooth Connect).

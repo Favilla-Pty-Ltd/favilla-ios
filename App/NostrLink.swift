@@ -1,7 +1,7 @@
 // NostrLink.swift - the Nostr client's Bluetooth link to the KEY (7 Nov 2026).
 //
 // Built against favilla-key-firmware docs/BLE_PASSKEY_PROTOCOL.md, "The app
-// channel (9g)" and "NOSTR over Bluetooth (9k)". The KEY is in its NOSTR BT
+// channel (9g)" and "NOSTR over Bluetooth (9k)". The KEY is in its NOSTR Bluetooth life (9p: chosen in Settings > Network > Change mode > Bluetooth)
 // life (Wi-Fi never starts) and this install is paired with its app channel
 // (PAIR THE APP). Unlike KeyLink, which connects for one sign-in and lets go,
 // this link stays up while the Nostr client runs, because the PWA calls the KEY
@@ -44,6 +44,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var writing = Data()
     private var busyRetries = 0
     private var timeCtr: UInt32 = 0          // the TIME request, while it is out
+    private var lastTimeCtr: UInt32 = 0      // the last TIME sent: its answer may come after we moved on (#9 item 5)
+    private var lastPer = 0                  // reports per write last used (#9 item 2: the MTU grows after connect)
+    private var skipToStart = false          // after a failed message: drop its leftover reports until the next start (#9 item 3)
+    private var skipped = 0
     private var queue: [Job] = []
     private var notes = 0                    // notifications since the last message went out (log)
     private var current: Job?
@@ -78,9 +82,9 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     static let notPaired = "Pair the app with the KEY first: Settings > This iPhone > PAIR THE APP."
-    static let notNostrBT = "Your KEY isn't in NOSTR BT. Restart it and choose NOSTR BT at Select Mode."
+    static let notNostrBT = "Your KEY isn't in Bluetooth mode. On the KEY: Settings > Network > Change mode > Bluetooth."
     static let locked = "Your KEY is locked. Enter the NOSTR PIN on the KEY."
-    static let notFound = "Can't find your KEY. Check it's on, in NOSTR BT, and near this iPhone."
+    static let notFound = "Can't find your KEY. Check it's on, in Bluetooth mode, and near this iPhone."
 
     // MARK: - Sending
 
@@ -192,7 +196,12 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     /// One message on 8F1A0005, as whole 64-byte reports, up to 8 per write (512 bytes).
     private func sendMessage(_ msg: Data) {
         guard let p = peripheral else { return }
-        let per = max(1, min(8, p.maximumWriteValueLength(for: .withoutResponse) / 64))
+        let wnr = p.maximumWriteValueLength(for: .withoutResponse)
+        let per = max(1, min(8, wnr / 64))
+        if per != lastPer {
+            LinkLog.shared.add("write size: \(per) report\(per == 1 ? "" : "s") per write (ATT MTU \(wnr + 3))")
+            lastPer = per
+        }
         notes = 0
         writes = AppChannel.writes(msg, perWrite: per, limit: AppChannel.msgMaxApi)
         busyRetries = 0
@@ -246,7 +255,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         peripheral = nil; chanIn = nil; chanOut = nil
         reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
-        writes = []; timeCtr = 0
+        writes = []; timeCtr = 0; lastPer = 0; skipToStart = false; skipped = 0
     }
 
     private func lost(_ why: String) {
@@ -260,6 +269,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private func subscribed() {
         guard let c = creds else { return }
         timeCtr = Credentials.nextCounter()
+        lastTimeCtr = timeCtr
         LinkLog.shared.add("subscribed to 8F1A0006; TIME ctr \(timeCtr)")
         arm(3) { [weak self] in self?.ready() }      // no answer to TIME: carry on regardless
         sendMessage(AppChannel.request(AppChannel.cTime, c, ctr: timeCtr, body: AppChannel.timeBody()))
@@ -303,6 +313,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             return
         }
         if timeCtr != 0, a.ctr == timeCtr { ready(); return }          // TIME taken (or refused): go on
+        if a.ctr == lastTimeCtr, a.ctr != current?.ctr {                // TIME's answer after its 3 s wait: nothing waits for it
+            LinkLog.shared.add("  late TIME answer (ctr \(a.ctr)), ignored")
+            return
+        }
         guard var j = current, a.ctr == j.ctr else {                    // an answer to a cancelled or older request
             LinkLog.shared.add("  ignored: no request waits for ctr \(a.ctr)" + (current.map { " (waiting for \($0.ctr))" } ?? ""))
             return
@@ -434,15 +448,28 @@ extension NostrLink: CBPeripheralDelegate {
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
-        guard ch.uuid == KeyLink.chanOutChar, let v = ch.value else { return }
+        guard ch.uuid == KeyLink.chanOutChar, var v = ch.value else { return }
         notes += 1
+        if skipToStart {
+            // The rest of a message that already failed: drop its reports quietly
+            // until a report starts a new message (#9 item 3).
+            let b = [UInt8](v)
+            var off = 0
+            while off < b.count, b[off] != AppChannel.fStart { off += 64 }
+            if off >= b.count { skipped += 1; return }
+            let n = skipped + (off > 0 ? 1 : 0)
+            LinkLog.shared.add("  dropped \(n) leftover notification(s) of the failed message; a new message starts")
+            skipToStart = false; skipped = 0
+            v = v.subdata(in: off..<v.count)
+        }
         let pr0 = reasm.progress
         LinkLog.shared.add("notify \(v.count) bytes: \(LinkLog.describe(v))" + (pr0.want > 0 ? " (holding \(pr0.have) of \(pr0.want))" : "") + (error.map { ", error \($0.localizedDescription)" } ?? ""))
         do {
             for m in try reasm.feed(v) { received(m) }
         } catch {
-            LinkLog.shared.add("  REASSEMBLY FAILED (\(error)), holding \(pr0.have) of \(pr0.want); starting over")
+            LinkLog.shared.add("  REASSEMBLY FAILED (\(error)), holding \(pr0.have) of \(pr0.want); dropping the rest of it")
             reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
+            skipToStart = true; skipped = 0
             if timeCtr == 0 { finishCurrent(.failure(KeyApiError.badAnswer)) }
         }
     }

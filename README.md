@@ -10,7 +10,7 @@ favilla-key-firmware `docs/BLE_PASSKEY_PROTOCOL.md`.
 - Nostr: the app opens on the KEY's own PWA (Nostr/pwa.html, refreshed with
   scripts/sync_pwa.sh). Its calls to the KEY go through Nostr/bridge.js to
   App/KeyApi.swift: Wi-Fi, or Bluetooth on the paired app channel with the KEY in
-  its NOSTR BT life (App/NostrLink.swift, KEY 9k). Settings > This iPhone picks the route.
+  its Bluetooth mode (KEY Settings > Network > Change mode > Bluetooth) (App/NostrLink.swift, KEY 9k). Settings > This iPhone picks the route.
 - Passwords: pick Favilla in Safari's sign-in sheet, pick the login on the KEY;
   the KEY sends it to the sheet and iOS fills the fields (FILL on 8F1A0003,
   answer on 8F1A0004).

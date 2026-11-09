@@ -168,7 +168,7 @@ final class NotificationService: UNNotificationServiceExtension, CBCentralManage
                 guard a.ctr == ctr else { continue }
                 if a.rsp == AppChannel.rHello {
                     let b = [UInt8](a.body)
-                    let life = b.count > 1 ? (b[1] == 0x03 ? "NOSTR BT" : String(format: "life 0x%02x", b[1])) : "?"
+                    let life = b.count > 1 ? (b[1] == 0x03 ? "NOSTR, Bluetooth mode" : String(format: "life 0x%02x", b[1])) : "?"
                     let drop = b.count >= 10 ? String(bytes: b[2..<10].filter { $0 != 0 }, encoding: .ascii) ?? "?" : "?"
                     finish(ok: true, "KEY answered: \(life), drop \(drop)")
                 } else {

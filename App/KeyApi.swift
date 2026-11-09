@@ -175,13 +175,49 @@ final class WifiTransport: KeyTransport {
 
 // MARK: - Bluetooth
 
-/// The KEY's NOSTR BT life over the paired app channel (NostrLink): each call is
+/// The KEY's NOSTR Bluetooth life (Bluetooth mode) over the paired app channel (NostrLink): each call is
 /// one API request (0x3A), its answer one encrypted 0xB8 (KEY drop 9k).
 final class BluetoothTransport: KeyTransport {
+    /// #9 item 4: the PWA retries /api/session about every 2 s while the KEY is
+    /// busy. After a 503 or a busy link, further session calls are answered here
+    /// (503) without touching the KEY, for 2 s, then 4, 8 and up to 30 s.
+    private let lock = NSLock()
+    private var holdUntil = Date.distantPast
+    private var hold: TimeInterval = 0
+
     func send(_ r: ApiRequest) async throws -> ApiResponse {
         guard let body = ApiWire.encode(r) else { throw KeyApiError.refused("request too large or not an /api/ call") }
         guard Credentials.isPaired else { throw KeyApiError.notReady(NostrLink.notPaired) }
-        return try await NostrLink.shared.send(body)
+        let session = r.path.hasPrefix("/api/session")
+        if session, let wait = backingOff() {
+            return ApiResponse(status: 503, contentType: "application/json", body: Data("{\"error\":\"busy\",\"retry_in\":\(Int(wait.rounded(.up)))}".utf8))
+        }
+        do {
+            let a = try await NostrLink.shared.send(body)
+            if session { a.status == 503 ? backOff() : clear() }
+            return a
+        } catch KeyApiError.notReady(let why) where session && why.contains("busy") {
+            backOff()
+            throw KeyApiError.notReady(why)
+        }
+    }
+
+    private func backingOff() -> TimeInterval? {
+        lock.lock(); defer { lock.unlock() }
+        let left = holdUntil.timeIntervalSinceNow
+        return left > 0 ? left : nil
+    }
+
+    private func backOff() {
+        lock.lock(); defer { lock.unlock() }
+        hold = min(30, max(2, hold * 2))
+        holdUntil = Date().addingTimeInterval(hold)
+        LinkLog.shared.add("session busy: holding session calls for \(Int(hold)) s")
+    }
+
+    private func clear() {
+        lock.lock(); defer { lock.unlock() }
+        hold = 0; holdUntil = .distantPast
     }
 }
 

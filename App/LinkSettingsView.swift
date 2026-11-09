@@ -25,7 +25,7 @@ struct LinkSettingsView: View {
                             }
                             .pickerStyle(.segmented)
                             if route == .bluetooth {
-                                Text("Choose NOSTR BT on the KEY's Select Mode screen and enter the NOSTR PIN. The KEY never starts Wi-Fi; the app reaches it over the paired Bluetooth link and reaches relays over this iPhone's own internet.")
+                                Text("On the KEY, choose NOSTR, then Settings > Network > Change mode > Bluetooth, and enter the NOSTR PIN. The KEY never starts Wi-Fi; the app reaches it over the paired Bluetooth link and reaches relays over this iPhone's own internet.")
                                     .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                                 Text(btStatus)
                                     .font(Brand.small).foregroundStyle(btStatusColour).fixedSize(horizontal: false, vertical: true)
@@ -70,7 +70,7 @@ struct LinkSettingsView: View {
     }
 
     private var btStatus: String {
-        guard KeyLink.appPaired else { return "First pair the app with the KEY: PAIR THE APP below, with PAIR A PHONE open on the KEY (PASSKEY mode), or Settings > Network > Pair a phone in NOSTR BT." }
+        guard KeyLink.appPaired else { return "First pair the app with the KEY: PAIR THE APP below, with PAIR A PHONE open on the KEY (PASSKEY mode), or Settings > Network > Pair a phone in Bluetooth mode." }
         switch nostr.state {
         case .ready: return "Connected to your KEY over Bluetooth."
         case .connecting: return "Connecting to your KEY..."

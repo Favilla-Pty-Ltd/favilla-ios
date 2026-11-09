@@ -37,7 +37,7 @@ final class NotificationService: UNNotificationServiceExtension {
         content = request.content.mutableCopy() as? UNMutableNotificationContent
         let fv = request.content.userInfo["fv"] as? [String: Any]
         Task {
-            if let pk = fv?["pk"] as? String { await bunker(pk) } else { await probe() }
+            if let pk = fv?["pk"] as? String { await bunker(pk, round: (fv?["r"] as? Int) ?? 0) } else { await probe() }
         }
     }
 
@@ -62,7 +62,7 @@ final class NotificationService: UNNotificationServiceExtension {
 
     // MARK: - Bunker
 
-    private func bunker(_ pk: String) async {
+    private func bunker(_ pk: String, round: Int) async {
         let title = "Favilla bunker"
         best = (title, "Signing request from a Nostr app. Open Favilla to answer it.")
         guard Bunker.on, let info = Bunker.Info.load(), info.pubkey == pk else {
@@ -79,8 +79,10 @@ final class NotificationService: UNNotificationServiceExtension {
             Bunker.log("extension: bridge unreachable: \(error.localizedDescription)")
             deliver(title, "Couldn't fetch the request: \(error.localizedDescription)"); return
         }
-        guard !reqs.isEmpty else { deliver(title, "Nothing waiting: the request was already answered."); return }
-        Bunker.log("extension: \(reqs.count) request\(reqs.count == 1 ? "" : "s") waiting")
+        // A follow-up push (round 1 and on) comes with nothing new: it is here to
+        // collect replies the KEY finished after the last run (an approval).
+        guard !reqs.isEmpty || round > 0 else { deliver(title, "Nothing waiting: the request was already answered."); return }
+        Bunker.log("extension: " + (round > 0 ? "follow-up \(round), " : "") + "\(reqs.count) request\(reqs.count == 1 ? "" : "s") waiting")
 
         let s = KeySession(creds)
         session = s
@@ -90,13 +92,21 @@ final class NotificationService: UNNotificationServiceExtension {
         }
         Bunker.log("extension: KEY open in \(ms) ms (\(s.how))")
         let deadline = t0.addingTimeInterval(22)   // iOS allows about 30 s; replies still need publishing
-        let o = await Bunker.serve(reqs, via: s, relays: info.relays, until: deadline) { [weak self] o in
+        let o = await Bunker.serve(reqs, via: s, relays: info.relays, until: deadline, poll: true) { [weak self] o in
             if o.sent > 0 { self?.best = (title, Self.text(o)) }
             else if o.taken > 0 { self?.best = (title, "Approve it on your KEY.") }
         }
         s.close()
+        // The KEY is still waiting (a button press): ask the bridge to wake this
+        // iPhone again in a moment, so the reply goes out without opening Favilla.
+        var again = false
+        if o.waiting, round < Bunker.againMax {
+            again = await Bunker.again(pubkey: pk, round: round + 1)
+            Bunker.log("extension: follow-up push \(round + 1) " + (again ? "asked for" : "refused"))
+        }
         Bunker.log("extension: done in \(ms) ms: taken \(o.taken), replies \(o.replies), accepted \(o.sent)" + (o.waiting ? ", still waiting" : "") + (o.error.map { ", \($0)" } ?? ""))
         if let e = o.error, o.taken == 0 { deliver(title, e); return }
+        if o.waiting && again && o.sent == 0 { deliver(title, "Approve it on your KEY. It sends as soon as you do."); return }
         deliver(title, Self.text(o))
     }
 

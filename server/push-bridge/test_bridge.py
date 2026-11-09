@@ -48,8 +48,8 @@ async def main():
 
     pushes = []
 
-    async def sender(token, env, pk, n):
-        pushes.append((token, env, pk, n, time.time()))
+    async def sender(token, env, pk, n, round_=0):
+        pushes.append((token, env, pk, n, time.time(), round_))
         return 200, ""
 
     d = tempfile.mkdtemp()
@@ -94,7 +94,7 @@ async def main():
     B.KEEP_S = keep
 
     # a dead token is dropped
-    async def gone(token, env, pk, n):
+    async def gone(token, env, pk, n, round_=0):
         return 410, "Unregistered"
     br.sender = gone
     br.last_push.clear()
@@ -120,6 +120,20 @@ async def main():
     r = await client.get("/push/health")
     h = await r.json()
     ok(h["ok"] and h["requests"] >= 7, "health reports counts")
+    # follow-up push: only for a registered phone, rounds 1..AGAIN_MAX, at most one per 10 s
+    B.AGAIN_DELAY_S = 0
+    n0 = len(pushes)
+    r = await client.post("/push/again", json={"pubkey": KEY, "token": TOK, "round": 1})
+    ok((await r.json())["ok"] is True, "again: accepted for a registered phone")
+    await asyncio.sleep(0.2)
+    ok(len(pushes) == n0 + 1 and pushes[-1][5] == 1, "again: one follow-up push, round 1")
+    r = await client.post("/push/again", json={"pubkey": KEY, "token": TOK, "round": 2})
+    ok((await r.json())["ok"] is False, "again: a second within 10 s is refused")
+    r = await client.post("/push/again", json={"pubkey": KEY, "token": "ab" * 32, "round": 1})
+    ok((await r.json())["ok"] is False, "again: an unknown phone gets nothing")
+    r = await client.post("/push/again", json={"pubkey": KEY, "token": TOK, "round": 99})
+    ok(r.status == 400, "again: round out of range refused")
+
     r = await client.post("/push/unregister", json={"pubkey": KEY, "token": TOK})
     ok(r.status == 200 and TOK not in store.reg.get(KEY, {}), "unregister")
     await client.close()

@@ -223,6 +223,22 @@ enum Bunker {
         }
     }
 
+    static let againMax = 6
+
+    /// Ask the bridge to wake this iPhone again in a few seconds (the KEY is
+    /// still waiting for an approval). False if it won't (too soon, too many).
+    static func again(pubkey: String, round: Int) async -> Bool {
+        let tok = store.string(forKey: "pushToken") ?? ""
+        guard !tok.isEmpty else { return false }
+        var q = URLRequest(url: bridge.appendingPathComponent("again"), timeoutInterval: 4)
+        q.httpMethod = "POST"
+        q.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        q.httpBody = try? JSONSerialization.data(withJSONObject: ["pubkey": pubkey, "token": tok, "round": round])
+        guard let (d, r) = try? await URLSession.shared.data(for: q), (r as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return false }
+        return j["ok"] as? Bool == true
+    }
+
     static func unregister(token: String, pubkey: String) async {
         var q = URLRequest(url: bridge.appendingPathComponent("unregister"), timeoutInterval: 10)
         q.httpMethod = "POST"

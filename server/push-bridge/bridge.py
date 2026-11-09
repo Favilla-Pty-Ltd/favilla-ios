@@ -47,6 +47,9 @@ MAX_PER_KEY = 64        # requests kept per KEY
 MAX_RELAYS = 8          # relays per registration
 MAX_TOKENS = 4          # phones per KEY
 PUSH_GAP_S = 1.0        # at most one push per phone per second (a trailing one follows)
+AGAIN_MAX = 6           # follow-up pushes per request chain (about 3 minutes of waiting for an approval)
+AGAIN_DELAY_S = 2       # after the extension asks (it has just stopped)
+AGAIN_GAP_S = 10        # at most one follow-up per phone per 10 s
 
 
 # ---------------------------------------------------------------- state ------
@@ -157,11 +160,12 @@ class Apns:
                                    algorithm="ES256", headers={"kid": self.key_id})
         return self._jwt
 
-    async def send(self, device, env, pubkey, waiting):
+    async def send(self, device, env, pubkey, waiting, round_=0):
         host = "api.sandbox.push.apple.com" if env == "development" else "api.push.apple.com"
-        body = {"aps": {"alert": {"title": "Favilla", "body": "Signing request from a Nostr app"},
+        text = "Signing request from a Nostr app" if not round_ else "Waiting for you to approve on the KEY"
+        body = {"aps": {"alert": {"title": "Favilla", "body": text},
                         "mutable-content": 1, "thread-id": "bunker"},
-                "fv": {"pk": pubkey, "n": waiting}}
+                "fv": {"pk": pubkey, "n": waiting, "r": round_}}
         r = await self.http.post(f"https://{host}/3/device/{device}", json=body, headers={
             "authorization": "bearer " + self.token(), "apns-topic": self.topic,
             "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": "0",
@@ -185,6 +189,7 @@ class Bridge:
         self.changed = {}            # relay url -> asyncio.Event (resubscribe)
         self.last_push = {}          # token -> time
         self.trailing = set()        # tokens with a trailing push scheduled
+        self.last_again = {}         # token -> time of the last follow-up
         self.stats = collections.Counter()
 
     # relays
@@ -282,6 +287,31 @@ class Bridge:
                 self.sync()
 
 
+    # A follow-up push (9 Nov 2026). The phone's extension lives about 30 s; a
+    # request waiting for a button press on the KEY can take longer. When the
+    # extension runs out with the KEY still busy, it asks for another push a few
+    # seconds later, and the next run collects the reply. At most AGAIN_MAX rounds.
+    async def again(self, pk, token, round_):
+        env = self.store.reg.get(pk, {}).get(token, {}).get("env")
+        if not env:
+            return False
+        if time.time() - self.last_again.get(token, 0) < AGAIN_GAP_S:
+            return False
+        self.last_again[token] = time.time()
+
+        async def later():
+            await asyncio.sleep(AGAIN_DELAY_S)
+            try:
+                status, reason = await self.sender(token, env, pk, len(self.pending.get(pk)), round_)
+                if status != 200:
+                    log.warning("follow-up push to %s…: HTTP %s %s", token[:8], status, reason)
+            except Exception as e:  # noqa: BLE001
+                log.warning("follow-up push to %s…: %s", token[:8], e)
+        asyncio.ensure_future(later())
+        log.info("follow-up push %d for %s… in %d s", round_, token[:8], AGAIN_DELAY_S)
+        return True
+
+
 # ---------------------------------------------------------------- HTTP -------
 
 def make_app(bridge):
@@ -338,6 +368,20 @@ def make_app(bridge):
             return web.json_response({"error": "bad pubkey"}, status=400)
         return web.json_response({"events": bridge.pending.get(pk)})
 
+    async def again(req):
+        if limited(req):
+            return web.json_response({"error": "slow down"}, status=429)
+        b = await body(req) or {}
+        pk, tok = str(b.get("pubkey", "")).lower(), str(b.get("token", "")).lower()
+        try:
+            rnd = int(b.get("round", 0))
+        except (TypeError, ValueError):
+            rnd = 0
+        if not HEX64.match(pk) or not TOKEN.match(tok) or not 1 <= rnd <= AGAIN_MAX:
+            return web.json_response({"error": f"bad pubkey, token or round (1 to {AGAIN_MAX})"}, status=400)
+        ok = await bridge.again(pk, tok, rnd)
+        return web.json_response({"ok": ok})
+
     async def health(req):
         return web.json_response({"ok": True, "keys": len(bridge.store.reg),
                                   "relays": sorted(bridge.wanted), **bridge.stats})
@@ -347,6 +391,7 @@ def make_app(bridge):
     app.router.add_post("/push/unregister", unregister)
     app.router.add_get("/push/pending", pending)
     app.router.add_get("/push/health", health)
+    app.router.add_post("/push/again", again)
     return app
 
 

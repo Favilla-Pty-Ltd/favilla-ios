@@ -187,6 +187,15 @@ struct NostrClientView: UIViewRepresentable {
         // allowed frame (YouTube embeds, frame-src in its CSP) loads in place.
         func webView(_ wv: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = a.request.url else { decisionHandler(.cancel); return }
+            // The call window: its own page (and the redirect /call.html -> /call)
+            // load in place; a link inside it goes to the in-app browser.
+            if wv !== webView {
+                let s = url.scheme?.lowercased() ?? ""
+                if a.targetFrame?.isMainFrame == true, s == "https", CallWindow.isCall(url) || a.navigationType == .other { decisionHandler(.allow); return }
+                if a.targetFrame?.isMainFrame == false || ["about", "blob", "data"].contains(s) { decisionHandler(.allow); return }
+                WebExtras.open(url, from: wv)
+                decisionHandler(.cancel); return
+            }
             if url.scheme == NostrClientView.scheme { decisionHandler(.allow); return }
             if a.targetFrame?.isMainFrame == false, url.host?.hasSuffix("youtube.com") == true { decisionHandler(.allow); return }
             if a.targetFrame?.isMainFrame == false, url.scheme == "about" { decisionHandler(.allow); return }
@@ -200,13 +209,40 @@ struct NostrClientView: UIViewRepresentable {
 
         // window.open / target=_blank: the in-app browser.
         func webView(_ wv: WKWebView, createWebViewWith c: WKWebViewConfiguration, for a: WKNavigationAction, windowFeatures f: WKWindowFeatures) -> WKWebView? {
-            if let url = a.request.url { WebExtras.open(url, from: wv) }
+            guard let url = a.request.url else { return nil }
+            // The call window: a real child web view, so the PWA keeps its handle
+            // on it (window.open's return, postMessage both ways). See CallWindow.
+            if wv === webView, CallWindow.isCall(url), callWindow == nil, let top = WebExtras.top(from: wv) {
+                c.allowsInlineMediaPlayback = true
+                c.mediaTypesRequiringUserActionForPlayback = []
+                let child = WKWebView(frame: .zero, configuration: c)
+                child.navigationDelegate = self
+                child.uiDelegate = self
+                let w = CallWindow(child)
+                w.modalPresentationStyle = .fullScreen
+                w.onClose = { [weak self] in self?.callWindow = nil }
+                callWindow = w
+                top.present(w, animated: true)
+                return child
+            }
+            WebExtras.open(url, from: wv)
             return nil
         }
 
-        // Camera (scanning the KEY's pairing code) and microphone (calls), bundled page only.
+        private var callWindow: CallWindow?
+
+        // The call window closed itself (hang-up).
+        func webViewDidClose(_ wv: WKWebView) {
+            if let w = callWindow, w.web === wv { w.closed() }
+        }
+
+        // Camera (scanning the KEY's pairing code) and microphone, for the bundled
+        // page, and camera and microphone for the call window the page opened
+        // (iOS still asks the first time, per its own permission).
         func webView(_ wv: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-            decisionHandler(origin.protocol == NostrClientView.scheme && frame.isMainFrame ? .grant : .deny)
+            if wv === webView { decisionHandler(origin.protocol == NostrClientView.scheme && frame.isMainFrame ? .grant : .deny); return }
+            if let w = callWindow, w.web === wv, origin.protocol == "https", frame.isMainFrame { decisionHandler(.grant); return }
+            decisionHandler(.deny)
         }
 
         func webView(_ wv: WKWebView, runJavaScriptAlertPanelWithMessage msg: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {

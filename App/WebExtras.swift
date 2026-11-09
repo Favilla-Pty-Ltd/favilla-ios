@@ -214,3 +214,52 @@ enum WebExtras {
         t.present(sf, animated: true)
     }
 }
+
+// MARK: - The call window (video and voice calls)
+//
+// The PWA runs calls through a separate "media satellite" page (favillakey.io/call)
+// that it opens with window.open and drives with postMessage: the PWA does the
+// signalling with the KEY, the satellite does the camera, microphone and WebRTC.
+// In Safari that window is a second tab. In the app it has to be a second web
+// view made from the configuration WebKit hands us, so the opener link (and with
+// it postMessage) survives; sending it to Safari cut the link and no call could
+// connect. Shown full screen over the client; the satellite's own hang-up closes it.
+
+final class CallWindow: UIViewController {
+    let web: WKWebView
+    var onClose: (() -> Void)?
+
+    init(_ web: WKWebView) { self.web = web; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { nil }
+
+    static func isCall(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https" else { return false }
+        let p = url.path.lowercased()
+        return p == "/call" || p == "/call.html" || p.hasSuffix("/call") || p.hasSuffix("/call.html")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        isModalInPresentation = true
+        web.isOpaque = false
+        web.backgroundColor = .black
+        web.scrollView.backgroundColor = .black
+        web.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(web)
+        NSLayoutConstraint.activate([
+            web.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            web.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            web.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            web.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+    }
+
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+
+    /// The satellite ran window.close() (hang-up), or the call ended.
+    func closed() {
+        guard presentingViewController != nil else { onClose?(); return }
+        dismiss(animated: true) { [weak self] in self?.onClose?() }
+    }
+}

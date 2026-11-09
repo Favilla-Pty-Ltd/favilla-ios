@@ -59,6 +59,16 @@ jobs:
           for f in pwa.html bridge.js; do test -f "$APP/$f" || { echo "::error::$f missing from the app"; exit 1; }; done
           grep -q 'data-pwa-build=' "$APP/pwa.html" && echo "pwa.html $(grep -o 'data-pwa-build="[0-9a-f]*"' "$APP/pwa.html" | head -1) and bridge.js present"
 
+  bridge:
+    # The push bridge for relay.favillakey.io (server/push-bridge): Linux, cheap.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --quiet websockets aiohttp "httpx[http2]" pyjwt cryptography
+      - run: python3 server/push-bridge/test_bridge.py
+      - run: bash -n server/push-bridge/favilla-push.sh
+
   testflight:
     needs: build
     if: github.event_name == 'workflow_dispatch' && inputs.upload

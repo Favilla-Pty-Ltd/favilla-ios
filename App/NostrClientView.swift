@@ -101,7 +101,7 @@ struct NostrClientView: UIViewRepresentable {
             for _ in 0..<3 {
                 let evs = await Bunker.callWraps(pubkey: pk)
                 if !evs.isEmpty, let d = try? JSONSerialization.data(withJSONObject: evs), let js = String(data: d, encoding: .utf8) {
-                    wv.evaluateJavaScript("window.__favillaCallWraps && window.__favillaCallWraps(\(js))")
+                    wv.evaluateJavaScript("window.__favillaCallWraps && window.__favillaCallWraps(\(js))") { _, _ in }
                     return
                 }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)

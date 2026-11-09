@@ -177,7 +177,7 @@ enum Bunker {
             for (i, (id, ev)) in pending.enumerated() {
                 guard ev.count <= 32_768 else { log("request \(id.prefix(8)) too large, skipped"); markSeen([id]); continue }
                 do {
-                    let a = try await k.request(cNip46, ev, timeout: min(12, max(1, deadline.timeIntervalSinceNow)))
+                    let a = try await k.request(cNip46, ev, timeout: min(12, max(6, deadline.timeIntervalSinceNow)))   // the KEY may hold it 4 s
                     if a.rsp == AppChannel.rErr, let st = a.body.first, st == sBusy {
                         // An approval on the KEY's screen, or its queue is full: this and the rest wait.
                         o.later = Array(pending[i...])

@@ -48,6 +48,8 @@ final class NotificationService: UNNotificationServiceExtension {
         deliver(t, b)
     }
 
+    private var quiet = false      // follow-up rounds: update the notification without a new banner
+
     private func deliver(_ title: String, _ body: String) {
         lock.lock()
         let h = handler; handler = nil
@@ -55,6 +57,7 @@ final class NotificationService: UNNotificationServiceExtension {
         guard let h, let c = content else { return }
         c.title = title
         c.body = body
+        if quiet, #available(iOS 15.0, *) { c.interruptionLevel = .passive }
         h(c)
     }
 
@@ -64,6 +67,7 @@ final class NotificationService: UNNotificationServiceExtension {
 
     private func bunker(_ pk: String, round: Int) async {
         let title = "Favilla bunker"
+        quiet = round > 0
         best = (title, "Signing request from a Nostr app. Open Favilla to answer it.")
         guard Bunker.on, let info = Bunker.Info.load(), info.pubkey == pk else {
             deliver(title, "Signing for other apps is off on this iPhone."); return
@@ -91,7 +95,11 @@ final class NotificationService: UNNotificationServiceExtension {
             deliver(title, "Couldn't reach your KEY. \(error)"); return
         }
         Bunker.log("extension: KEY open in \(ms) ms (\(s.how))")
-        let deadline = t0.addingTimeInterval(22)   // iOS allows about 30 s; replies still need publishing
+        // iOS shows the notification only when this finishes. The first run hands
+        // the request over and stops within about 6 s (time for the KEY to sign on
+        // its own), so "approve it on your KEY" shows at once; follow-up runs then
+        // wait for the approval, up to 22 s each (iOS allows about 30).
+        let deadline = t0.addingTimeInterval(round == 0 ? 6 : 22)
         let o = await Bunker.serve(reqs, via: s, relays: info.relays, until: deadline, poll: true) { [weak self] o in
             if o.sent > 0 { self?.best = (title, Self.text(o)) }
             else if o.taken > 0 { self?.best = (title, "Approve it on your KEY.") }

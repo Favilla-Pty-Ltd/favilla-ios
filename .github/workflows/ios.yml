@@ -96,6 +96,10 @@ jobs:
         run: |
           python3 -m pip install --quiet --break-system-packages pyjwt cryptography || python3 -m pip install --quiet pyjwt cryptography
           python3 .github/scripts/revoke_ci_dev_certs.py
+      - name: Register any missing App IDs and capabilities (Xcode can't create new ones with the key)
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+        run: python3 .github/scripts/ensure_bundle_ids.py
       - name: Archive
         run: |
           set -o pipefail

@@ -187,6 +187,76 @@
     if (route === 'bluetooth' && ev.target && ev.target.id === 'pair-host-input') ev.target.placeholder = 'Bluetooth: leave blank and tap Connect';
   }, true);
 
+  // ---- 5. YouTube ---------------------------------------------------------------
+  // YouTube's embedded player needs to know the web site it is embedded on, and
+  // this page has none (favilla://), so the in-page player shows an error. A tap
+  // on a YouTube card plays it in the app's own player instead.
+  document.addEventListener('click', function (ev) {
+    var box = ev.target && ev.target.closest && ev.target.closest('[data-ytid]');
+    if (!box) return;
+    var id = box.getAttribute('data-ytid');
+    if (!/^[A-Za-z0-9_-]{6,20}$/.test(id || '')) return;
+    ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation();
+    try { mh.favillaApp.postMessage({ youtube: id }); } catch (e) {}
+  }, true);
+
+  // ---- 6. link previews --------------------------------------------------------
+  // The PWA draws a plain card for a link (icon, site, path): served by the KEY
+  // over plain http it can't read other sites. The app can: when a link card
+  // scrolls into view the iPhone reads the page's og: tags itself (straight from
+  // the site, no proxy) and the card becomes a preview with picture, title and
+  // summary, in the PWA's own .link-preview style.
+  var previews = {};          // url -> {title, desc, image, site} | null
+  var waiting = [], running = 0;
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; }
+  function fill(a, p) {
+    if (!p || !(p.title || p.image) || !a.isConnected) return;
+    var host = '';
+    try { host = new URL(a.href).hostname.replace(/^www\./, ''); } catch (e) {}
+    a.className = 'link-preview fv-lp';
+    a.style.display = 'block';
+    a.textContent = '';
+    if (p.image) {
+      var img = el('img', 'link-preview-img'); img.loading = 'lazy'; img.alt = ''; img.referrerPolicy = 'no-referrer';
+      img.onerror = function () { img.remove(); };
+      img.src = p.image; a.appendChild(img);
+    }
+    var b = el('div', 'link-preview-body');
+    b.appendChild(el('div', 'link-preview-domain', p.site || host));
+    if (p.title) b.appendChild(el('div', 'link-preview-title', p.title));
+    if (p.desc) b.appendChild(el('div', 'link-preview-desc', p.desc));
+    a.appendChild(b);
+  }
+  function next() {
+    while (running < 3 && waiting.length) {
+      var a = waiting.shift(), url = a.href;
+      if (!a.isConnected) continue;
+      if (url in previews) { fill(a, previews[url]); continue; }
+      running++;
+      mh.favillaPreview.postMessage({ url: url }).then(function (a, url) { return function (p) {
+        previews[url] = p || null; fill(a, p);
+        document.querySelectorAll('a.link-card[data-fv-lp="1"]').forEach(function (o) { if (o.href === url) fill(o, p); });
+      }; }(a, url), function (url) { return function () { previews[url] = null; }; }(url)).then(function () { running--; next(); });
+    }
+  }
+  var seen = typeof IntersectionObserver === 'function' ? new IntersectionObserver(function (es) {
+    es.forEach(function (e) { if (e.isIntersecting) { seen.unobserve(e.target); waiting.push(e.target); } });
+    next();
+  }, { rootMargin: '400px 0px' }) : null;
+  function scan(root) {
+    if (!seen || !mh.favillaPreview || !root.querySelectorAll) return;
+    var list = Array.prototype.slice.call(root.querySelectorAll('a.link-card:not(.lc-nostr):not([data-fv-lp])'));
+    if (root.matches && root.matches('a.link-card:not(.lc-nostr):not([data-fv-lp])')) list.push(root);
+    list.forEach(function (a) {
+      if (!/^https?:/i.test(a.href || '')) return;
+      a.setAttribute('data-fv-lp', '1');
+      seen.observe(a);
+    });
+  }
+  new MutationObserver(function (ms) {
+    ms.forEach(function (m) { m.addedNodes.forEach(function (n) { if (n.nodeType === 1) scan(n); }); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+
   // ---- 4. status bar strip follows the page's theme ------------------------------
   var lastBg = '';
   function sendBg() {

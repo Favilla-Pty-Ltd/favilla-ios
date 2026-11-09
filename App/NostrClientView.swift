@@ -34,6 +34,7 @@ struct NostrClientView: UIViewRepresentable {
         let uc = cfg.userContentController
         context.coordinator.installScripts(uc)
         uc.addScriptMessageHandler(context.coordinator, contentWorld: .page, name: "favillaKey")
+        uc.addScriptMessageHandler(context.coordinator, contentWorld: .page, name: "favillaPreview")
         uc.add(context.coordinator, name: "favillaKeyCancel")
         uc.add(context.coordinator, name: "favillaApp")
 
@@ -112,6 +113,22 @@ struct NostrClientView: UIViewRepresentable {
         // A call to the KEY from the page (bridge.js). Answered with
         // {status, contentType, body (base64)} or an error string.
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
+            if message.name == "favillaPreview" {
+                // A link card's preview (bridge.js): the page's og: tags, read by the iPhone.
+                guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.protocol == NostrClientView.scheme,
+                      let m = message.body as? [String: Any], let url = m["url"] as? String else { replyHandler(nil, "refused"); return }
+                Task {
+                    let c = await LinkPreview.card(for: url)
+                    let out: [String: Any]? = c.map { c in
+                        var d: [String: Any] = [:]
+                        if let v = c.title { d["title"] = v }; if let v = c.desc { d["desc"] = v }
+                        if let v = c.image { d["image"] = v }; if let v = c.site { d["site"] = v }
+                        return d
+                    }
+                    await MainActor.run { replyHandler(out, nil) }
+                }
+                return
+            }
             guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.protocol == NostrClientView.scheme,
                   let m = message.body as? [String: Any],
                   let id = m["id"] as? Int,
@@ -150,6 +167,8 @@ struct NostrClientView: UIViewRepresentable {
                 tasks[id]?.cancel(); tasks[id] = nil
             } else if message.name == "favillaApp", m["open"] as? String == "settings" {
                 parent.onOpenSettings()
+            } else if message.name == "favillaApp", let id = m["youtube"] as? String {
+                WebExtras.playYouTube(id, from: webView)
             } else if message.name == "favillaApp", let bg = m["bg"] as? String, let c = Coordinator.colour(css: bg) {
                 webView?.backgroundColor = c
                 webView?.scrollView.backgroundColor = c
@@ -164,7 +183,7 @@ struct NostrClientView: UIViewRepresentable {
             return UIColor(red: n[0] / 255, green: n[1] / 255, blue: n[2] / 255, alpha: 1)
         }
 
-        // Only the bundled page loads here. Links go to Safari; the PWA's one
+        // Only the bundled page loads here. Links open in the in-app browser; the PWA's one
         // allowed frame (YouTube embeds, frame-src in its CSP) loads in place.
         func webView(_ wv: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = a.request.url else { decisionHandler(.cancel); return }
@@ -172,16 +191,16 @@ struct NostrClientView: UIViewRepresentable {
             if a.targetFrame?.isMainFrame == false, url.host?.hasSuffix("youtube.com") == true { decisionHandler(.allow); return }
             if a.targetFrame?.isMainFrame == false, url.scheme == "about" { decisionHandler(.allow); return }
             if ["http", "https", "lightning", "bitcoin", "nostr", "mailto"].contains(url.scheme ?? "") {
-                UIApplication.shared.open(url)
+                WebExtras.open(url, from: wv)
             }
             decisionHandler(.cancel)
         }
 
         func webViewWebContentProcessDidTerminate(_ wv: WKWebView) { wv.reload() }
 
-        // window.open / target=_blank: Safari.
+        // window.open / target=_blank: the in-app browser.
         func webView(_ wv: WKWebView, createWebViewWith c: WKWebViewConfiguration, for a: WKNavigationAction, windowFeatures f: WKWindowFeatures) -> WKWebView? {
-            if let url = a.request.url { UIApplication.shared.open(url) }
+            if let url = a.request.url { WebExtras.open(url, from: wv) }
             return nil
         }
 

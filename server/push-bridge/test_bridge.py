@@ -128,7 +128,7 @@ async def main():
     await asyncio.sleep(0.2)
     ok(len(pushes) == n0 + 1 and pushes[-1][5] == 1, "again: one follow-up push, round 1")
     r = await client.post("/push/again", json={"pubkey": KEY, "token": TOK, "round": 2})
-    ok((await r.json())["ok"] is False, "again: a second within 10 s is refused")
+    ok((await r.json())["ok"] is False, "again: a second within 3 s is refused")
     r = await client.post("/push/again", json={"pubkey": KEY, "token": "ab" * 32, "round": 1})
     ok((await r.json())["ok"] is False, "again: an unknown phone gets nothing")
     r = await client.post("/push/again", json={"pubkey": KEY, "token": TOK, "round": 99})

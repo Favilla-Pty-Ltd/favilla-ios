@@ -49,7 +49,7 @@ MAX_TOKENS = 4          # phones per KEY
 PUSH_GAP_S = 1.0        # at most one push per phone per second (a trailing one follows)
 AGAIN_MAX = 6           # follow-up pushes per request chain (about 3 minutes of waiting for an approval)
 AGAIN_DELAY_S = 2       # after the extension asks (it has just stopped)
-AGAIN_GAP_S = 10        # at most one follow-up per phone per 10 s
+AGAIN_GAP_S = 3         # at most one follow-up per phone per 3 s
 
 
 # ---------------------------------------------------------------- state ------
@@ -162,7 +162,7 @@ class Apns:
 
     async def send(self, device, env, pubkey, waiting, round_=0):
         host = "api.sandbox.push.apple.com" if env == "development" else "api.push.apple.com"
-        text = "Signing request from a Nostr app" if not round_ else "Waiting for you to approve on the KEY"
+        text = "Signing request from a Nostr app"
         body = {"aps": {"alert": {"title": "Favilla", "body": text},
                         "mutable-content": 1, "thread-id": "bunker"},
                 "fv": {"pk": pubkey, "n": waiting, "r": round_}}
@@ -291,7 +291,7 @@ class Bridge:
     # request waiting for a button press on the KEY can take longer. When the
     # extension runs out with the KEY still busy, it asks for another push a few
     # seconds later, and the next run collects the reply. At most AGAIN_MAX rounds.
-    async def again(self, pk, token, round_):
+    async def again(self, pk, token, round_, delay=None):
         env = self.store.reg.get(pk, {}).get(token, {}).get("env")
         if not env:
             return False
@@ -299,8 +299,10 @@ class Bridge:
             return False
         self.last_again[token] = time.time()
 
+        wait = AGAIN_DELAY_S if delay is None else delay
+
         async def later():
-            await asyncio.sleep(AGAIN_DELAY_S)
+            await asyncio.sleep(wait)
             try:
                 status, reason = await self.sender(token, env, pk, len(self.pending.get(pk)), round_)
                 if status != 200:
@@ -308,7 +310,7 @@ class Bridge:
             except Exception as e:  # noqa: BLE001
                 log.warning("follow-up push to %s…: %s", token[:8], e)
         asyncio.ensure_future(later())
-        log.info("follow-up push %d for %s… in %d s", round_, token[:8], AGAIN_DELAY_S)
+        log.info("follow-up push %d for %s… in %s s", round_, token[:8], wait)
         return True
 
 
@@ -379,7 +381,11 @@ def make_app(bridge):
             rnd = 0
         if not HEX64.match(pk) or not TOKEN.match(tok) or not 1 <= rnd <= AGAIN_MAX:
             return web.json_response({"error": f"bad pubkey, token or round (1 to {AGAIN_MAX})"}, status=400)
-        ok = await bridge.again(pk, tok, rnd)
+        try:
+            delay = min(5.0, max(0.0, float(b.get("delay", AGAIN_DELAY_S))))
+        except (TypeError, ValueError):
+            delay = AGAIN_DELAY_S
+        ok = await bridge.again(pk, tok, rnd, delay)
         return web.json_response({"ok": ok})
 
     async def health(req):

@@ -78,6 +78,15 @@ final class NotificationService: UNNotificationServiceExtension {
         guard let creds = Credentials.load() else {
             deliver(title, "Open Favilla and PAIR THE APP to sign for other apps."); return
         }
+        // iOS shows the banner only when this run finishes, and handing requests
+        // to the KEY can take several seconds (it holds each up to 4 s). So the
+        // first run shows the banner at once and asks the bridge to wake the
+        // phone again straight away; that quiet run does the work.
+        if round == 0, await Bunker.again(pubkey: pk, round: 1, delay: 0) {
+            Bunker.log("extension: banner shown in \(ms) ms, work handed to the next wake")
+            deliver(title, "Signing request from a Nostr app. Approve it on your KEY if it asks.")
+            return
+        }
         let reqs: [(String, Data)]
         do { reqs = try await Bunker.pending(pubkey: pk) } catch {
             Bunker.log("extension: bridge unreachable: \(error.localizedDescription)")

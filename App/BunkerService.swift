@@ -176,7 +176,14 @@ final class BunkerService: ObservableObject {
     // MARK: - App open: listen here
 
     func appActive(_ yes: Bool) {
-        if yes { NostrLink.shared.stayUp() }
+        if yes {
+            NostrLink.shared.stayUp()
+            // The quiet bunker notes in Notification Centre are history once you're here.
+            let nc = UNUserNotificationCenter.current()
+            nc.getDeliveredNotifications { all in
+                nc.removeDeliveredNotifications(withIdentifiers: all.filter { $0.request.content.threadIdentifier == "bunker" || $0.request.content.userInfo["fv"] != nil }.map { $0.request.identifier })
+            }
+        }
         active = yes
         if yes { startIfReady() } else { stop() }
     }

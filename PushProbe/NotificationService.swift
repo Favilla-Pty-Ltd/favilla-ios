@@ -50,7 +50,37 @@ final class NotificationService: UNNotificationServiceExtension {
         deliver(t, b)
     }
 
-    private var quiet = false      // follow-up rounds: update the notification without a new banner
+    // Bunker notifications are quiet (10 Nov, Josh: no banner when the KEY signs
+    // by itself): they go to Notification Centre with no banner, sound or buzz.
+    // iOS won't run this extension without delivering something. A banner shows
+    // only when you are needed: an approval on the KEY, or a KEY that can't be used.
+    private var quiet = false
+    private var sentSoFar = 0
+    private var finished = false
+
+    /// A problem you can fix (KEY locked, out of reach, not paired): a banner, at most one a minute.
+    private func problem(_ title: String, _ body: String) {
+        let d = Bunker.store, now = Date().timeIntervalSince1970
+        if now - d.double(forKey: "bunkerProblemAt") > 60 { d.set(now, forKey: "bunkerProblemAt"); quiet = false }
+        deliver(title, body)
+    }
+
+    /// The KEY has had the request 10 s and sent nothing: it is waiting for a
+    /// button press. Say so now, with a banner (this run may wait 20 s more).
+    private func askApprovalIfStuck() {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard let self else { return }
+            self.lock.lock(); let stuck = !self.finished && self.sentSoFar == 0; self.lock.unlock()
+            guard stuck else { return }
+            let c = UNMutableNotificationContent()
+            c.title = "Favilla bunker"
+            c.body = "Signing request from a Nostr app. Approve it on your KEY."
+            c.threadIdentifier = "bunker"
+            try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "bunker-approve", content: c, trigger: nil))
+            Bunker.log("extension: asked for an approval on the KEY")
+        }
+    }
 
     private func deliver(_ title: String, _ body: String) {
         lock.lock()
@@ -84,7 +114,7 @@ final class NotificationService: UNNotificationServiceExtension {
 
     private func bunker(_ pk: String, round: Int, carried: [(String, Data)]) async {
         let title = "Favilla bunker"
-        quiet = round > 0
+        quiet = true
         best = (title, "Signing request from a Nostr app. Open Favilla to answer it.")
         guard Bunker.on, let info = Bunker.Info.load(), info.pubkey == pk else {
             deliver(title, "Signing for other apps is off on this iPhone."); return
@@ -93,7 +123,7 @@ final class NotificationService: UNNotificationServiceExtension {
             deliver(title, "Answered in the Favilla app."); return
         }
         guard let creds = Credentials.load() else {
-            deliver(title, "Open Favilla and PAIR THE APP to sign for other apps."); return
+            problem(title, "Open Favilla and PAIR THE APP to sign for other apps."); return
         }
         // iOS shows the banner only when this run finishes, and handing requests
         // to the KEY can take several seconds (it holds each up to 4 s). So the
@@ -101,7 +131,7 @@ final class NotificationService: UNNotificationServiceExtension {
         // phone again straight away; that quiet run does the work.
         if round == 0, await Bunker.again(pubkey: pk, round: 1, delay: 0) {
             Bunker.log("extension: banner shown in \(ms) ms, work handed to the next wake")
-            deliver(title, "Signing request from a Nostr app. Approve it on your KEY if it asks.")
+            deliver(title, "Signing request from a Nostr app.")
             return
         }
         // Bluetooth first, in parallel with everything else: the connect is the
@@ -117,7 +147,7 @@ final class NotificationService: UNNotificationServiceExtension {
         if more == nil { Bunker.log("extension: bridge unreachable, \(carried.count) request(s) from the push") }
         if let e = await opening {
             Bunker.log("extension: \(e) (\(ms) ms, \(s.how))")
-            deliver(title, "Couldn't reach your KEY. \(e)"); return
+            problem(title, "Couldn't reach your KEY. \(e)"); return
         }
         // A follow-up push (round 1 and on) may come with nothing new: it is here
         // to collect replies the KEY finished after the last run (an approval).
@@ -128,7 +158,13 @@ final class NotificationService: UNNotificationServiceExtension {
         // its own), so "approve it on your KEY" shows at once; follow-up runs then
         // wait for the approval, up to 22 s each (iOS allows about 30).
         let deadline = t0.addingTimeInterval(round == 0 ? 6 : 22)
+        let askedAt = Bunker.store.double(forKey: "bunkerAskedAt"), now = Date().timeIntervalSince1970
+        if !reqs.isEmpty, now - askedAt > 30 {
+            Bunker.store.set(now, forKey: "bunkerAskedAt")
+            askApprovalIfStuck()
+        }
         let o = await Bunker.serve(reqs, via: s, relays: info.relays, until: deadline, poll: true) { [weak self] o in
+            if let self { self.lock.lock(); self.sentSoFar = o.sent; self.lock.unlock() }
             if o.sent > 0 { self?.best = (title, Self.text(o)) }
             else if o.taken > 0 { self?.best = (title, "Approve it on your KEY.") }
         }
@@ -141,8 +177,11 @@ final class NotificationService: UNNotificationServiceExtension {
             Bunker.log("extension: follow-up push \(round + 1) " + (again ? "asked for" : "refused"))
         }
         Bunker.log("extension: done in \(ms) ms: taken \(o.taken), replies \(o.replies), accepted \(o.sent)" + (o.waiting ? ", still waiting" : "") + (o.error.map { ", \($0)" } ?? ""))
-        if let e = o.error, o.taken == 0 { deliver(title, e); return }
+        lock.lock(); finished = true; lock.unlock()
+        if o.sent > 0 { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["bunker-approve"]) }
+        if let e = o.error, o.taken == 0 { problem(title, e); return }
         if o.waiting && again && o.sent == 0 { deliver(title, "Approve it on your KEY. It sends as soon as you do."); return }
+        if o.waiting && o.sent == 0 { quiet = false }      // no follow-up coming: you need to know
         deliver(title, Self.text(o))
     }
 

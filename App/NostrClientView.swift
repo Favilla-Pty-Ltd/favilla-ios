@@ -27,6 +27,7 @@ struct NostrClientView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
+        cfg.preferences.javaScriptCanOpenWindowsAutomatically = true   // the call window opens on a lock-screen answer too
         cfg.setURLSchemeHandler(context.coordinator.files, forURLScheme: Self.scheme)
         cfg.websiteDataStore = .default()
         cfg.allowsInlineMediaPlayback = true
@@ -50,6 +51,16 @@ struct NostrClientView: UIViewRepresentable {
         if #available(iOS 16.4, *) { wv.isInspectable = true }
         #endif
         context.coordinator.webView = wv
+        // Answer / decline from the lock-screen call UI run the PWA's own call code.
+        CallRing.shared.onCommand = { [weak wv] cmd in
+            wv?.evaluateJavaScript("window.__favillaCall && window.__favillaCall('\(cmd)')")
+        }
+        // A ring started from a push: the client gets the call wraps the bridge
+        // kept (the offer is ephemeral; a client that wasn't connected missed it).
+        context.coordinator.wakeObserver = NotificationCenter.default.addObserver(forName: CallRing.wake, object: nil, queue: .main) { [weak wv] _ in
+            guard let wv else { return }
+            Task { @MainActor in await Coordinator.feedCallWraps(wv) }
+        }
         wv.load(URLRequest(url: URL(string: Self.origin + "/")!))
         return wv
     }
@@ -81,6 +92,21 @@ struct NostrClientView: UIViewRepresentable {
         private var lastRoute = ""
 
         private(set) var loadedRoute = KeyRoute.current
+        var wakeObserver: NSObjectProtocol?
+
+        /// The bridge's recent call wraps, into the PWA (bridge.js). Tried a few
+        /// times: the KEY may take a moment, and the PWA its relays.
+        @MainActor static func feedCallWraps(_ wv: WKWebView) async {
+            guard let pk = Bunker.ClientInfo.load()?.pubkey else { return }
+            for _ in 0..<3 {
+                let evs = await Bunker.callWraps(pubkey: pk)
+                if !evs.isEmpty, let d = try? JSONSerialization.data(withJSONObject: evs), let js = String(data: d, encoding: .utf8) {
+                    wv.evaluateJavaScript("window.__favillaCallWraps && window.__favillaCallWraps(\(js))")
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
 
         init(_ p: NostrClientView) { parent = p }
 
@@ -169,6 +195,16 @@ struct NostrClientView: UIViewRepresentable {
                 parent.onOpenSettings()
             } else if message.name == "favillaApp", let id = m["youtube"] as? String {
                 WebExtras.playYouTube(id, from: webView)
+            } else if message.name == "favillaApp", let pk = m["identity"] as? String {
+                // Who you are and where calls arrive: the push bridge rings for this.
+                let relays = (m["callRelays"] as? [String] ?? []).filter { $0.hasPrefix("wss://") }
+                BunkerService.shared.clientInfo(pubkey: pk, relays: relays)
+                // A ring may be up from before this page loaded (the app was closed).
+                if CallRing.shared.current != nil, let wv = webView { Task { @MainActor in await Coordinator.feedCallWraps(wv) } }
+            } else if message.name == "favillaApp", let name = m["callIncoming"] as? String {
+                CallRing.shared.pwaIncoming(name: String(name.prefix(60)), video: m["video"] as? Bool ?? false)
+            } else if message.name == "favillaApp", let phase = m["callPhase"] as? String {
+                CallRing.shared.pwaState(phase)
             } else if message.name == "favillaApp", let bg = m["bg"] as? String, let c = Coordinator.colour(css: bg) {
                 webView?.backgroundColor = c
                 webView?.scrollView.backgroundColor = c

@@ -276,7 +276,67 @@
     } catch (e) {}
   }
 
-  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); }
+  // ---- 7. calls ring like phone calls ---------------------------------------------
+  // The app reports an incoming call to iOS (CallKit) and runs the PWA's own
+  // accept / decline when you answer on the lock screen. Here: who you are and
+  // where calls arrive (for the push bridge), the PWA's incoming banner (the
+  // caller's name), its call state, and the commands back.
+  var lastIdentity = '', lastPhase = '';
+  function reportIdentity() {
+    try {
+      var pk = (typeof state === 'object' && state && state.pubkeyHex) || '';
+      var rl = (typeof CALL_RELAYS !== 'undefined' && Array.isArray(CALL_RELAYS)) ? CALL_RELAYS.slice(0, 8) : [];
+      if (!/^[0-9a-f]{64}$/i.test(pk)) return;
+      var key = pk + '|' + rl.join(',');
+      if (key === lastIdentity) return;
+      lastIdentity = key;
+      mh.favillaApp.postMessage({ identity: pk.toLowerCase(), callRelays: rl });
+    } catch (e) {}
+  }
+  function reportCallState() {
+    try {
+      var st = (typeof pwacState === 'object' && pwacState) ? pwacState : null;
+      if (!st) return;
+      var phase = st.phase || 'idle';
+      if (phase === lastPhase) return;
+      lastPhase = phase;
+      if (phase === 'incoming') {
+        var name = (document.getElementById('pwacall-name') || {}).textContent || 'Nostr call';
+        mh.favillaApp.postMessage({ callIncoming: name, video: !!st.video });
+      } else {
+        mh.favillaApp.postMessage({ callPhase: phase });
+      }
+    } catch (e) {}
+  }
+  setInterval(function () { reportIdentity(); reportCallState(); }, 500);
+  // The app's command (from the lock-screen call UI): the PWA's own functions.
+  window.__favillaCall = function (cmd) {
+    try {
+      if (cmd === 'accept' && typeof callsAccept === 'function') callsAccept();
+      else if (cmd === 'decline' && typeof callsReject === 'function') callsReject();
+      else if (cmd === 'hangup') {
+        var st = (typeof pwacState === 'object' && pwacState) ? pwacState : null;
+        if (st && st.phase === 'incoming' && typeof callsReject === 'function') callsReject();
+        else if (st && st.phase !== 'idle') {
+          if (st.peer && typeof pwacSend === 'function' && typeof CALLS_K !== 'undefined') pwacSend(CALLS_K.HANGUP, st.peer, 'hangup').catch(function () {});
+          if (typeof satEnd === 'function') satEnd('Call ended');
+          if (typeof callsTeardown === 'function') callsTeardown('Call ended');
+        }
+      }
+    } catch (e) {}
+    reportCallState();
+  };
+
+  // Call wraps the bridge kept while this client wasn't connected (ephemeral
+  // events: a relay never replays them). Into the PWA's own receive path.
+  window.__favillaCallWraps = function (evs) {
+    try {
+      if (!Array.isArray(evs) || typeof callsIngestWrap !== 'function') return;
+      evs.forEach(function (ev) { if (ev && ev.kind === 21059) { ev._live = true; callsIngestWrap(ev); } });
+    } catch (e) {}
+  };
+
+  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

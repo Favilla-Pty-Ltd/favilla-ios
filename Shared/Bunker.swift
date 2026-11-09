@@ -230,16 +230,48 @@ enum Bunker {
 
     // MARK: - The push bridge
 
-    static func register(token: String, env: String, info: Info) async throws {
+    /// The identity and call relays the Nostr client reported (bridge.js, from the
+    /// PWA): calls ring for this pubkey, on these relays, with or without the bunker.
+    struct ClientInfo: Codable, Equatable {
+        var pubkey: String
+        var relays: [String]
+        static let key = "clientInfo"
+        static func load() -> ClientInfo? { store.data(forKey: key).flatMap { try? JSONDecoder().decode(ClientInfo.self, from: $0) } }
+        func save() { Bunker.store.set(try? JSONEncoder().encode(self), forKey: ClientInfo.key) }
+    }
+
+    static func register(token: String, env: String, info: Info, voip: String? = nil) async throws {
         var q = URLRequest(url: bridge.appendingPathComponent("register"), timeoutInterval: 15)
         q.httpMethod = "POST"
         q.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        q.httpBody = try JSONSerialization.data(withJSONObject: ["pubkey": info.pubkey, "token": token, "env": env, "relays": info.relays])
+        var b: [String: Any] = ["pubkey": info.pubkey, "token": token, "env": env, "relays": info.relays]
+        if let voip, !voip.isEmpty { b["voip"] = voip }
+        q.httpBody = try JSONSerialization.data(withJSONObject: b)
         let (d, r) = try await URLSession.shared.data(for: q)
         guard (r as? HTTPURLResponse)?.statusCode == 200 else {
             throw NSError(domain: "bunker", code: (r as? HTTPURLResponse)?.statusCode ?? 0,
                           userInfo: [NSLocalizedDescriptionKey: "The push bridge refused the registration: " + (String(data: d, encoding: .utf8) ?? "")])
         }
+    }
+
+    /// Calls: the recent call wraps the bridge saw for this pubkey, as JSON event objects.
+    static func callWraps(pubkey: String) async -> [[String: Any]] {
+        var c = URLComponents(url: bridge.appendingPathComponent("calls"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "pubkey", value: pubkey)]
+        guard let (d, r) = try? await URLSession.shared.data(for: URLRequest(url: c.url!, timeoutInterval: 6)),
+              (r as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [] }
+        return j["events"] as? [[String: Any]] ?? []
+    }
+
+    /// Calls: tell the bridge a call is live (no VoIP pushes meanwhile) or over.
+    static func inCall(_ live: Bool) async {
+        guard let pk = ClientInfo.load()?.pubkey ?? Info.load()?.pubkey else { return }
+        var q = URLRequest(url: bridge.appendingPathComponent("incall"), timeoutInterval: 5)
+        q.httpMethod = "POST"
+        q.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        q.httpBody = try? JSONSerialization.data(withJSONObject: ["pubkey": pk, "live": live])
+        _ = try? await URLSession.shared.data(for: q)
     }
 
     static let againMax = 6

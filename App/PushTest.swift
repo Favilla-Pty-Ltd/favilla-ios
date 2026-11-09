@@ -67,12 +67,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // The Bluetooth bunker keeps its link to the KEY up, also when iOS
         // relaunches the app in the background to hand that link back.
         Task { @MainActor in BunkerService.shared.start() }
-        // Keep the token fresh once notifications are allowed (it can change).
-        UNUserNotificationCenter.current().getNotificationSettings { s in
-            if s.authorizationStatus == .authorized {
-                DispatchQueue.main.async { app.registerForRemoteNotifications() }
-            }
-        }
+        // The APNs token comes without asking (only banners need permission), and
+        // the push bridge needs it for calls as well as the bunker. Calls ring
+        // through a VoIP token (CallRing), also asked for here.
+        app.registerForRemoteNotifications()
+        Task { @MainActor in CallRing.shared.start() }
         return true
     }
 

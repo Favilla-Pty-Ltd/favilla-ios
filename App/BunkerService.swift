@@ -170,23 +170,42 @@ final class BunkerService: ObservableObject {
 
     /// The token goes to the bridge with the KEY's relays. Notifications must be
     /// allowed; PushTest asks iOS and keeps the token fresh.
+    /// One registration covers the bunker (when on) and incoming calls (always,
+    /// once the client has said who you are): the identity's pubkey, the union
+    /// of the bunker's and the call relays, the APNs token and the VoIP token.
     func registerPush() async {
-        guard on, let i = info else { return }
+        let client = Bunker.ClientInfo.load()
+        let pk = (on ? info?.pubkey : nil) ?? client?.pubkey
+        guard let pk else { return }
+        var relays = client?.relays ?? []
+        if on, let i = info { for r in i.relays where !relays.contains(r) { relays.append(r) } }
+        if relays.isEmpty { relays = ["wss://relay.favillakey.io"] }
         let tok = PushTest.shared.token
         guard !tok.isEmpty else {
-            status = "Allow notifications so the KEY can sign while Favilla is closed..."
-            PushTest.shared.enable()
+            if on {
+                status = "Allow notifications so the KEY can sign while Favilla is closed..."
+                PushTest.shared.enable()
+            }
             return
         }
+        let voip = CallRing.shared.voipToken
         do {
-            try await Bunker.register(token: tok, env: BunkerService.env, info: i)
-            status = "On. Other apps can reach your KEY through this iPhone, even with Favilla closed."
-            Bunker.log("push bridge: registered")
+            try await Bunker.register(token: tok, env: BunkerService.env, info: Bunker.Info(pubkey: pk, relays: relays), voip: voip)
+            if on { status = "On. Other apps can reach your KEY through this iPhone, even with Favilla closed." }
+            Bunker.log("push bridge: registered" + (voip.isEmpty ? " (no call ring token yet)" : ", calls ring"))
         } catch {
-            status = "On while Favilla is open. The push bridge isn't answering (\(error.localizedDescription)), so it can't sign while Favilla is closed."
+            if on { status = "On while Favilla is open. The push bridge isn't answering (\(error.localizedDescription)), so it can't sign while Favilla is closed." }
             Bunker.log("push bridge: \(error.localizedDescription)")
         }
         reloadLog()
+    }
+
+    /// The Nostr client said who you are and which relays it takes calls on.
+    func clientInfo(pubkey: String, relays: [String]) {
+        let c = Bunker.ClientInfo(pubkey: pubkey, relays: relays)
+        guard c != Bunker.ClientInfo.load() else { return }
+        c.save()
+        Task { await registerPush() }
     }
 
     /// A new push token arrived (PushTest calls this).

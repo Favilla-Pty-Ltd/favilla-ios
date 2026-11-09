@@ -71,9 +71,11 @@ class Store:
             json.dump(self.reg, f)
         os.replace(tmp, self.path)
 
-    def add(self, pubkey, token, env, relays):
+    def add(self, pubkey, token, env, relays, voip=None):
         toks = self.reg.setdefault(pubkey, {})
-        toks[token] = {"env": env, "relays": relays, "at": int(time.time())}
+        old = toks.get(token) or {}
+        toks[token] = {"env": env, "relays": relays, "at": int(time.time()),
+                       "voip": voip if voip is not None else old.get("voip")}
         if len(toks) > MAX_TOKENS:   # keep the newest phones
             for t, _ in sorted(toks.items(), key=lambda kv: kv[1]["at"])[:len(toks) - MAX_TOKENS]:
                 del toks[t]
@@ -126,6 +128,25 @@ class Pending:
         return [ev for _, ev in q]
 
 
+CALL_KIND = 21059         # the NIP-AC call wrap (OFFER, ANSWER, ICE, HANGUP, all look alike from outside)
+CALL_GAP_S = 20           # at most one ring push per phone per 20 s (ICE wraps come in bursts)
+CALL_KEEP_S = 90          # call wraps kept for the phone to fetch (offers go stale at 60 s)
+CALL_WRAP_MAX = 48
+
+
+def valid_call(ev, pubkeys):
+    """A kind-21059 wrap p-tagged to one of our keys. The bridge can't read it
+    (NIP-44 to the owner's key); the phone finds out what it is."""
+    if not isinstance(ev, dict) or ev.get("kind") != CALL_KIND:
+        return None
+    if not isinstance(ev.get("id"), str) or not HEX64.match(ev["id"]):
+        return None
+    for t in ev.get("tags") or []:
+        if isinstance(t, list) and len(t) >= 2 and t[0] == "p" and t[1] in pubkeys:
+            return t[1]
+    return None
+
+
 def valid_request(ev, pubkeys):
     """A kind-24133 event p-tagged to one of our keys. Signatures are not checked
     here: the KEY checks everything, and a forged event costs the phone one wake."""
@@ -159,6 +180,17 @@ class Apns:
             self._jwt = jwt.encode({"iss": self.team_id, "iat": self._jwt_at}, self.key,
                                    algorithm="ES256", headers={"kid": self.key_id})
         return self._jwt
+
+    async def ring(self, device, env, pubkey, ev):
+        """A VoIP push (PushKit): topic <bundle>.voip, delivered at once or not at all."""
+        host = "api.sandbox.push.apple.com" if env == "development" else "api.push.apple.com"
+        body = {"fv": {"call": 1, "pk": pubkey, "id": ev["id"], "at": ev.get("created_at", 0)}}
+        if len(json.dumps(ev, separators=(",", ":"))) <= PUSH_BUDGET:
+            body["fv"]["ev"] = ev
+        r = await self.http.post(f"https://{host}/3/device/{device}", json=body, headers={
+            "authorization": "bearer " + self.token(), "apns-topic": self.topic + ".voip",
+            "apns-push-type": "voip", "apns-priority": "10", "apns-expiration": str(int(time.time()) + 45)})
+        return r.status_code, r.text
 
     async def send(self, device, env, pubkey, waiting, round_=0, events=None):
         host = "api.sandbox.push.apple.com" if env == "development" else "api.push.apple.com"
@@ -213,6 +245,10 @@ class Bridge:
         self.trailing = set()        # tokens with a trailing push scheduled
         self.last_again = {}         # token -> time of the last follow-up
         self.last_link = {}          # pubkey -> time the app last asked on a KEY nudge (path B)
+        self.last_ring = {}          # pubkey -> time of the last VoIP push
+        self.in_call = {}            # pubkey -> time the app last said it is in a call
+        self.seen_calls = set()
+        self.call_wraps = collections.defaultdict(list)   # pubkey -> recent 21059 wraps (the phone fetches them: ephemeral, so no relay replays them)
         self.fetched = collections.defaultdict(set)   # pubkey -> request ids handed out
         self.stats = collections.Counter()
 
@@ -242,7 +278,7 @@ class Bridge:
                         ev_changed = self.changed.setdefault(url, asyncio.Event())
                         ev_changed.clear()
                         pks = sorted(self.wanted.get(url, ()))
-                        await ws.send(json.dumps(["REQ", "fvpush", {"kinds": [24133], "#p": pks,
+                        await ws.send(json.dumps(["REQ", "fvpush", {"kinds": [24133, CALL_KIND], "#p": pks,
                                                                      "since": int(time.time()) - 10}]))
                         while not ev_changed.is_set():
                             recv = asyncio.ensure_future(ws.recv())
@@ -269,6 +305,10 @@ class Bridge:
         if not isinstance(msg, list) or len(msg) < 3 or msg[0] != "EVENT":
             return
         ev = msg[2]
+        cpk = valid_call(ev, pks)
+        if cpk:
+            await self.ring(cpk, ev, url)
+            return
         pk = valid_request(ev, pks)
         if not pk or not self.pending.add(pk, ev):
             return
@@ -281,6 +321,43 @@ class Bridge:
             asyncio.ensure_future(self._push_unless_taken(pk, ev["id"]))
             return
         await self.push_all(pk)
+
+    # Calls (10 Nov 2026): a 21059 wrap for the owner means a call is starting,
+    # or in progress (ICE, answer, hang-up all travel the same way). The phone
+    # gets a VoIP push, which iOS must turn into a ringing call or an immediate
+    # end; while a call is live the app tells us so and nothing is sent.
+    async def ring(self, pk, ev, url):
+        if ev["id"] in self.seen_calls:
+            return
+        self.seen_calls.add(ev["id"])
+        wraps = self.call_wraps[pk]
+        wraps.append(ev)
+        cutoff = time.time() - CALL_KEEP_S
+        self.call_wraps[pk] = [w for w in wraps if w.get("created_at", 0) >= cutoff][-CALL_WRAP_MAX:]
+        if len(self.seen_calls) > 5000:
+            self.seen_calls.clear()
+        now = time.time()
+        if now - self.in_call.get(pk, 0) < 90:
+            return
+        if now - self.last_ring.get(pk, 0) < CALL_GAP_S:
+            return
+        self.last_ring[pk] = now
+        self.stats["calls"] = self.stats.get("calls", 0) + 1
+        log.info("call wrap %s… for %s… via %s", ev["id"][:12], pk[:12], url)
+        for token, info in list(self.store.reg.get(pk, {}).items()):
+            if not info.get("voip"):
+                continue
+            try:
+                status, reason = await self.sender.ring(info["voip"], info["env"], pk, ev)
+            except Exception as e:  # noqa: BLE001
+                log.warning("VoIP push to %s…: %s", token[:8], e)
+                continue
+            if status == 410 or (status == 400 and "BadDeviceToken" in reason):
+                log.info("VoIP token for %s… is gone (%s); dropping the ring token", token[:8], reason)
+                info["voip"] = None
+                self.store.save()
+            elif status != 200:
+                log.warning("VoIP push to %s…: HTTP %s %s", token[:8], status, reason)
 
     async def push_all(self, pk):
         for token, info in list(self.store.reg.get(pk, {}).items()):
@@ -397,11 +474,14 @@ def make_app(bridge):
         pk, tok = str(b.get("pubkey", "")).lower(), str(b.get("token", "")).lower()
         env = b.get("env", "production")
         relays = b.get("relays") or []
+        voip = b.get("voip")
+        if voip is not None and (not isinstance(voip, str) or not TOKEN.match(voip.lower())):
+            return web.json_response({"error": "bad voip token"}, status=400)
         if not HEX64.match(pk) or not TOKEN.match(tok) or env not in ("production", "development"):
             return web.json_response({"error": "bad pubkey, token or env"}, status=400)
         if not isinstance(relays, list) or not relays or len(relays) > MAX_RELAYS or not all(isinstance(r, str) and RELAY.match(r) for r in relays):
             return web.json_response({"error": f"relays: 1 to {MAX_RELAYS} wss:// URLs"}, status=400)
-        bridge.store.add(pk, tok, env, sorted(set(relays)))
+        bridge.store.add(pk, tok, env, sorted(set(relays)), voip.lower() if voip else None)
         bridge.sync()
         log.info("registered phone %s… for %s… on %d relay(s)", tok[:8], pk[:12], len(set(relays)))
         return web.json_response({"ok": True})
@@ -424,6 +504,31 @@ def make_app(bridge):
         evs = bridge.pending.get(pk)
         bridge.handed_out(pk, evs, req.query.get("via") == "link")
         return web.json_response({"events": evs})
+
+    async def calls(req):
+        """The recent call wraps for a pubkey: the phone feeds them to the client
+        (they are ephemeral, so a client that wasn't connected never sees them)."""
+        if limited(req, 120):
+            return web.json_response({"error": "slow down"}, status=429)
+        pk = req.query.get("pubkey", "").lower()
+        if not HEX64.match(pk):
+            return web.json_response({"error": "bad pubkey"}, status=400)
+        cutoff = time.time() - CALL_KEEP_S
+        return web.json_response({"events": [w for w in bridge.call_wraps.get(pk, []) if w.get("created_at", 0) >= cutoff]})
+
+    async def incall(req):
+        """The app is in a call (or just left one): no VoIP pushes meanwhile."""
+        if limited(req):
+            return web.json_response({"error": "slow down"}, status=429)
+        b = await body(req) or {}
+        pk = str(b.get("pubkey", "")).lower()
+        if not HEX64.match(pk):
+            return web.json_response({"error": "bad pubkey"}, status=400)
+        if b.get("live", True):
+            bridge.in_call[pk] = time.time()
+        else:
+            bridge.in_call.pop(pk, None)
+        return web.json_response({"ok": True})
 
     async def again(req):
         if limited(req):
@@ -453,6 +558,8 @@ def make_app(bridge):
     app.router.add_get("/push/pending", pending)
     app.router.add_get("/push/health", health)
     app.router.add_post("/push/again", again)
+    app.router.add_post("/push/incall", incall)
+    app.router.add_get("/push/calls", calls)
     return app
 
 

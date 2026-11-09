@@ -52,6 +52,13 @@ async def main():
         pushes.append((token, env, pk, n, time.time(), round_, events))
         return 200, ""
 
+    rings = []
+
+    async def ringer(token, env, pk, ev):
+        rings.append((token, pk, ev["id"]))
+        return 200, ""
+    sender.ring = ringer
+
     d = tempfile.mkdtemp()
     store = B.Store(os.path.join(d, "devices.json"))
     br = B.Bridge(store, B.Pending(), sender)
@@ -63,7 +70,7 @@ async def main():
         if reqs:
             break
         await asyncio.sleep(0.05)
-    ok(reqs and reqs[0]["kinds"] == [24133] and reqs[0]["#p"] == [KEY], "subscribes for kind 24133 #p the KEY")
+    ok(reqs and reqs[0]["kinds"] == [24133, 21059] and reqs[0]["#p"] == [KEY], "subscribes for kind 24133 #p the KEY")
 
     ws = clients[0]
     await ws.send(json.dumps(["EVENT", "fvpush", ev(1)]))
@@ -155,6 +162,31 @@ async def main():
     await ws.send(json.dumps(["EVENT", "fvpush", ev(201)]))
     await asyncio.sleep(0.6)
     ok(len(pushes) == n0 + 1, "linked phone didn't take it in time: pushed")
+
+    # calls: a 21059 wrap rings the phone that registered a VoIP token, once per 20 s, not during a call
+    ok(reqs[-1]["kinds"] == [24133, 21059], "calls: subscribed for 21059 too")
+    r = await client.post("/push/register", json={"pubkey": KEY, "token": TOK, "env": "production",
+                                                  "relays": ["wss://relay.favillakey.io"], "voip": "cd" * 32})
+    store.reg[KEY][TOK]["relays"] = [url]; br.sync()
+    ok(r.status == 200 and store.reg[KEY][TOK]["voip"] == "cd" * 32, "calls: VoIP token saved with the registration: " + str(r.status) + " " + str(store.reg.get(KEY, {}).get(TOK)))
+    await asyncio.sleep(0.3)
+    ws = clients[-1]
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(300, kind=21059)]))
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(301, kind=21059)]))
+    await asyncio.sleep(0.3)
+    ok(rings == [("cd" * 32, KEY, f"{300:064x}")], "calls: one ring per 20 s, to the VoIP token")
+    ok(not [e for e in br.pending.get(KEY) if e["kind"] == 21059], "calls: wraps never enter the request queue")
+    br.last_ring.clear()
+    r = await client.post("/push/incall", json={"pubkey": KEY})
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(302, kind=21059)]))
+    await asyncio.sleep(0.3)
+    ok(len(rings) == 1, "calls: no ring while the app says it is in a call")
+    r = await client.post("/push/incall", json={"pubkey": KEY, "live": False})
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(303, kind=21059)]))
+    await asyncio.sleep(0.3)
+    ok(len(rings) == 2, "calls: rings again once the call is over")
+    r = await client.get("/push/calls", params={"pubkey": KEY})
+    ok(sorted(e["id"] for e in (await r.json())["events"]) == sorted(f"{i:064x}" for i in (300, 301, 302, 303)), "calls: the wraps are kept for the phone to fetch")
 
     r = await client.post("/push/unregister", json={"pubkey": KEY, "token": TOK})
     ok(r.status == 200 and TOK not in store.reg.get(KEY, {}), "unregister")

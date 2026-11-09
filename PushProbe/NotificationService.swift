@@ -44,7 +44,7 @@ final class NotificationService: UNNotificationServiceExtension {
     override func serviceExtensionTimeWillExpire() {
         session?.close()
         let (t, b) = best ?? ("Favilla", "Ran out of time reaching your KEY.")
-        Bunker.log("extension: out of time")
+        Bunker.log("extension: out of time at \(ms) ms")
         deliver(t, b)
     }
 
@@ -89,7 +89,7 @@ final class NotificationService: UNNotificationServiceExtension {
             deliver(title, "Couldn't reach your KEY. \(error)"); return
         }
         Bunker.log("extension: KEY open in \(ms) ms (\(s.how))")
-        let deadline = t0.addingTimeInterval(24)
+        let deadline = t0.addingTimeInterval(22)   // iOS allows about 30 s; replies still need publishing
         let o = await Bunker.serve(reqs, via: s, relays: info.relays, until: deadline) { [weak self] o in
             if o.sent > 0 { self?.best = (title, Self.text(o)) }
             else if o.taken > 0 { self?.best = (title, "Approve it on your KEY.") }

@@ -60,8 +60,12 @@ def main() -> int:
                 print(f"::error::registering {ident}: HTTP {st} {errors(j)}"); ok = False; continue
             bid = j["data"]["id"]
             print(f"{ident}: registered ({bid})")
-        st, j = call("GET", f"/bundleIds/{bid}/bundleIdCapabilities?limit=50", tok)
-        have = {c["attributes"]["capabilityType"] for c in (j or {}).get("data", [])} if st == 200 else set()
+        st, j = call("GET", f"/bundleIds/{bid}?include=bundleIdCapabilities", tok)
+        if st != 200:
+            print(f"::warning::{ident}: can't read its capabilities (HTTP {st} {errors(j)}); leaving them alone")
+            continue
+        have = {c["attributes"].get("capabilityType") for c in (j.get("included") or []) if c.get("type") == "bundleIdCapabilities"}
+        print(f"  has: {', '.join(sorted(x for x in have if x)) or 'none listed'}")
         for cap in caps:
             if cap in have:
                 continue

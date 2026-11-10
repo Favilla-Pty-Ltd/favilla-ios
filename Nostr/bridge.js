@@ -346,7 +346,21 @@
     } catch (e) {}
   };
 
-  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); }
+  // ---- 8. no "update ready" loop ------------------------------------------------
+  // The client compares its build with the one the KEY serves and reloads to
+  // pick the newer one up. In the app the client is a bundled copy, and a
+  // reload only brings the same copy back, so the check would loop. The app's
+  // copy is refreshed with each app update (scripts/sync_pwa.sh).
+  function noUpdateLoop() {
+    try { if (typeof checkPwaVersion === 'function') window.checkPwaVersion = function () {}; } catch (e) {}
+    try { if (typeof pwaForceUpdate === 'function') window.pwaForceUpdate = function () {}; } catch (e) {}
+    var card = document.getElementById('pair-update-notice');
+    if (card) card.style.display = 'none';
+    var pill = document.getElementById('upd-pill');
+    if (pill) pill.remove();
+  }
+
+  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); noUpdateLoop(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

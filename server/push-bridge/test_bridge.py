@@ -27,9 +27,12 @@ def ok(c, name):
         fails += 1
 
 
-def ev(i, kind=24133, p=KEY):
+def ev(i, kind=24133, p=KEY, size=None):
+    content = "nip44-ciphertext" if size is None else "x" * size
+    if kind == 21059 and size is None:
+        content = "x" * 4500          # an offer-sized wrap
     return {"id": f"{i:064x}", "pubkey": "11" * 32, "created_at": int(time.time()), "kind": kind,
-            "tags": [["p", p]], "content": "nip44-ciphertext", "sig": "00" * 64}
+            "tags": [["p", p]], "content": content, "sig": "00" * 64}
 
 
 async def main():
@@ -188,8 +191,14 @@ async def main():
     await ws.send(json.dumps(["EVENT", "fvpush", ev(304, kind=21059)]))
     await asyncio.sleep(0.3)
     ok(len(rings) == 2, "calls: rings again after the quiet period")
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(305, kind=21059, size=600)]))
+    await asyncio.sleep(0.3)
+    br.last_ring.clear()
+    await ws.send(json.dumps(["EVENT", "fvpush", ev(306, kind=21059, size=600)]))
+    await asyncio.sleep(0.3)
+    ok(len(rings) == 2 and any(w["id"] == f"{306:064x}" for w in br.call_wraps[KEY]), "calls: a small wrap (hang-up, candidate) is kept but never rings")
     r = await client.get("/push/calls", params={"pubkey": KEY})
-    ok(sorted(e["id"] for e in (await r.json())["events"]) == sorted(f"{i:064x}" for i in (300, 301, 302, 303, 304)), "calls: the wraps are kept for the phone to fetch")
+    ok(sorted(e["id"] for e in (await r.json())["events"]) == sorted(f"{i:064x}" for i in (300, 301, 302, 303, 304, 305, 306)), "calls: the wraps are kept for the phone to fetch")
 
     r = await client.post("/push/unregister", json={"pubkey": KEY, "token": TOK})
     ok(r.status == 200 and TOK not in store.reg.get(KEY, {}), "unregister")

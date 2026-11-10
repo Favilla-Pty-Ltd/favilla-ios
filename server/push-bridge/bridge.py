@@ -131,7 +131,8 @@ class Pending:
 CALL_KIND = 21059         # the NIP-AC call wrap (OFFER, ANSWER, ICE, HANGUP, all look alike from outside)
 CALL_GAP_S = 20           # at most one ring push per phone per 20 s (ICE wraps come in bursts)
 CALL_KEEP_S = 90          # call wraps kept for the phone to fetch (offers go stale at 60 s)
-CALL_OVER_S = 45          # no ring for this long after the app says a call ended (the other side's hang-up and late ICE look like a call)
+CALL_OVER_S = 10          # no ring for this long after the app says a call ended (late candidates from the other side)
+CALL_MIN_CONTENT = 2000   # a wrap smaller than this can't hold an offer (SDP): a hang-up, reject or candidate. Kept for the phone, never rung.
 CALL_WRAP_MAX = 48
 
 
@@ -337,6 +338,9 @@ class Bridge:
         wraps.append(ev)
         cutoff = time.time() - CALL_KEEP_S
         self.call_wraps[pk] = [w for w in wraps if w.get("created_at", 0) >= cutoff][-CALL_WRAP_MAX:]
+        if len(ev.get("content") or "") < CALL_MIN_CONTENT:
+            log.info("call wrap %s… for %s…: %d bytes, too small for an offer; kept, no ring", ev["id"][:12], pk[:12], len(ev.get("content") or ""))
+            return
         if len(self.seen_calls) > 5000:
             self.seen_calls.clear()
         now = time.time()

@@ -41,6 +41,14 @@ final class AccountsModel: ObservableObject {
 
     func close() { session?.close(); session = nil }
 
+    /// LIST, SHOW and HEALTH are VAULT-side commands: the KEY's NOSTR Bluetooth
+    /// life answers them 0x04 (not here), which the bunker wording would read
+    /// backwards.
+    static func refusal(_ st: UInt8) -> String {
+        if st == 0x04 { return "Your KEY is in NOSTR Bluetooth mode. Accounts need its VAULT side: on the KEY choose VAULT, enter the VAULT PIN, and leave it on its home screen." }
+        return KeySession.refusal(st)
+    }
+
     /// LIST with health, all pages.
     func load() {
         guard busy.isEmpty else { return }
@@ -53,7 +61,7 @@ final class AccountsModel: ObservableObject {
                 var got: [AppChannel.ListEntry] = [], start = 0
                 while true {
                     let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start, health: true), timeout: 35)
-                    if a.rsp == AppChannel.rErr { throw KeySession.Failure(KeySession.refusal(a.body.first ?? 0xFF)) }
+                    if a.rsp == AppChannel.rErr { throw KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF)) }
                     guard a.rsp == AppChannel.rList else { throw KeySession.Failure("The KEY answered the list with type \(String(format: "%02x", a.rsp)).") }
                     let page: AppChannel.ListPage
                     do { page = try AppChannel.parseList(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(KeyLink.listMessage(st)) }
@@ -114,9 +122,9 @@ final class AccountsModel: ObservableObject {
 
     private func health(_ s: KeySession, body: Data) async throws -> AppChannel.HealthPage {
         let a = try await s.request(AppChannel.cHealth, body, timeout: 20)
-        if a.rsp == AppChannel.rErr { throw KeySession.Failure(KeySession.refusal(a.body.first ?? 0xFF)) }
+        if a.rsp == AppChannel.rErr { throw KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF)) }
         guard a.rsp == AppChannel.rHealth else { throw KeySession.Failure("This KEY doesn't have the breach check yet (firmware 11s).") }
-        do { return try AppChannel.parseHealth(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(KeySession.refusal(st)) }
+        do { return try AppChannel.parseHealth(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(AccountsModel.refusal(st)) }
     }
 
     /// The HIBP range bucket for a 5-hex-digit prefix: the suffixes seen at least once.
@@ -143,7 +151,7 @@ final class AccountsModel: ObservableObject {
         do {
             let s = try await open()
             let a = try await s.request(AppChannel.cShow, id, timeout: 8)
-            if a.rsp == AppChannel.rErr { return KeySession.refusal(a.body.first ?? 0xFF) }
+            if a.rsp == AppChannel.rErr { return AccountsModel.refusal(a.body.first ?? 0xFF) }
             guard a.rsp == AppChannel.rAck, let st = a.body.first else { return "The KEY's answer couldn't be read." }
             switch st {
             case 0x00: return nil

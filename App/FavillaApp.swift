@@ -28,6 +28,7 @@ struct RootView: View {
     @State private var route = KeyRoute.current
     @State private var routeText = LinkSettingsView.routeText(KeyRoute.current)
     @State private var pageColour = UIColor.black
+    @ObservedObject private var importer = CredentialImport.shared   // Apple Passwords > Export to another app (issue #16)
 
     var body: some View {
         // The page starts below the status bar, as the home-screen PWA does (its
@@ -42,7 +43,22 @@ struct RootView: View {
             .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route) }) {
                 LinkSettingsView(link: link, route: $route)
             }
+            // iOS opens the app with this activity when the owner picks Favilla in
+            // another password manager's export (CredentialImport.swift).
+            .onContinueUserActivity(CredentialImport.activityType) { activity in
+                importer.handle(activity)
+                if showSettings {
+                    showSettings = false   // one sheet at a time: let Settings go first
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { showImport = true }
+                } else {
+                    showImport = true
+                }
+            }
+            .sheet(isPresented: $showImport, onDismiss: { if !importer.busy { importer.discard() } }) {
+                CredentialImportSheet()
+            }
     }
+    @State private var showImport = false
 
     static func isLight(_ c: UIColor) -> Bool {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0

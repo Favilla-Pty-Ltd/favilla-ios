@@ -47,6 +47,10 @@ targets:
         UIBackgroundModes: [audio, bluetooth-central, voip]   # a call keeps sounding; the KEY wakes the app for bunker requests (path B); calls ring (CallRing)
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true    # the KEY's API is plain HTTP on the local network
+        # iOS 26 credential exchange (issue #16): Apple Passwords > Export Data to
+        # Another App opens Favilla with this activity (CredentialImport.swift). The
+        # value is the first string; the second is the name Apple's docs give it.
+        NSUserActivityTypes: [ASCredentialExchangeActivity, ASCredentialExchangeActivityType]
     entitlements:
       path: App/Favilla.entitlements
       properties:
@@ -80,6 +84,8 @@ targets:
               ProvidesPasswords: true
               ProvidesPasskeys: true    # KEY drop 9a: passkeys over Bluetooth (BLE_PASSKEY_PROTOCOL.md)
               ProvidesOneTimeCodes: true    # KEY drop 9i: one-time codes (iOS 18 and later)
+              SupportsCredentialExchange: true           # issue #16: listed in Apple Passwords > Export Data to Another App (iOS 26.4+)
+              SupportedCredentialExchangeVersions: ["1.0"]
     entitlements:
       path: AutoFill/FavillaAutoFill.entitlements
       properties:

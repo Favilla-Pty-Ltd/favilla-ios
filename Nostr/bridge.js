@@ -346,6 +346,58 @@
     } catch (e) {}
   };
 
+  // ---- 7b. passwords handed over by another manager (issue #16) -----------------
+  // Apple Passwords > Export Data to Another App: iOS gives the app the logins
+  // (CredentialImport.swift). They come here as the CSV the Passwords page
+  // already imports (Safari's columns), through its own file box, so the same
+  // code runs: the pick list, the dup check, the KEY's import window and the
+  // seal of each entry. The text lives in this page's memory only and is
+  // dropped with the picks.
+  var cxfImport = false;
+  function csvCell(s) { return '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"'; }
+  window.__favillaImport = function (logins, from, note) {
+    try {
+      if (!Array.isArray(logins) || !logins.length) return 'nothing to import';
+      var csv = 'Title,URL,Username,Password,Notes,OTPAuth\n' + logins.map(function (l) {
+        return [l.title, l.url, l.user, l.pass, l.note, ''].map(csvCell).join(',');
+      }).join('\n');
+      logins.length = 0;
+      if (typeof window.settingsOpen === 'function') window.settingsOpen('passwords');
+      var input = document.getElementById('pw-file');
+      if (!input) return 'no import box on this page';
+      cxfImport = true;
+      // The block is hidden until the list has loaded; show it so the picks and
+      // the status are on screen even while the KEY is still being reached.
+      var blk = document.getElementById('pw-import-blk'); if (blk) blk.hidden = false;
+      var dt = new DataTransfer();
+      dt.items.add(new File([csv], (from || 'passwords') + '.csv', { type: 'text/csv' }));
+      csv = '';
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      setTimeout(function () {
+        var st = document.getElementById('pw-import-status');
+        if (st && note) st.textContent = (st.textContent ? st.textContent + ' ' : '') + note + '.';
+        if (blk) blk.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 150);
+      return 'handed to the Passwords page';
+    } catch (e) { return 'failed: ' + (e && e.message || e); }
+  };
+  // The page's reminder after an import is about the export file. There is no
+  // file here: say what is true, and point at the breach check.
+  function watchImportReminder() {
+    var r = document.getElementById('pw-import-remind');
+    if (!r || !window.MutationObserver) return;
+    var fileText = r.textContent;
+    new MutationObserver(function () {
+      if (r.hidden) return;
+      if (!cxfImport) { r.textContent = fileText; return; }   // a real CSV file: the page's own words
+      cxfImport = false;
+      r.textContent = 'Nothing was written on this iPhone: the copy the other app handed over is gone. ' +
+        'To score what you just imported, run Check breaches: Settings > This iPhone > Accounts. ' +
+        'Then delete those logins from the other app if the KEY is to be the only place they live.';
+    }).observe(r, { attributes: true, attributeFilter: ['hidden'] });
+  }
+
   // ---- 8. no "update ready" loop ------------------------------------------------
   // The client compares its build with the one the KEY serves and reloads to
   // pick the newer one up. In the app the client is a bundled copy, and a
@@ -360,7 +412,7 @@
     if (pill) pill.remove();
   }
 
-  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); noUpdateLoop(); }
+  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); noUpdateLoop(); watchImportReminder(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

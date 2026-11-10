@@ -61,6 +61,16 @@ struct NostrClientView: UIViewRepresentable {
             guard let wv else { return }
             Task { @MainActor in await Coordinator.feedCallWraps(wv) }
         }
+        // Passwords handed over by Apple Passwords (CredentialImport): the PWA's
+        // Passwords page takes them as it takes a CSV export (bridge.js).
+        context.coordinator.importObserver = NotificationCenter.default.addObserver(forName: CredentialImport.handoff, object: nil, queue: .main) { [weak wv] n in
+            guard let wv, let json = n.userInfo?["json"] as? String else { return }
+            let meta = (try? JSONSerialization.data(withJSONObject: [n.userInfo?["from"] as? String ?? "", n.userInfo?["note"] as? String ?? ""])).flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\",\"\"]"
+            wv.evaluateJavaScript("window.__favillaImport ? window.__favillaImport(\(json), \(meta)[0], \(meta)[1]) : 'no bridge'") { r, e in
+                if let e { Bunker.log("import: the page refused the hand-over: \(e.localizedDescription)") }
+                else if let r = r as? String, !r.isEmpty { Bunker.log("import: page: \(r)") }
+            }
+        }
         wv.load(URLRequest(url: URL(string: Self.origin + "/")!))
         return wv
     }
@@ -93,6 +103,7 @@ struct NostrClientView: UIViewRepresentable {
 
         private(set) var loadedRoute = KeyRoute.current
         var wakeObserver: NSObjectProtocol?
+        var importObserver: NSObjectProtocol?
 
         /// The bridge's recent call wraps, into the PWA (bridge.js). Kept up
         /// while the ring is up and the client hasn't got the call: on a cold

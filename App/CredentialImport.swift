@@ -118,7 +118,7 @@ final class CredentialImport: ObservableObject {
                 if hasAuth {
                     if pass.isEmpty { s.noPassword += 1; continue }
                     if let sub = item.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !sub.isEmpty, sub != user { notes.insert(sub, at: 0) }
-                    out.append(Login(title: item.title, url: item.scope?.urls.first ?? "", user: user, pass: pass, note: notes.joined(separator: "\n")))
+                    out.append(Login(title: item.title, url: item.scope?.urls.first?.absoluteString ?? "", user: user, pass: pass, note: notes.joined(separator: "\n")))
                     s.logins += 1
                 } else if hasOther || notes.count == item.credentials.count {
                     s.other += 1     // a card, a secure note, Wi-Fi...: no login here

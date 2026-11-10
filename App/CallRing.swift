@@ -112,6 +112,10 @@ final class CallRing: NSObject, ObservableObject {
             return
         }
         if phase == "idle" {
+            // Only a call the client had (its banner, or a live call) ends the
+            // ring here. "idle" before that is just the client not having
+            // decrypted the invitation yet; the 25 s timer covers a stray wrap.
+            guard pwaIncoming || pwaLive else { return }
             pwaIncoming = false
             end(.remoteEnded)
         }

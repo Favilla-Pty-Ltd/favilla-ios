@@ -299,7 +299,9 @@
       if (!st) return;
       var phase = st.phase || 'idle';
       if (phase === lastPhase) return;
+      var first = lastPhase === '';
       lastPhase = phase;
+      if (first && phase === 'idle') return;     // nothing has happened yet
       if (phase === 'incoming') {
         var name = (document.getElementById('pwacall-name') || {}).textContent || 'Nostr call';
         mh.favillaApp.postMessage({ callIncoming: name, video: !!st.video });

@@ -131,6 +131,7 @@ class Pending:
 CALL_KIND = 21059         # the NIP-AC call wrap (OFFER, ANSWER, ICE, HANGUP, all look alike from outside)
 CALL_GAP_S = 20           # at most one ring push per phone per 20 s (ICE wraps come in bursts)
 CALL_KEEP_S = 90          # call wraps kept for the phone to fetch (offers go stale at 60 s)
+CALL_OVER_S = 45          # no ring for this long after the app says a call ended (the other side's hang-up and late ICE look like a call)
 CALL_WRAP_MAX = 48
 
 
@@ -248,6 +249,7 @@ class Bridge:
         self.last_link = {}          # pubkey -> time the app last asked on a KEY nudge (path B)
         self.last_ring = {}          # pubkey -> time of the last VoIP push
         self.in_call = {}            # pubkey -> time the app last said it is in a call
+        self.call_over = {}          # pubkey -> time the app said the call (or ring) ended
         self.seen_calls = set()
         self.call_wraps = collections.defaultdict(list)   # pubkey -> recent 21059 wraps (the phone fetches them: ephemeral, so no relay replays them)
         self.fetched = collections.defaultdict(set)   # pubkey -> request ids handed out
@@ -339,6 +341,8 @@ class Bridge:
             self.seen_calls.clear()
         now = time.time()
         if now - self.in_call.get(pk, 0) < 90:
+            return
+        if now - self.call_over.get(pk, 0) < CALL_OVER_S:
             return
         if now - self.last_ring.get(pk, 0) < CALL_GAP_S:
             return
@@ -532,6 +536,7 @@ def make_app(bridge):
             bridge.in_call[pk] = time.time()
         else:
             bridge.in_call.pop(pk, None)
+            bridge.call_over[pk] = time.time()
         return web.json_response({"ok": True})
 
     async def again(req):

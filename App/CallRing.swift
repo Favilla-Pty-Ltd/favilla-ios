@@ -130,6 +130,7 @@ final class CallRing: NSObject, ObservableObject {
         endTimer?.invalidate()
         provider.reportCall(with: c, endedAt: nil, reason: why)
         note("ended (\(why.rawValue))")
+        Task { await Bunker.inCall(false) }      // the bridge's quiet period: the other side's hang-up must not ring
     }
 
     // MARK: - CallKit
@@ -238,6 +239,7 @@ extension CallRing: CXProviderDelegate {
         current = nil
         endTimer?.invalidate()
         action.fulfill()
+        Task { await Bunker.inCall(false) }
     }
 
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {

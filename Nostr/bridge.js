@@ -334,7 +334,15 @@
   window.__favillaCallWraps = function (evs) {
     try {
       if (!Array.isArray(evs) || typeof callsIngestWrap !== 'function') return;
-      evs.forEach(function (ev) { if (ev && ev.kind === 21059) { ev._live = true; callsIngestWrap(ev); } });
+      var st = (typeof pwacState === 'object' && pwacState) ? pwacState : null;
+      evs.forEach(function (ev) {
+        if (!ev || ev.kind !== 21059) return;
+        // Handed over again while nothing is ringing in the client: a wrap it
+        // dropped earlier (KEY not ready yet) gets another go.
+        if (st && st.phase === 'idle' && st.seenWraps && st.seenWraps.delete) st.seenWraps.delete(ev.id);
+        ev._live = true;
+        callsIngestWrap(ev);
+      });
     } catch (e) {}
   };
 

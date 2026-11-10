@@ -94,17 +94,24 @@ struct NostrClientView: UIViewRepresentable {
         private(set) var loadedRoute = KeyRoute.current
         var wakeObserver: NSObjectProtocol?
 
-        /// The bridge's recent call wraps, into the PWA (bridge.js). Tried a few
-        /// times: the KEY may take a moment, and the PWA its relays.
+        /// The bridge's recent call wraps, into the PWA (bridge.js). Kept up
+        /// while the ring is up and the client hasn't got the call: on a cold
+        /// start the client needs a few seconds for its KEY session, and a wrap
+        /// handed over before that is dropped.
+        private static var feeding = false
         @MainActor static func feedCallWraps(_ wv: WKWebView) async {
-            guard let pk = Bunker.ClientInfo.load()?.pubkey else { return }
-            for _ in 0..<3 {
-                let evs = await Bunker.callWraps(pubkey: pk)
+            guard let pk = Bunker.ClientInfo.load()?.pubkey, !feeding else { return }
+            feeding = true
+            defer { feeding = false }
+            var evs: [[String: Any]] = []
+            for i in 0..<20 {
+                guard CallRing.shared.current != nil, !CallRing.shared.clientHasCall else { return }
+                if evs.isEmpty || i % 5 == 0 { evs = await Bunker.callWraps(pubkey: pk) }
                 if !evs.isEmpty, let d = try? JSONSerialization.data(withJSONObject: evs), let js = String(data: d, encoding: .utf8) {
                     wv.evaluateJavaScript("window.__favillaCallWraps && window.__favillaCallWraps(\(js))") { _, _ in }
-                    return
+                    Bunker.log("call: \(evs.count) wrap(s) handed to the client (try \(i + 1))")
                 }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
 

@@ -31,6 +31,10 @@ final class CallRing: NSObject, ObservableObject {
     private var pwaIncoming = false          // the PWA has the offer and is showing its banner
     private var pwaLive = false              // the PWA is in a call (ours or outgoing)
     private var endTimer: Timer?
+    private var answerTimer: Timer?
+
+    /// The client has the call (its banner, or the call is live).
+    var clientHasCall: Bool { pwaIncoming || pwaLive }
     @Published private(set) var voipToken = ""
     @Published private(set) var log: [String] = []
 
@@ -129,6 +133,7 @@ final class CallRing: NSObject, ObservableObject {
         current = nil
         endTimer?.invalidate()
         provider.reportCall(with: c, endedAt: nil, reason: why)
+        answerTimer?.invalidate()
         note("ended (\(why.rawValue))")
         Task { await Bunker.inCall(false) }      // the bridge's quiet period: the other side's hang-up must not ring
     }
@@ -230,6 +235,17 @@ extension CallRing: CXProviderDelegate {
         note("answered")
         onCommand?("accept")
         action.fulfill()
+        // Answered, but the client never got the call going (cold start with the
+        // KEY out of reach, say): don't leave iOS showing a call in progress.
+        answerTimer?.invalidate()
+        answerTimer = Timer.scheduledTimer(withTimeInterval: 40, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.current != nil, !self.pwaLive else { return }
+                self.note("answered but the client never connected the call: ending it")
+                self.onCommand?("hangup")
+                self.end(.failed)
+            }
+        }
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {

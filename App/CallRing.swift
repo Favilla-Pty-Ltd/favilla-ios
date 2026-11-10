@@ -77,7 +77,7 @@ final class CallRing: NSObject, ObservableObject {
         let u = CXCallUpdate()
         u.remoteHandle = CXHandle(type: .generic, value: name)
         u.localizedCallerName = name
-        u.hasVideo = video
+        u.hasVideo = true          // see ring(): answering must open the app
         u.supportsHolding = false
         u.supportsGrouping = false
         u.supportsUngrouping = false
@@ -107,8 +107,11 @@ final class CallRing: NSObject, ObservableObject {
         }
         if phase == "incoming" { return }
         if live, let c = current {
-            if !answered { provider.reportOutgoingCall(with: c, connectedAt: nil) }    // picked up in the PWA itself
-            answered = true
+            if !answered {
+                // Picked up in the client itself (its own banner): tell CallKit.
+                answered = true
+                controller.request(CXTransaction(action: CXAnswerCallAction(call: c))) { _ in }
+            }
             return
         }
         if phase == "idle" {
@@ -141,7 +144,11 @@ final class CallRing: NSObject, ObservableObject {
         let u = CXCallUpdate()
         u.remoteHandle = CXHandle(type: .generic, value: "Nostr call")
         u.localizedCallerName = "Nostr call"
-        u.hasVideo = false
+        // Flagged as video whatever the call is: iOS then opens the app when you
+        // answer on the lock screen. The call runs in a web page, which can only
+        // use the microphone and camera while it is on screen, so without this
+        // the caller hears nothing until you open Favilla by hand.
+        u.hasVideo = true
         u.supportsHolding = false
         u.supportsGrouping = false
         u.supportsUngrouping = false

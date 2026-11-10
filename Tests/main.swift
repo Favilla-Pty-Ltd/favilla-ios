@@ -467,6 +467,20 @@ do {
     check(fk2.sent.map { $0.0 } == [Vault.cInfo], "vault: nothing sent to the KEY after the relay failed")
     check(Vault.objectText(in: #"["EVENT","v",{"id":"a","tags":[["d","x"]],"content":"{"n":1}"}]"#) == #"{"id":"a","tags":[["d","x"]],"content":"{"n":1}"}"#, "vault: the event object is taken out of the frame verbatim")
 
+    // 11s vectors (ctr 13 to 16): SHOW, LIST with health, HEALTH.
+    check(hx(AppChannel.request(AppChannel.cShow, chCreds, ctr: 13, body: hex("0102030405060708"))) == "4301020304050607080d00000001020304050607087fc7edcd1b64d83eb12df19289a38938", "health: SHOW matches the firmware vector")
+    check(hx(AppChannel.request(AppChannel.cList, chCreds, ctr: 14, body: AppChannel.listBody(start: 0, health: true))) == "3701020304050607080e00000000000167a18219d5da569929d634a52bfbbbe5", "health: LIST with the flags byte matches")
+    if let a = try? AppChannel.open(hex("b601020304050607080e00000002b396edf7906b9385a098abb9fff8ee6d72aa0d350883dbfe119f2047a923695504395514f56a9c601d534b67a878"), chCreds), let page = try? AppChannel.parseList(a.body), let e = page.entries.first, let h = e.health {
+        check(page.entries.count == 1 && h.raw == 0x47 && h.strength == 3 && h.origin == 1 && !h.reused && !h.breached && h.checked && e.id?.count == 8, "health: a 0x02 entry decodes (health 0x47: strong, made on KEY, checked; site \(e.site), user \(e.user))")
+    } else { check(false, "health: the LIST-with-health vector opens") }
+    check(hx(AppChannel.request(AppChannel.cHealth, chCreds, ctr: 15, body: Data())) == "4401020304050607080f0000001733c1ddf75832b6f1435b24cbb0e815", "health: HEALTH asking for prefixes matches")
+    if let a = try? AppChannel.open(hex("c001020304050607080f000000bf3c14dc19c3a26044a55adfb243e966c5b5884e7b6a10"), chCreds), let hp = try? AppChannel.parseHealth(a.body) {
+        check(hp.pending == 2 && hp.prefixes == ["5BAA6"], "health: 0xC0 decodes (2 pending, prefix 5BAA6)")
+    } else { check(false, "health: the 0xC0 vector opens") }
+    let bucket = AppChannel.healthBody(prefix: "5BAA6", suffixes: ["1E4C9B93F3F0682250B6CF8331B7EE68FD8"])
+    check(bucket.map(hx) == "5baa6001001e4c9b93f3f0682250b6cf8331b7ee68fd80", "health: one suffix packs as in the vector")
+    check(hx(AppChannel.request(AppChannel.cHealth, chCreds, ctr: 16, body: bucket ?? Data())) == "440102030405060708100000005baa6001001e4c9b93f3f0682250b6cf8331b7ee68fd80ec9607279f59cb15e70810f133159e4e", "health: HEALTH with one bucket matches")
+
     let refused = DispatchSemaphore(value: 0)
     final class Locked: ChannelCaller {
         func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer { AppChannel.Answer(rsp: AppChannel.rErr, ctr: 1, body: Data([0x05])) }

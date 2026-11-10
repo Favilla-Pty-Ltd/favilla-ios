@@ -47,10 +47,14 @@ enum AppChannel {
     static let rList: UInt8 = 0xB6
     static let rOtp: UInt8 = 0xB7
     static let rApi: UInt8 = 0xB8   // 9k, encrypted
+    // 11s: password health
+    static let cShow: UInt8 = 0x43     // [id 8] -> rAck [status]: the entry's PASSWORD screen on the KEY
+    static let cHealth: UInt8 = 0x44   // none -> prefixes wanted; [prefix 3][n u16][suffix 18 x n] -> what is still pending
+    static let rHealth: UInt8 = 0xC0   // encrypted: [status][pending u16][count][prefix 3 x count]
     static let rErr: UInt8 = 0xBF
 
     /// Answers whose body is encrypted.
-    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp, rApi]
+    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp, rApi, rHealth]
 
     // MARK: - Reports
 
@@ -209,8 +213,62 @@ enum AppChannel {
         var d = Data([UInt8(site.count)]); d.append(site); d.append(timeBody(now)); return d
     }
 
-    /// LIST: [start hi][start lo].
-    static func listBody(start: Int) -> Data { Data([UInt8((start >> 8) & 0xFF), UInt8(start & 0xFF)]) }
+    /// LIST: [start hi][start lo]; with health (11s): a third byte, flags bit0.
+    static func listBody(start: Int, health: Bool = false) -> Data {
+        Data([UInt8((start >> 8) & 0xFF), UInt8(start & 0xFF)] + (health ? [0x01] : []))
+    }
+
+    /// The KEY's health byte on a password entry (11s).
+    struct Health: Equatable {
+        let raw: UInt8
+        var strength: Int { Int(raw & 0x03) }          // 0 unknown, 1 weak, 2 fair, 3 strong
+        var origin: Int { Int((raw >> 2) & 0x03) }     // 0 unknown, 1 made on this KEY, 2 the owner's own, 3 imported
+        var reused: Bool { raw & 0x10 != 0 }
+        var breached: Bool { raw & 0x20 != 0 }
+        var checked: Bool { raw & 0x40 != 0 }
+    }
+
+    /// 0xC0 body: [status][pending u16 LE][count][prefix 3 x count]. Each prefix is
+    /// 5 hex digits packed high nibble first, the last nibble 0.
+    struct HealthPage: Equatable { var pending: Int; var prefixes: [String] }
+    static func parseHealth(_ body: Data) throws -> HealthPage {
+        let b = [UInt8](body)
+        guard let st = b.first else { throw BodyFailure.malformed }
+        guard st == 0x00 else { throw BodyFailure.status(st) }
+        guard b.count >= 4, b.count == 4 + 3 * Int(b[3]) else { throw BodyFailure.malformed }
+        let pending = Int(b[1]) | Int(b[2]) << 8
+        var out: [String] = []
+        for k in 0..<Int(b[3]) {
+            let p = b[(4 + 3 * k)..<(7 + 3 * k)]
+            out.append(p.map { String(format: "%02X", $0) }.joined().dropLast().uppercased())
+        }
+        return HealthPage(pending: pending, prefixes: out)
+    }
+
+    /// HEALTH body for one bucket: [prefix 3][n u16 LE][suffix 18 x n]; a suffix is
+    /// 35 hex digits packed high nibble first, the trailing nibble 0.
+    static func healthBody(prefix: String, suffixes: [String]) -> Data? {
+        guard prefix.count == 5, let p = packHex(prefix + "0"), suffixes.count <= 1200 else { return nil }
+        var d = Data(p)
+        d.append(UInt8(suffixes.count & 0xFF)); d.append(UInt8(suffixes.count >> 8))
+        for s in suffixes { guard s.count == 35, let x = packHex(s + "0") else { return nil }; d.append(contentsOf: x) }
+        return d
+    }
+
+    static func packHex(_ s: String) -> [UInt8]? {
+        let c = Array(s.uppercased().utf8)
+        guard c.count % 2 == 0 else { return nil }
+        var out: [UInt8] = []
+        var i = 0
+        while i < c.count {
+            guard let h = hexVal(c[i]), let l = hexVal(c[i + 1]) else { return nil }
+            out.append(h << 4 | l); i += 2
+        }
+        return out
+    }
+    private static func hexVal(_ c: UInt8) -> UInt8? {
+        switch c { case 0x30...0x39: return c - 0x30; case 0x41...0x46: return c - 0x41 + 10; case 0x61...0x66: return c - 0x61 + 10; default: return nil }
+    }
 
     // MARK: - Answer bodies
 
@@ -234,6 +292,8 @@ enum AppChannel {
         var user: String
         var credentialID: Data?
         var userHandle: Data?
+        var health: Health?      // 11s, on a LIST with health
+        var id: Data?            // 11s: what SHOW takes
     }
 
     struct ListPage: Equatable {
@@ -265,6 +325,10 @@ enum AppChannel {
             switch kind {
             case 0x00:
                 out.append(ListEntry(passkey: false, site: site, user: user))
+            case 0x02:
+                let h = try take(1)[0]
+                let id = Data(try take(8))
+                out.append(ListEntry(passkey: false, site: site, user: user, health: Health(raw: h), id: id))
             case 0x01:
                 let idLen = Int(try take(1)[0])
                 let id = Data(try take(idLen))

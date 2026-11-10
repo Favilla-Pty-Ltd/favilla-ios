@@ -58,6 +58,7 @@ struct HomeBody: View {
     @State private var showLast = false
     @State private var appPaired = KeyLink.appPaired
     @State private var listNote: String?
+    @State private var showAccounts = false
     @Environment(\.scenePhase) private var phase
 
     var body: some View {
@@ -112,6 +113,21 @@ struct HomeBody: View {
                 .padding(16)
                 .background(Brand.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+
+            // ACCOUNTS (11s): every password on the KEY, its health, the breach check
+            if appPaired {
+                BrandSection(title: "ACCOUNTS") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Every account on the KEY, with its health: weak, reused, seen in a breach, made on the KEY. The breach check never sends a password.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        BrandButton(title: "OPEN ACCOUNTS", filled: false) { showAccounts = true }
+                    }
+                    .padding(16)
+                    .background(Brand.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .sheet(isPresented: $showAccounts) { AccountsView() }
             }
 
             // SIGNING IN

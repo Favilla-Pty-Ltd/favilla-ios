@@ -49,6 +49,7 @@ struct LinkSettingsView: View {
                     }
                     HomeBody(link: link)
                     BunkerSection()
+                    VaultSection()
                     BluetoothLogSection()
                     PushTestSection()
                 }

@@ -70,11 +70,12 @@ enum Bunker {
         func save() { Bunker.store.set(try? JSONEncoder().encode(self), forKey: Info.key) }
     }
 
-    /// R_NUDGE body: (seq, replies waiting in the KEY's outbox).
-    static func decodeNudge(_ b: Data) -> (seq: UInt32, waiting: Int)? {
+    /// R_NUDGE body: (seq, replies waiting in the KEY's outbox, vault asks).
+    /// 5 bytes up to KEY 11p; 11q adds the vault byte (bit0 back up, bit1 restore).
+    static func decodeNudge(_ b: Data) -> (seq: UInt32, waiting: Int, vault: UInt8)? {
         let v = [UInt8](b)
         guard v.count >= 5 else { return nil }
-        return (UInt32(v[0]) | UInt32(v[1]) << 8 | UInt32(v[2]) << 16 | UInt32(v[3]) << 24, Int(v[4]))
+        return (UInt32(v[0]) | UInt32(v[1]) << 8 | UInt32(v[2]) << 16 | UInt32(v[3]) << 24, Int(v[4]), v.count >= 6 ? v[5] : 0)
     }
 
     static func decodeInfo(_ b: Data) -> Info? {

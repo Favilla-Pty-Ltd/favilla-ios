@@ -28,7 +28,7 @@ jobs:
           xcodebuild -version
       - name: Test CBOR and the passkey framing
         run: |
-          swiftc -O Shared/CBOR.swift Shared/Ctap.swift Shared/AppChannel.swift Shared/KeyLink.swift Shared/KeySession.swift Shared/Bunker.swift App/KeyApi.swift App/NostrLink.swift App/LinkLog.swift Tests/main.swift -o ctaptests
+          swiftc -O Shared/CBOR.swift Shared/Ctap.swift Shared/AppChannel.swift Shared/KeyLink.swift Shared/KeySession.swift Shared/Bunker.swift App/VaultCourier.swift App/KeyApi.swift App/NostrLink.swift App/LinkLog.swift Tests/main.swift -o ctaptests
           ./ctaptests
       - name: Generate the project
         run: brew install xcodegen && xcodegen generate

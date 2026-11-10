@@ -49,7 +49,11 @@ final class BunkerService: ObservableObject {
         guard nudgeObserver == nil else { return }
         nudgeObserver = NotificationCenter.default.addObserver(forName: NostrLink.nudged, object: nil, queue: .main) { n in
             let w = n.userInfo?["waiting"] as? Int ?? 0
-            Task { @MainActor in BunkerService.shared.nudged(waiting: w) }
+            let v = n.userInfo?["vault"] as? Int ?? 0
+            Task { @MainActor in
+                BunkerService.shared.nudged(waiting: w)
+                if v != 0 { VaultService.shared.asked(UInt8(v)) }
+            }
         }
         NostrLink.shared.stayUp()
     }

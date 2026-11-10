@@ -367,8 +367,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         let mctr = head.count >= 13 ? UInt32(head[9]) | UInt32(head[10]) << 8 | UInt32(head[11]) << 16 | UInt32(head[12]) << 24 : 0
         if head.first == Bunker.rNudge, let n = try? AppChannel.open(m, c), let d = Bunker.decodeNudge(n.body) {
             nudges += 1
-            if d.waiting > 0 || nudges % 60 == 1 { LinkLog.shared.add("nudge \(d.seq): \(d.waiting) repl\(d.waiting == 1 ? "y" : "ies") waiting (\(nudges) this session)") }
-            NotificationCenter.default.post(name: NostrLink.nudged, object: nil, userInfo: ["waiting": d.waiting])
+            if d.waiting > 0 || d.vault != 0 || nudges % 60 == 1 { LinkLog.shared.add("nudge \(d.seq): \(d.waiting) repl\(d.waiting == 1 ? "y" : "ies") waiting" + (d.vault != 0 ? String(format: ", vault asks %02x", d.vault) : "") + " (\(nudges) this session)") }
+            NotificationCenter.default.post(name: NostrLink.nudged, object: nil, userInfo: ["waiting": d.waiting, "vault": Int(d.vault)])
             return
         }
         LinkLog.shared.add(String(format: "message %d bytes, type %02x", m.count, head.first ?? 0) + (head.count >= 13 ? ", ctr \(mctr)" : ""))

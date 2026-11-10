@@ -429,6 +429,44 @@ do {
     cipherDone.wait()
     check(cipherKey.sent.map { $0.0 } == [Bunker.cPoll] && box.o.replies == 2 && box.o.sharedRefused && box.o.shared.isEmpty, "cipher: a run with no relay to take it is reported as refused")
 
+    // 11q vectors (ctr 7 to 12): the vault through the phone.
+    check(hx(AppChannel.request(Vault.cInfo, chCreds, ctr: 7, body: Data())) == "3f010203040506070807000000e2db528292da662bd7c2e0c612d3ae27", "vault: VAULT_INFO matches the firmware vector")
+    if let a = try? AppChannel.open(hex("bc010203040506070807000000004444444444444444444444444444444444444444444444444444444444444444002b11696c0001007661756c742e666176696c6c616b65792e696f1688fa1045838bc1ed5749c086fcc200"), chCreds), let i = Vault.decodeInfo(a.body) {
+        check(i.status == 0 && i.pubkey == String(repeating: "44", count: 32) && i.records == 108 && i.dirty && i.asked == 0 && i.host == "vault.favillakey.io" && i.lastBackup == Date(timeIntervalSince1970: 0x69112b00), "vault: 0xBC decodes (108 records, dirty, vault.favillakey.io)")
+    } else { check(false, "vault: the 0xBC vector opens") }
+    check(hx(AppChannel.request(Vault.cGet, chCreds, ctr: 8, body: Data(Vault.le32(0)))) == "40010203040506070808000000000000008f750b39025c566662c3e871f0b01eb5", "vault: VAULT_GET offset 0 matches")
+    check(hx(AppChannel.request(Vault.cGet, chCreds, ctr: 9, body: Data(Vault.le32(40)))) == "4001020304050607080900000028000000295b5c928d5947d9c3121213138dabc2", "vault: VAULT_GET offset 40 matches")
+    check(hx(AppChannel.request(Vault.cDone, chCreds, ctr: 10, body: Data([1]))) == "4101020304050607080a0000000152c401ab2f14e89bd0cbac162c8157be", "vault: VAULT_DONE accepted matches")
+    let putBody = Data(Vault.le32(47) + Vault.le32(0)) + Data(#"{"kind":30078,"content":"BBBBBBBBBBBBBBBBBBBB"}"#.utf8)
+    check(hx(AppChannel.request(Vault.cPut, chCreds, ctr: 11, body: putBody)) == "4201020304050607080b0000002f000000000000007b226b696e64223a33303037382c22636f6e74656e74223a224242424242424242424242424242424242424242227d27ffee42d84e353158b4c68dbe3eae6a", "vault: VAULT_PUT whole event matches")
+    check(hx(AppChannel.request(Vault.cPut, chCreds, ctr: 12, body: Data(Vault.le32(0) + Vault.le32(0)))) == "4201020304050607080c00000000000000000000006657af2ca86923317e26ca35f18332f9", "vault: VAULT_PUT with nothing on the relay matches")
+    // A whole backup against a fake KEY: PUT merged, GET in two chunks, DONE.
+    final class FakeVaultKey: ChannelCaller, @unchecked Sendable {
+        var sent: [(UInt8, Data)] = []
+        let frame = Data(#"["EVENT",{"kind":30078,"content":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]"#.utf8)
+        func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer {
+            sent.append((cmd, body))
+            switch cmd {
+            case Vault.cInfo: return AppChannel.Answer(rsp: Vault.rInfo, ctr: 1, body: Data([0]) + Data(repeating: 0x44, count: 32) + Data([0, 0, 0, 0, 5, 0, 1, 0]) + Data("127.0.0.1:1".utf8))
+            case Vault.cPut: return AppChannel.Answer(rsp: Vault.rPut, ctr: 1, body: Data([1, 11, 0, 0, 0, 0]))
+            case Vault.cGet:
+                let off = Int(Vault.u32([UInt8](body), 0)), n = min(40, frame.count - off)
+                return AppChannel.Answer(rsp: Vault.rGet, ctr: 1, body: Data([0]) + Data(Vault.le32(frame.count) + Vault.le32(off)) + frame.subdata(in: off..<(off + n)))
+            default: return AppChannel.Answer(rsp: AppChannel.rAck, ctr: 1, body: Data([0]))
+            }
+        }
+    }
+    let fk2 = FakeVaultKey()
+    let vaultDone = DispatchSemaphore(value: 0)
+    final class OutBox: @unchecked Sendable { var o: Vault.Outcome = .failed("") }
+    let ob = OutBox()
+    Task { ob.o = await Vault.backup(fk2, log: { _ in }); vaultDone.signal() }
+    vaultDone.wait()
+    // No relay at 127.0.0.1:1: the fetch fails before the KEY is asked for the copy.
+    if case .failed(let why) = ob.o { check(why.contains("relay"), "vault: a relay that can't be reached stops the backup before VAULT_PUT: \(why)") } else { check(false, "vault: unreachable relay must fail") }
+    check(fk2.sent.map { $0.0 } == [Vault.cInfo], "vault: nothing sent to the KEY after the relay failed")
+    check(Vault.objectText(in: #"["EVENT","v",{"id":"a","tags":[["d","x"]],"content":"{"n":1}"}]"#) == #"{"id":"a","tags":[["d","x"]],"content":"{"n":1}"}"#, "vault: the event object is taken out of the frame verbatim")
+
     let refused = DispatchSemaphore(value: 0)
     final class Locked: ChannelCaller {
         func request(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer { AppChannel.Answer(rsp: AppChannel.rErr, ctr: 1, body: Data([0x05])) }

@@ -57,11 +57,10 @@ async def main():
     async def ringer(token, env, pk, ev):
         rings.append((token, pk, ev["id"]))
         return 200, ""
-    sender.ring = ringer
 
     d = tempfile.mkdtemp()
     store = B.Store(os.path.join(d, "devices.json"))
-    br = B.Bridge(store, B.Pending(), sender)
+    br = B.Bridge(store, B.Pending(), sender, ringer)
 
     # register straight in the store (the HTTP route only allows wss://)
     store.add(KEY, TOK, "production", [url])

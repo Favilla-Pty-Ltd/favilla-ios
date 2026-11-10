@@ -236,8 +236,9 @@ def fit_events(evs, budget=PUSH_BUDGET):
 # ---------------------------------------------------------------- bridge -----
 
 class Bridge:
-    def __init__(self, store, pending, sender):
+    def __init__(self, store, pending, sender, ringer=None):
         self.store, self.pending, self.sender = store, pending, sender
+        self.ringer = ringer          # async (voip_token, env, pubkey, wrap) -> (status, reason)
         self.listeners = {}          # relay url -> task
         self.wanted = {}             # relay url -> set of pubkeys
         self.changed = {}            # relay url -> asyncio.Event (resubscribe)
@@ -348,7 +349,10 @@ class Bridge:
             if not info.get("voip"):
                 continue
             try:
-                status, reason = await self.sender.ring(info["voip"], info["env"], pk, ev)
+                if not self.ringer:
+                    log.warning("no VoIP sender configured; can't ring %s…", token[:8])
+                    return
+                status, reason = await self.ringer(info["voip"], info["env"], pk, ev)
             except Exception as e:  # noqa: BLE001
                 log.warning("VoIP push to %s…: %s", token[:8], e)
                 continue
@@ -567,7 +571,7 @@ async def main(cfg_path):
     with open(cfg_path) as f:
         cfg = json.load(f)
     apns = Apns(cfg["team_id"], cfg["key_id"], cfg["key_path"], cfg.get("topic", "io.favillakey.app"))
-    bridge = Bridge(Store(cfg.get("db", "/var/lib/favilla-push/devices.json")), Pending(), apns.send)
+    bridge = Bridge(Store(cfg.get("db", "/var/lib/favilla-push/devices.json")), Pending(), apns.send, apns.ring)
     bridge.sync()
     runner = web.AppRunner(make_app(bridge))
     await runner.setup()

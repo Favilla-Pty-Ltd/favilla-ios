@@ -331,20 +331,48 @@
 
   // Call wraps the bridge kept while this client wasn't connected (ephemeral
   // events: a relay never replays them). Into the PWA's own receive path.
+  // The app hands the bridge's wraps over every 3 s while the ring is up. A
+  // wrap is given to the client once, and again only after 30 s with the client
+  // still idle: handing the same wrap in every 3 s re-queued its decrypt on
+  // the KEY each time (the page forgets a wrap when idle so a dropped one gets
+  // another go), and a video offer, several KB through the Bluetooth tunnel,
+  // never got to the front of that queue before it went stale.
+  var handedAt = {};
   window.__favillaCallWraps = function (evs) {
     try {
       if (!Array.isArray(evs) || typeof callsIngestWrap !== 'function') return;
       var st = (typeof pwacState === 'object' && pwacState) ? pwacState : null;
+      var now = Date.now();
       evs.forEach(function (ev) {
         if (!ev || ev.kind !== 21059) return;
+        var t = handedAt[ev.id] || 0;
+        if (now - t < 30000) return;
+        handedAt[ev.id] = now;
         // Handed over again while nothing is ringing in the client: a wrap it
         // dropped earlier (KEY not ready yet) gets another go.
-        if (st && st.phase === 'idle' && st.seenWraps && st.seenWraps.delete) st.seenWraps.delete(ev.id);
+        if (t && st && st.phase === 'idle' && st.seenWraps && st.seenWraps.delete) st.seenWraps.delete(ev.id);
         ev._live = true;
+        console.log('[calls] wrap ' + String(ev.id).slice(0, 8) + ' from the app (' + (ev.content || '').length + 'B' + (t ? ', again' : '') + ')');
         callsIngestWrap(ev);
       });
     } catch (e) {}
   };
+  // The page's own call and KEY lines go to the app's diagnostics, so a call
+  // that never rang can be read after the fact (Settings > This iPhone).
+  (function () {
+    function fwd(level, args) {
+      try {
+        var s = Array.prototype.map.call(args, function (a) { return typeof a === 'string' ? a : (a && a.message) || JSON.stringify(a); }).join(' ');
+        if (!/^\[(calls|dev|sat|fsec|pwac)\]/.test(s)) return;
+        var mh = window.webkit && webkit.messageHandlers;
+        if (mh && mh.favillaApp) mh.favillaApp.postMessage({ log: (level === 'log' ? '' : level + ': ') + s.slice(0, 300) });
+      } catch (e) {}
+    }
+    ['log', 'warn', 'error'].forEach(function (k) {
+      var orig = console[k];
+      console[k] = function () { fwd(k, arguments); try { orig.apply(console, arguments); } catch (e) {} };
+    });
+  })();
 
   // ---- 7b. passwords handed over by another manager (issue #16) -----------------
   // Apple Passwords > Export Data to Another App: iOS gives the app the logins

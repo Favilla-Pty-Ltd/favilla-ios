@@ -27,6 +27,10 @@ final class CallRing: NSObject, ObservableObject {
     private let provider: CXProvider
     private let controller = CXCallController()
     private(set) var current: UUID?          // the call CallKit is showing
+    /// When the wrap that started the ring was made (the push's `at`): only wraps
+    /// from then on go to the client. Handing it the last call's offer again
+    /// queued a 13 KB decrypt on the KEY ahead of this call's answer (11 Nov).
+    private(set) var ringSince: TimeInterval = 0
     private var answered = false
     private var pwaIncoming = false          // the PWA has the offer and is showing its banner
     private var pwaLive = false              // the PWA is in a call (ours or outgoing)
@@ -147,6 +151,8 @@ final class CallRing: NSObject, ObservableObject {
         let id = UUID()
         current = id
         answered = false
+        let fv = payload["fv"] as? [String: Any]
+        ringSince = (fv?["at"] as? Double) ?? Date().timeIntervalSince1970
         let u = CXCallUpdate()
         u.remoteHandle = CXHandle(type: .generic, value: "Nostr call")
         u.localizedCallerName = "Nostr call"

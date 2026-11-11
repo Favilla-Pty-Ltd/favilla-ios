@@ -117,7 +117,12 @@ struct NostrClientView: UIViewRepresentable {
             var evs: [[String: Any]] = []
             for i in 0..<20 {
                 guard CallRing.shared.current != nil, !CallRing.shared.clientHasCall else { return }
-                if evs.isEmpty || i % 5 == 0 { evs = await Bunker.callWraps(pubkey: pk) }
+                if evs.isEmpty || i % 5 == 0 {
+                    // Only this call's wraps: the bridge keeps 90 s of them, and
+                    // the last call's offer must not be decrypted again.
+                    let since = CallRing.shared.ringSince - 5
+                    evs = await Bunker.callWraps(pubkey: pk).filter { (($0["created_at"] as? Double) ?? 0) >= since }
+                }
                 if !evs.isEmpty, let d = try? JSONSerialization.data(withJSONObject: evs), let js = String(data: d, encoding: .utf8) {
                     wv.evaluateJavaScript("window.__favillaCallWraps && window.__favillaCallWraps(\(js))") { _, _ in }
                     Bunker.log("call: \(evs.count) wrap(s) handed to the client (try \(i + 1))")

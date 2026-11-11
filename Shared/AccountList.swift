@@ -49,13 +49,25 @@ enum AccountList {
 
     /// Replace the list with the KEY's (LIST, 9h). Entries iOS can't list under a
     /// website (an app's name, a passkey without its id) are left out.
+    /// Why the last replace left entries out, for the note under the button.
+    static var leftOut: (name: Int, noUser: Int, passkey: Int) = (0, 0, 0)
+    static func leftOutText() -> String {
+        var p: [String] = []
+        if leftOut.name > 0 { p.append("\(leftOut.name) saved under a name rather than a website") }
+        if leftOut.noUser > 0 { p.append("\(leftOut.noUser) with no username") }
+        if leftOut.passkey > 0 { p.append("\(leftOut.passkey) passkey\(leftOut.passkey == 1 ? "" : "s") without a record") }
+        return p.joined(separator: ", ")
+    }
+
     static func replace(with list: [AppChannel.ListEntry], done: @escaping (Int) -> Void) {
         guard isOn else { done(0); return }
+        leftOut = (0, 0, 0)
         let e: [Entry] = list.compactMap { x in
             let site = x.site.lowercased()
-            guard !x.user.isEmpty, site.contains("."), !site.contains(" ") else { return nil }
+            guard !x.user.isEmpty else { leftOut.noUser += 1; return nil }
+            guard site.contains("."), !site.contains(" ") else { leftOut.name += 1; return nil }
             if x.passkey {
-                guard let id = x.credentialID, !id.isEmpty, let h = x.userHandle else { return nil }
+                guard let id = x.credentialID, !id.isEmpty, let h = x.userHandle else { leftOut.passkey += 1; return nil }
                 return Entry(passkey: true, site: site, user: x.user, credentialID: id, userHandle: h)
             }
             return Entry(passkey: false, site: site, user: x.user, code: x.health?.hasCode == true)

@@ -217,7 +217,7 @@ struct HomeBody: View {
             case .list(let l)?:
                 AccountList.replace(with: l) { n in
                     count = AccountList.entries.count
-                    listNote = n == l.count ? "\(n) accounts from your KEY." : "\(n) of the KEY's \(l.count) accounts listed (iOS lists websites only)."
+                    listNote = n == l.count ? "\(n) accounts from your KEY." : "\(n) of the KEY's \(l.count) accounts listed. iOS lists websites only; left out: \(AccountList.leftOutText())."
                 }
             case .failed(let why)? where link.mode == .list:
                 listNote = why

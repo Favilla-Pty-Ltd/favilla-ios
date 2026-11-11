@@ -110,7 +110,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                               uv: p.userVerificationPreference, allow: [id.credentialID])
         } else if let id = credentialRequest.credentialIdentity as? ASPasswordCredentialIdentity {
             let (site, isApp) = Self.pick([id.serviceIdentifier])
-            fillPassword(site: site, user: id.user, isApp: isApp)
+            fillPassword(site: site, user: id.user == AccountList.unknownUser ? "" : id.user, isApp: isApp)   // a list entry the KEY hadn't labelled: ask by site
         } else {
             notice = "iOS asked for something Favilla can't read."
             show()

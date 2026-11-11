@@ -29,6 +29,8 @@ enum AccountList {
     private static var store: UserDefaults { UserDefaults(suiteName: "group.io.favillakey.app") ?? .standard }
 
     static var isOn: Bool { store.bool(forKey: onKey) }
+    /// Shown by iOS where the username would be, for an entry the KEY hasn't labelled yet.
+    static let unknownUser = "on the KEY"
 
     static var entries: [Entry] {
         guard let d = store.data(forKey: entriesKey), let e = try? JSONDecoder().decode([Entry].self, from: d) else { return [] }
@@ -64,13 +66,17 @@ enum AccountList {
         leftOut = (0, 0, 0)
         let e: [Entry] = list.compactMap { x in
             let site = x.site.lowercased()
-            guard !x.user.isEmpty else { leftOut.noUser += 1; return nil }
             guard site.contains("."), !site.contains(" ") else { leftOut.name += 1; return nil }
+            // The KEY reads usernames from the sealed records in the background
+            // after the PIN; one it hasn't read yet is still listed, by site, and
+            // iOS shows this in place of the name. The ask goes by site anyway.
+            let user = x.user.isEmpty && !x.passkey ? AccountList.unknownUser : x.user
+            guard !user.isEmpty else { leftOut.noUser += 1; return nil }
             if x.passkey {
                 guard let id = x.credentialID, !id.isEmpty, let h = x.userHandle else { leftOut.passkey += 1; return nil }
                 return Entry(passkey: true, site: site, user: x.user, credentialID: id, userHandle: h)
             }
-            return Entry(passkey: false, site: site, user: x.user, code: x.health?.hasCode == true)
+            return Entry(passkey: false, site: site, user: user, code: x.health?.hasCode == true)
         }
         save(e)
         ASCredentialIdentityStore.shared.removeAllCredentialIdentities { _, _ in

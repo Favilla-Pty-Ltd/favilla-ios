@@ -226,6 +226,7 @@ enum AppChannel {
         var reused: Bool { raw & 0x10 != 0 }
         var breached: Bool { raw & 0x20 != 0 }
         var checked: Bool { raw & 0x40 != 0 }
+        var hasCode: Bool { raw & 0x80 != 0 }        // 11v: a one-time code is linked to this entry
     }
 
     /// 0xC0 body: [status][pending u16 LE][count][prefix 3 x count]. Each prefix is

@@ -14,6 +14,7 @@
 
 import SafariServices
 import SwiftUI
+import UniformTypeIdentifiers
 import UIKit
 
 @MainActor
@@ -145,6 +146,23 @@ final class AccountsModel: ObservableObject {
     }
     private func hibp(_ prefix: String) async throws -> [String] { try await AccountsModel.hibp(prefix) }
 
+    /// OTP (11v): the code linked to this entry. The KEY shows that code alone
+    /// when the ask comes within 60 s of a FILL it answered for the entry;
+    /// otherwise the owner picks it on the KEY. ENTER on the KEY sends it.
+    func code(_ e: AppChannel.ListEntry) async -> Result<String, KeySession.Failure> {
+        guard let site = KeyLink.siteBytes(site: e.site, appName: false) else { return .failure(KeySession.Failure("That site name is too long for the KEY.")) }
+        do {
+            let s = try await open()
+            let a = try await s.request(AppChannel.cOtp, AppChannel.otpBody(site: site), timeout: 40)
+            if a.rsp == AppChannel.rErr { return .failure(KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF))) }
+            guard a.rsp == AppChannel.rOtp else { return .failure(KeySession.Failure("The KEY answered with type \(String(format: "%02x", a.rsp)).")) }
+            do { return .success(try AppChannel.parseOtp(a.body)) }
+            catch AppChannel.BodyFailure.status(let st) { return .failure(KeySession.Failure(KeyLink.otpMessage(st))) }
+            catch { return .failure(KeySession.Failure("The KEY's code couldn't be read.")) }
+        } catch let f as KeySession.Failure { return .failure(f) }
+        catch { return .failure(KeySession.Failure("\(error)")) }
+    }
+
     /// SHOW: the entry's PASSWORD screen on the KEY, so the sign-in that follows is one press.
     func show(_ e: AppChannel.ListEntry) async -> String? {
         guard let id = e.id else { return "This KEY can't put an entry on its screen yet (firmware 11s)." }
@@ -169,6 +187,7 @@ struct AccountsView: View {
     @StateObject private var m = AccountsModel()
     @State private var picked: PickedAccount?
     @State private var filter = ""
+    @State private var qr: SetupKeyQR.Prefill?
     @Environment(\.dismiss) private var dismiss
 
     private var shown: [AppChannel.ListEntry] {
@@ -227,6 +246,7 @@ struct AccountsView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { m.close(); dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) }
             }
             .sheet(item: $picked) { p in AccountSheet(e: p.e, model: m) }
+            .sheet(item: $qr) { p in SetupKeyQR(prefill: p) }
             .onAppear { if m.entries.isEmpty { m.load() } }
             .onDisappear { m.close() }
         }
@@ -249,12 +269,18 @@ struct AccountsView: View {
                     Pill("\(reused) reused", tone: reused > 0 ? .warn : .quiet)
                     Pill("\(weak) weak", tone: weak > 0 ? .warn : .quiet)
                     if pending > 0 { Pill("\(pending) unchecked", tone: .quiet) }
+                    let codes = hs.filter { $0.hasCode }.count
+                    if codes > 0 { Pill("\(codes) with 2FA", tone: .good) }
                 }
             }
             HStack(spacing: 12) {
                 BrandButton(title: m.busy.isEmpty ? "CHECK BREACHES" : m.busy.uppercased(), filled: m.busy.isEmpty) { m.checkBreaches() }
                     .disabled(!m.busy.isEmpty)
                 Button("Refresh") { m.load() }.font(Brand.button).foregroundStyle(Brand.brass).disabled(!m.busy.isEmpty)
+            }
+            Button { qr = SetupKeyQR.Prefill(site: "", account: "") } label: {
+                HStack(spacing: 6) { Image(systemName: "qrcode"); Text("Setup key to QR, for the KEY to scan") }
+                    .font(Brand.small).foregroundStyle(Brand.brass)
             }
         }
         .padding(16)
@@ -294,6 +320,7 @@ private struct AccountRow: View {
                     case 3: Pill("Imported", tone: .quiet)
                     default: EmptyView()
                     }
+                    if h.hasCode { Pill("2FA", tone: .good) }
                     if !h.checked { Pill("Breach check pending", tone: .quiet) }
                 }
                 .padding(.top, 2)
@@ -325,6 +352,10 @@ private struct AccountSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var status = ""
     @State private var working = false
+    @State private var codeWorking = false
+    @State private var code = ""
+    @State private var codeNote = ""
+    @State private var qr: SetupKeyQR.Prefill?
 
     var body: some View {
         NavigationStack {
@@ -342,6 +373,7 @@ private struct AccountSheet: View {
                             if h.strength == 3 && !h.breached && !h.reused { Line("Strong", "Long and random. Nothing to do here.", bad: false) }
                             if h.origin == 1 { Line("Made on KEY", "The KEY generated this one; it was never typed anywhere.", bad: false) }
                             if h.origin == 3 { Line("Imported", "Came in through the Nostr client's import. The KEY has scored it like any other.", bad: false) }
+                            if h.hasCode { Line("2FA", "A one-time code on the KEY is linked to this account. At a sign-in, the code is one press on the KEY after the password.", bad: false) }
                             if !h.checked { Line("Breach check pending", "The KEY hasn't held this password since the PIN. Sign in with it once, or leave the KEY on its home screen a while, then check breaches.", bad: false) }
                         }
                     }
@@ -350,6 +382,30 @@ private struct AccountSheet: View {
                     Text("Puts this account on the KEY's screen and opens the site. Tap the password field, choose Favilla in the keyboard bar, and the sign-in is one press on the KEY.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                     if !status.isEmpty { Text(status).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
+
+                    if e.health?.hasCode == true {
+                        BrandButton(title: codeWorking ? "ASKING THE KEY…" : "GET CODE", filled: false) { getCode() }
+                            .disabled(codeWorking || working)
+                        if !code.isEmpty {
+                            HStack(spacing: 14) {
+                                Text(code.count == 6 ? code.prefix(3) + " " + code.suffix(3) : code)
+                                    .font(.system(size: 34, weight: .semibold, design: .monospaced)).foregroundStyle(Brand.ink)
+                                Spacer()
+                                Button("Copy") {
+                                    UIPasteboard.general.setItems([[UTType.plainText.identifier: code]], options: [.expirationDate: Date().addingTimeInterval(60)])
+                                    codeNote = "Copied. The clipboard forgets it in a minute."
+                                }.font(Brand.button).foregroundStyle(Brand.brass)
+                            }
+                            .padding(16).background(Brand.card).clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                        if !codeNote.isEmpty { Text(codeNote).font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true) }
+                        Text("Press ENTER on the KEY when it shows the code. Codes change every 30 seconds; the sign-in sheet usually fills them for you without this.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button { qr = SetupKeyQR.Prefill(site: e.site, account: e.user) } label: {
+                        HStack(spacing: 6) { Image(systemName: "qrcode"); Text("Site gave you a setup key instead of a QR? Make the QR here") }
+                            .font(Brand.small).foregroundStyle(Brand.brass).multilineTextAlignment(.leading)
+                    }
 
                     Text("FIX IT").font(Brand.label).tracking(2).foregroundStyle(Brand.brass).padding(.top, 6)
                     VStack(alignment: .leading, spacing: 0) {
@@ -367,8 +423,22 @@ private struct AccountSheet: View {
             .background(Brand.bg.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) } }
+            .sheet(item: $qr) { p in SetupKeyQR(prefill: p) }
         }
         .preferredColorScheme(.dark)
+        .onDisappear { code = "" }
+    }
+
+    private func getCode() {
+        codeWorking = true
+        code = ""; codeNote = ""
+        Task {
+            switch await model.code(e) {
+            case .success(let c): code = c; codeNote = ""
+            case .failure(let f): codeNote = f.description
+            }
+            codeWorking = false
+        }
     }
 
     private func signIn() {

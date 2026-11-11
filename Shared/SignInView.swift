@@ -104,6 +104,11 @@ struct SignInView: View {
                     ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepRow(text: s.0, state: s.1) }
                 }
                 .padding(.horizontal, 2)
+                if purpose == .password {
+                    // Some apps fill only the field the sheet was opened from.
+                    Text("Opened from the username box? Some apps fill only that field: tap the password box and pick Favilla again to fill both.")
+                        .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer()

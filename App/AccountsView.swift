@@ -95,7 +95,7 @@ final class AccountsModel: ObservableObject {
                     let page = try await health(s, body: Data())
                     if page.prefixes.isEmpty {
                         status = page.pending == 0 ? "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). Every password the KEY has seen this sitting is checked."
-                            : "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). \(page.pending) account\(page.pending == 1 ? "" : "s") still pending: the KEY hasn't held \(page.pending == 1 ? "that password" : "those passwords") since the PIN. Sign in with them, or leave the KEY on its home screen a while, then check again."
+                            : "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). \(page.pending) account\(page.pending == 1 ? "" : "s") not scored yet. Passwords are scored when saved; entries from before this update are scored 24 per unlock from the KEY's own password page. Lock and unlock the KEY and check again."
                         break
                     }
                     if page.pending == lastPending, page.prefixes.isEmpty { break }
@@ -231,7 +231,7 @@ struct AccountsView: View {
                     if m.oldFirmware {
                         Text("Health badges need KEY firmware 11s or later.").font(Brand.small).foregroundStyle(Brand.grey).padding(.horizontal, 16)
                     }
-                    Text("Health is scored on the KEY each time it holds a password: at a sign-in, when an entry is saved, and a few entries at a time while it sits on its home screen. The breach check sends Have I Been Pwned the first 5 characters of a password's hash and nothing else; the KEY does the matching.")
+                    Text("Health is scored on the KEY when a password is saved or imported, and for older entries 24 per unlock from the KEY's own password page. The breach check sends Have I Been Pwned the first 5 characters of a password's hash and nothing else; the KEY does the matching.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 16)
                     if !m.log.isEmpty {
                         LogBox(lines: m.log, maxHeight: 160).padding(.horizontal, 16)
@@ -374,7 +374,7 @@ private struct AccountSheet: View {
                             if h.origin == 1 { Line("Made on KEY", "The KEY generated this one; it was never typed anywhere.", bad: false) }
                             if h.origin == 3 { Line("Imported", "Came in through the Nostr client's import. The KEY has scored it like any other.", bad: false) }
                             if h.hasCode { Line("2FA", "A one-time code on the KEY is linked to this account. At a sign-in, the code is one press on the KEY after the password.", bad: false) }
-                            if !h.checked { Line("Breach check pending", "The KEY hasn't held this password since the PIN. Sign in with it once, or leave the KEY on its home screen a while, then check breaches.", bad: false) }
+                            if !h.checked { Line("Breach check pending", "Sealed before the KEY scored passwords. The KEY scores such entries 24 per unlock from its own password page: lock and unlock it, then check breaches again.", bad: false) }
                         }
                     }
                     BrandButton(title: working ? "ASKING THE KEY…" : "SIGN IN ON THE SITE", filled: !working) { signIn() }

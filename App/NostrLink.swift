@@ -179,7 +179,11 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         // reconnects at once instead of every call waiting out a long timeout.
         // A NIP46 request waits up to 4 s on the KEY (10p), and a bunker answer can
         // carry up to 40 KB back: give those 12 s.
-        let limit = (j.cmd == Bunker.cNip46 || j.cmd == Bunker.cPoll ? 12 : 6) + Double(msg.count) / 8_000
+        // 11 Nov: a video call offer is an 11 KB /nip-decrypt; the KEY took more
+        // than the 7 s this gave it (4 KB voice offers got through). Until the
+        // KEY side is measured (firmware issue), a big API body gets 1 s per KB
+        // each way on top.
+        let limit = (j.cmd == Bunker.cNip46 || j.cmd == Bunker.cPoll ? 12 : 6) + Double(msg.count) / (j.cmd == AppChannel.cApi ? 500 : 8_000)
         arm(limit) { [weak self] in
             guard let self else { return }
             let pr = self.reasm.progress

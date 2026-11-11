@@ -164,11 +164,11 @@ final class CallRing: NSObject, ObservableObject {
             done()
         }
         note("ringing (VoIP push)")
-        // The PWA has 25 s to confirm there is a call to take (the wrap was an
+        // The PWA has 50 s to confirm there is a call to take (a video offer's decrypt is slow) (the wrap was an
         // offer and the KEY decrypted it). A hang-up or stray wrap, or a KEY out
         // of reach, ends the ring then.
         endTimer?.invalidate()
-        endTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: false) { [weak self] _ in
+        endTimer = Timer.scheduledTimer(withTimeInterval: 50, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.current != nil, !self.pwaIncoming, !self.pwaLive else { return }
                 self.note("no offer reached the client in time: ending the ring")

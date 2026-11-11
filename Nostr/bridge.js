@@ -332,7 +332,7 @@
   // Call wraps the bridge kept while this client wasn't connected (ephemeral
   // events: a relay never replays them). Into the PWA's own receive path.
   // The app hands the bridge's wraps over every 3 s while the ring is up. A
-  // wrap is given to the client once, and again only after 30 s with the client
+  // wrap is given to the client once, and again only after 20 s with the client
   // still idle: handing the same wrap in every 3 s re-queued its decrypt on
   // the KEY each time (the page forgets a wrap when idle so a dropped one gets
   // another go), and a video offer, several KB through the Bluetooth tunnel,
@@ -346,7 +346,7 @@
       evs.forEach(function (ev) {
         if (!ev || ev.kind !== 21059) return;
         var t = handedAt[ev.id] || 0;
-        if (now - t < 30000) return;
+        if (now - t < 20000) return;
         handedAt[ev.id] = now;
         // Handed over again while nothing is ringing in the client: a wrap it
         // dropped earlier (KEY not ready yet) gets another go.

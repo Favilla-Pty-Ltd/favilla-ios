@@ -147,17 +147,18 @@ enum AppChannel {
     }
 
     /// XOR with the keystream: Ke = H(K, "FAVILLA-CHAN-ENC-1"),
-    /// block i = H(Ke, rsp || clientId || ctr || i). The same call decrypts.
-    /// The block index is one byte (encBody on the KEY refuses more), issue #9.
-    static let keystreamMax = 255 * 32
-
+    /// block i = H(Ke, rsp || clientId || ctr || index). The same call decrypts.
+    /// The index is one byte for blocks 0 to 254; from block 255 it is
+    /// 0xFF || i u16 LE (KEY 11ad, issue #9 / #20), so a body can be as long as
+    /// the 40 KB message cap allows. Bodies up to 8160 bytes are unchanged.
     static func keystream(_ body: Data, rsp: UInt8, ctr: UInt32, _ creds: Credentials) -> Data {
-        precondition(body.count <= keystreamMax, "keystream: body over 255 blocks")
         let ke = h(creds.key, Data("FAVILLA-CHAN-ENC-1".utf8))
         var out = [UInt8](body)
         var i = 0
         while i < out.count {
-            var seed = Data([rsp]); seed.append(creds.clientId); seed.append(le32(ctr)); seed.append(UInt8(i / 32))
+            let blk = i / 32
+            var seed = Data([rsp]); seed.append(creds.clientId); seed.append(le32(ctr))
+            if blk < 255 { seed.append(UInt8(blk)) } else { seed.append(contentsOf: [0xFF, UInt8(blk & 0xFF), UInt8(blk >> 8)]) }
             let ks = [UInt8](h(ke, seed))
             for j in 0..<min(32, out.count - i) { out[i + j] ^= ks[j] }
             i += 32
@@ -176,7 +177,6 @@ enum AppChannel {
         case badMac
         case wrongClient
         case short
-        case tooLong   // an encrypted body over 255 x 32 bytes: the keystream's block index is one byte
     }
 
     /// Check an answer's mac and client, decrypt its body if it is an encrypted type.
@@ -191,7 +191,6 @@ enum AppChannel {
         let ctr = UInt32(b[9]) | UInt32(b[10]) << 8 | UInt32(b[11]) << 16 | UInt32(b[12]) << 24
         var body = Data(b[13..<(b.count - 16)])
         if encrypted.contains(b[0]) {
-            guard body.count <= keystreamMax else { throw Failure.tooLong }
             body = keystream(body, rsp: b[0], ctr: ctr, creds)
         }
         return Answer(rsp: b[0], ctr: ctr, body: body)

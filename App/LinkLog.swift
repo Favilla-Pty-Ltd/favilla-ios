@@ -5,7 +5,7 @@
 //
 // It holds lengths, counters, report headers and reasons only: never a key,
 // a body, a path's query or anything a request or answer carries.
-// The last 600 lines are kept, in memory and in a file in Caches, so a crash
+// The last 2000 lines are kept, in memory and in a file in Caches, so a crash
 // doesn't lose them.
 
 import Combine
@@ -13,7 +13,7 @@ import Foundation
 
 final class LinkLog: ObservableObject, @unchecked Sendable {
     static let shared = LinkLog()
-    static let max = 600
+    static let max = 2000
 
     @Published private(set) var lines: [String] = []
     private var buf: [String] = []          // the real log, under lock; `lines` is its copy for the UI

@@ -93,12 +93,13 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                 let msg = AppChannel.request(cmd, self.creds, ctr: ctr, body: body)
                 guard msg.count <= AppChannel.msgMaxApi else { k.resume(throwing: Failure("request too large")); return }
                 self.waiting = (cmd, ctr, k)
-                self.arm(timeout + Double(msg.count) / 8_000) {
-                    self.mark(String(format: "no answer to %02x ctr %u", cmd, ctr))
-                    self.waiting?.k.resume(throwing: Failure("The KEY didn't answer.")); self.waiting = nil
-                }
+                // Generous while the request is going out; the real limit is
+                // armed from the last write (issue #20 item 3).
+                self.pendingLimit = timeout
+                self.arm(timeout + Double(msg.count) / 1_000) { self.noAnswer(cmd, ctr) }
                 let per = max(1, min(8, p.maximumWriteValueLength(for: .withoutResponse) / 64))
                 self.writes = AppChannel.writes(msg, perWrite: per, limit: AppChannel.msgMaxApi)
+                self.writeStarted = Date(); self.writeBytes = msg.count
                 self.writeNext()
             }
         }
@@ -121,9 +122,40 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         opened?.resume(throwing: Failure(why)); opened = nil
     }
 
+    private var pendingLimit: TimeInterval = 0
+    private var writeStarted = Date()
+    private var writeBytes = 0
+
+    private func noAnswer(_ cmd: UInt8, _ ctr: UInt32) {
+        mark(String(format: "no answer to %02x ctr %u", cmd, ctr))
+        waiting?.k.resume(throwing: Failure("The KEY didn't answer.")); waiting = nil
+    }
+
+    /// Without response from KEY 11ad (the characteristic says so), paced on
+    /// canSendWriteWithoutResponse; with response on an older KEY.
     private func writeNext() {
         guard let p = peripheral, let ci = chanIn, !writes.isEmpty else { return }
+        if ci.properties.contains(.writeWithoutResponse) {
+            while !writes.isEmpty, p.canSendWriteWithoutResponse {
+                p.writeValue(writes.removeFirst(), for: ci, type: .withoutResponse)
+            }
+            if writes.isEmpty { written() }
+            return
+        }
         p.writeValue(writes.removeFirst(), for: ci, type: .withResponse)
+    }
+
+    /// The last write went out: the answer limit counts from here.
+    private func written() {
+        let ms = Int(Date().timeIntervalSince(writeStarted) * 1000)
+        if writeBytes >= 2048 { mark("wrote \(writeBytes) bytes in \(ms) ms") }
+        guard let w = waiting, pendingLimit > 0 else { return }
+        let limit = pendingLimit; pendingLimit = 0
+        arm(limit) { self.noAnswer(w.cmd, w.ctr) }
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) {
+        q.async { self.writeNext() }
     }
 
     func centralManagerDidUpdateState(_ c: CBCentralManager) {
@@ -233,7 +265,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             waiting?.k.resume(throwing: Failure("Write to the KEY failed.")); waiting = nil
             return
         }
-        writeNext()
+        if writes.isEmpty { written() } else { writeNext() }
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {

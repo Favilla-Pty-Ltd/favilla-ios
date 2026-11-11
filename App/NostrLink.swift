@@ -44,6 +44,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var writes: [Data] = []
     private var writing = Data()
     private var busyRetries = 0
+    private var writeStarted = Date()
+    private var writeBytes = 0
+    private var pendingLimit: Double = 0          // the current request's answer limit, counted from its last write
+    private var reconnectDelay: TimeInterval = 0  // back-off after a drop: 0, 0.25, 0.5 ... 8 s
     private var timeCtr: UInt32 = 0          // the TIME request, while it is out
     private var lastTimeCtr: UInt32 = 0      // the last TIME sent: its answer may come after we moved on (#9 item 5)
     private var helloCtr: UInt32 = 0         // HELLO, while it is out: which life the KEY is in (#9, 9 Nov)
@@ -183,8 +187,12 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         // than the 7 s this gave it (4 KB voice offers got through). Until the
         // KEY side is measured (firmware issue), a big API body gets 1 s per KB
         // each way on top.
+        // The limit counts from the request's LAST write (issue #20 item 3): a
+        // 31 KB VAULT_PUT took 12 s to write with-response and the limit ran out
+        // while it was still going out.
         let limit = (j.cmd == Bunker.cNip46 || j.cmd == Bunker.cPoll ? 12 : 6) + Double(msg.count) / (j.cmd == AppChannel.cApi ? 500 : 8_000)
-        arm(limit) { [weak self] in
+        pendingLimit = limit
+        arm(limit + Double(msg.count) / 2_000) { [weak self] in
             guard let self else { return }
             let pr = self.reasm.progress
             LinkLog.shared.add("TIMEOUT ctr \(j.ctr) after \(String(format: "%.1f", limit)) s: \(self.notes) notifications since the request, holding \(pr.have) of \(pr.want) bytes; dropping the link")
@@ -223,25 +231,61 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - Writing
 
-    /// One message on 8F1A0005, as whole 64-byte reports, up to 8 per write (512 bytes).
+    /// One message on 8F1A0005, as whole 64-byte reports, up to 8 per write
+    /// (512 bytes). Written without response from KEY 11ad (issue #20): iOS
+    /// pipelines those, so a 31 KB vault backup crosses in a second or two
+    /// instead of 12 s of round trips; paced on canSendWriteWithoutResponse.
+    /// A KEY before 11ad (no write-without-response on the characteristic)
+    /// still gets with-response writes.
     private func sendMessage(_ msg: Data) {
         guard let p = peripheral else { return }
         let wnr = p.maximumWriteValueLength(for: .withoutResponse)
         let per = max(1, min(8, wnr / 64))
         if per != lastPer {
-            LinkLog.shared.add("write size: \(per) report\(per == 1 ? "" : "s") per write (ATT MTU \(wnr + 3))")
+            LinkLog.shared.add("write size: \(per) report\(per == 1 ? "" : "s") per write (ATT MTU \(wnr + 3), \(withoutResponse ? "without" : "with") response)")
             lastPer = per
         }
         notes = 0
         writes = AppChannel.writes(msg, perWrite: per, limit: AppChannel.msgMaxApi)
         busyRetries = 0
+        writeStarted = Date(); writeBytes = msg.count
         writeNext()
     }
 
+    private var withoutResponse: Bool { chanIn?.properties.contains(.writeWithoutResponse) == true }
+
     private func writeNext() {
         guard let p = peripheral, let ci = chanIn, !writes.isEmpty else { return }
+        if withoutResponse {
+            while !writes.isEmpty, p.canSendWriteWithoutResponse {
+                writing = writes.removeFirst()
+                p.writeValue(writing, for: ci, type: .withoutResponse)
+            }
+            if writes.isEmpty { written() }
+            return                                   // the rest when peripheralIsReady fires
+        }
         writing = writes.removeFirst()
         p.writeValue(writing, for: ci, type: .withResponse)
+    }
+
+    /// The request's last write has gone out: its answer limit starts now.
+    private func written() {
+        let ms = Int(Date().timeIntervalSince(writeStarted) * 1000)
+        if writeBytes >= 2048 { LinkLog.shared.add("wrote \(writeBytes) bytes in \(ms) ms") }
+        guard current != nil, pendingLimit > 0 else { return }
+        let limit = pendingLimit; pendingLimit = 0
+        arm(limit) { [weak self] in
+            guard let self, let j = self.current else { return }
+            let pr = self.reasm.progress
+            LinkLog.shared.add("TIMEOUT ctr \(j.ctr) \(String(format: "%.1f", limit)) s after the last write: \(self.notes) notifications, holding \(pr.have) of \(pr.want) bytes; dropping the link")
+            self.drop()
+            self.state = .idle
+            self.finishCurrent(.failure(KeyApiError.timedOut))
+        }
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) {
+        writeNext()
     }
 
     // MARK: - Connecting
@@ -347,6 +391,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private func ready() {
         timer?.cancel(); timer = nil
         timeCtr = 0
+        reconnectDelay = 0
         connectTimer?.cancel(); connectTimer = nil
         if state != .ready { LinkLog.shared.add("ready") }
         state = .ready
@@ -518,8 +563,17 @@ extension NostrLink: CBCentralManagerDelegate {
         // Keep the queue: the next request reconnects. Only the one in flight fails.
         drop()
         state = .idle
-        if current != nil { finishCurrent(.failure(KeyApiError.notReady("Your KEY dropped the link."))) } else { pump() }
-        if NostrLink.wantUp { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.stayUp() } }
+        // Back-off (issue #20 item 2): 75 connect/disconnect pairs in 350 ms
+        // after a drop, because the queue reconnected at once each time.
+        let delay = reconnectDelay
+        reconnectDelay = min(8, max(0.25, reconnectDelay * 2))
+        if delay > 0 { LinkLog.shared.add("reconnect in \(String(format: "%.2g", delay)) s") }
+        if current != nil { finishCurrent(.failure(KeyApiError.notReady("Your KEY dropped the link."))) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.state == .idle else { return }
+            self.pump()
+            if NostrLink.wantUp { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.stayUp() } }
+        }
     }
 }
 
@@ -569,7 +623,7 @@ extension NostrLink: CBPeripheralDelegate {
             return
         }
         busyRetries = 0
-        writeNext()
+        if writes.isEmpty { written() } else { writeNext() }
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {

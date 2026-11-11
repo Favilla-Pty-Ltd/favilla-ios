@@ -313,10 +313,27 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
     check(got == [m], "issue #9: three notifications reassemble to the answer")
     let a = try AppChannel.open(got[0], chCreds)
     check(a.rsp == AppChannel.rApi && a.ctr == 9 && ApiWire.decodeAnswer(a.body)?.body.count == 1168, "issue #9: opens and decodes to 200 with 1168 bytes")
-    var big = Data([AppChannel.rApi]) + chCreds.clientId + Data([9, 0, 0, 0]) + Data(count: AppChannel.keystreamMax + 1)
-    big += AppChannel.h(chCreds.key, Data("RSP".utf8) + big).prefix(16)
-    check((try? AppChannel.open(big, chCreds)) == nil, "issue #9: an encrypted body over 8160 bytes is refused, not a crash")
-    do { _ = try AppChannel.open(big, chCreds) } catch { check(error as? AppChannel.Failure == .tooLong, "issue #9: refused as tooLong") }
+    // 11ad (issue #20): a 9000-byte body crosses block 255; the first 8160 bytes
+    // keep the one-byte index, the rest use [0xFF][i u16 LE]. Same vector as
+    // host/chan_enc_test.cpp: K = 00..1F, clientId A0..A7, rsp R_API, ctr 9.
+    do {
+        let vk = Credentials(key: Data((0..<32).map { UInt8($0) }), clientId: Data((0..<8).map { UInt8(0xA0 + $0) }))
+        let long = Data((0..<9000).map { UInt8(truncatingIfNeeded: $0 * 7 + 1) })
+        let e = AppChannel.keystream(long, rsp: AppChannel.rApi, ctr: 9, vk)
+        let short = AppChannel.keystream(long.prefix(8160), rsp: AppChannel.rApi, ctr: 9, vk)
+        check(e.prefix(8160) == short, "11ad: the first 8160 bytes are the old scheme's bytes")
+        let ke = AppChannel.h(vk.key, Data("FAVILLA-CHAN-ENC-1".utf8))
+        var seed = Data([AppChannel.rApi]) + vk.clientId + Data([9, 0, 0, 0]) + Data([0xFF, 0xFF, 0x00])
+        var ks = AppChannel.h(ke, seed)
+        check((0..<32).allSatisfy { e[8160 + $0] ^ long[8160 + $0] == ks[$0] }, "11ad: block 255 is H(Ke, ... || FF FF 00)")
+        seed = Data([AppChannel.rApi]) + vk.clientId + Data([9, 0, 0, 0]) + Data([0xFF, 0x00, 0x01])
+        ks = AppChannel.h(ke, seed)
+        check((0..<32).allSatisfy { e[8192 + $0] ^ long[8192 + $0] == ks[$0] }, "11ad: block 256 is H(Ke, ... || FF 00 01)")
+        check(AppChannel.keystream(e, rsp: AppChannel.rApi, ctr: 9, vk) == long, "11ad: round-trips")
+        var big = Data([AppChannel.rApi]) + vk.clientId + Data([9, 0, 0, 0]) + e
+        big += AppChannel.h(vk.key, Data("RSP".utf8) + big).prefix(16)
+        check((try? AppChannel.open(big, vk))?.body == long, "11ad: a 9000-byte encrypted answer opens")
+    }
     check(LinkLog.path(of: try ApiWire.encode(ApiRequest(method: "GET", host: "", path: "/api/pair/sas?pair_id=7", headers: [:], body: Data(), timeout: 5)).unwrap()) == "GET /api/pair/sas", "log: path without its query")
 } catch { check(false, "issue #9 tests threw \(error)") }
 

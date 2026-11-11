@@ -48,7 +48,8 @@ enum AppChannel {
     static let rOtp: UInt8 = 0xB7
     static let rApi: UInt8 = 0xB8   // 9k, encrypted
     // 11s: password health
-    static let cShow: UInt8 = 0x43     // [id 8] -> rAck [status]: the entry's PASSWORD screen on the KEY
+    static let cShow: UInt8 = 0x43
+    static let cAssess: UInt8 = 0x46   // 11ab: [max] -> rAck [status][opening][unseen u16 LE]: score never-assessed entries (0x45 is the browser channel's)     // [id 8] -> rAck [status]: the entry's PASSWORD screen on the KEY
     static let cHealth: UInt8 = 0x44   // none -> prefixes wanted; [prefix 3][n u16][suffix 18 x n] -> what is still pending
     static let rHealth: UInt8 = 0xC0   // encrypted: [status][pending u16][count][prefix 3 x count]
     static let rErr: UInt8 = 0xBF

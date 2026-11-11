@@ -89,13 +89,30 @@ final class AccountsModel: ObservableObject {
             defer { busy = "" }
             do {
                 let s = try await open()
+                // 11ab: have the KEY score the entries it has never assessed (24
+                // per unlock), then wait for its loop before asking for prefixes.
+                var opening = 0, unseen = 0
+                let ar = try await s.request(AppChannel.cAssess, Data([24]), timeout: 10)
+                if ar.rsp == AppChannel.rAck, ar.body.count >= 4, ar.body[0] == 0x00 {
+                    opening = Int(ar.body[1]); unseen = Int(ar.body[2]) | Int(ar.body[3]) << 8
+                    note("assess: opening \(opening), never assessed \(unseen)")
+                    if opening > 0 {
+                        busy = "Scoring \(opening)…"
+                        try await Task.sleep(nanoseconds: UInt64(opening) * 300_000_000)
+                    }
+                } else if ar.rsp == AppChannel.rErr, let st = ar.body.first, st != 0x07, st != 0x04 {
+                    throw KeySession.Failure(AccountsModel.refusal(st))
+                } else {
+                    note("assess: not on this KEY (before 11ab); checking what it has scored")
+                }
+                busy = "Checking breaches…"
                 var buckets = 0, rounds = 0, lastPending = -1
                 while rounds < 40 {
                     rounds += 1
                     let page = try await health(s, body: Data())
                     if page.prefixes.isEmpty {
                         status = page.pending == 0 ? "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). Every password the KEY has seen this sitting is checked."
-                            : "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). \(page.pending) account\(page.pending == 1 ? "" : "s") not scored yet. Passwords are scored when saved; entries from before this update are scored 24 per unlock from the KEY's own password page. Lock and unlock the KEY and check again."
+                            : "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). \(page.pending) account\(page.pending == 1 ? "" : "s") not scored yet" + (unseen > opening ? ": the KEY scores 24 per unlock. Lock and unlock the KEY and check again." : ". Check again in a moment.")
                         break
                     }
                     if page.pending == lastPending, page.prefixes.isEmpty { break }
@@ -231,7 +248,7 @@ struct AccountsView: View {
                     if m.oldFirmware {
                         Text("Health badges need KEY firmware 11s or later.").font(Brand.small).foregroundStyle(Brand.grey).padding(.horizontal, 16)
                     }
-                    Text("Health is scored on the KEY when a password is saved or imported, and for older entries 24 per unlock from the KEY's own password page. The breach check sends Have I Been Pwned the first 5 characters of a password's hash and nothing else; the KEY does the matching.")
+                    Text("Health is scored on the KEY when a password is saved or imported; Check breaches scores older entries too, 24 per unlock. The breach check sends Have I Been Pwned the first 5 characters of a password's hash and nothing else; the KEY does the matching.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 16)
                     if !m.log.isEmpty {
                         LogBox(lines: m.log, maxHeight: 160).padding(.horizontal, 16)
@@ -374,7 +391,7 @@ private struct AccountSheet: View {
                             if h.origin == 1 { Line("Made on KEY", "The KEY generated this one; it was never typed anywhere.", bad: false) }
                             if h.origin == 3 { Line("Imported", "Came in through the Nostr client's import. The KEY has scored it like any other.", bad: false) }
                             if h.hasCode { Line("2FA", "A one-time code on the KEY is linked to this account. At a sign-in, the code is one press on the KEY after the password.", bad: false) }
-                            if !h.checked { Line("Breach check pending", "Sealed before the KEY scored passwords. The KEY scores such entries 24 per unlock from its own password page: lock and unlock it, then check breaches again.", bad: false) }
+                            if !h.checked { Line("Breach check pending", "Not scored yet. Check breaches scores up to 24 such entries per unlock; lock and unlock the KEY for the next batch.", bad: false) }
                         }
                     }
                     BrandButton(title: working ? "ASKING THE KEY…" : "SIGN IN ON THE SITE", filled: !working) { signIn() }

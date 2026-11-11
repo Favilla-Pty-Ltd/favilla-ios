@@ -71,6 +71,20 @@ struct NostrClientView: UIViewRepresentable {
                 else if let r = r as? String, !r.isEmpty { Bunker.log("import: page: \(r)") }
             }
         }
+        // The KEY was set up again, or the app re-paired (issue #22): the client's
+        // pinned device key and session are stale. Cleared before its first
+        // session (a script at document start), and on a HELLO that says so.
+        if PairIdentity.resetNeeded {
+            cfg.userContentController.addUserScript(WKUserScript(source: PairIdentity.clearScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            PairIdentity.resetDone()
+            Bunker.log("client: device pairing cleared (the KEY's pairing identity changed)")
+        }
+        context.coordinator.resetObserver = NotificationCenter.default.addObserver(forName: NostrLink.clientReset, object: nil, queue: .main) { [weak wv] _ in
+            guard let wv else { return }
+            PairIdentity.resetDone()
+            wv.evaluateJavaScript(PairIdentity.clearScript + ";location.reload();") { _, _ in }
+            Bunker.log("client: device pairing cleared and the page reloaded")
+        }
         wv.load(URLRequest(url: URL(string: Self.origin + "/")!))
         return wv
     }
@@ -104,6 +118,7 @@ struct NostrClientView: UIViewRepresentable {
         private(set) var loadedRoute = KeyRoute.current
         var wakeObserver: NSObjectProtocol?
         var importObserver: NSObjectProtocol?
+        var resetObserver: NSObjectProtocol?
 
         /// The bridge's recent call wraps, into the PWA (bridge.js). Kept up
         /// while the ring is up and the client hasn't got the call: on a cold

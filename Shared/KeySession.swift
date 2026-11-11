@@ -305,6 +305,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     static func refusal(_ st: UInt8) -> String {
         switch st {
         case 0x08: return "This iPhone isn't paired with the KEY any more. Open Favilla and PAIR THE APP."
+        case 0x0A: return "The KEY doesn't know this iPhone. On the KEY: Settings > Network > Pair a phone, then PAIR THE APP in Favilla (Settings > This iPhone)."
         default: return Bunker.refusal(st)
         }
     }

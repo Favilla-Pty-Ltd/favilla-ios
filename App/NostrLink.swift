@@ -112,6 +112,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, AppChannel.cHello, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo, Bunker.cNudgeSet]
 
     /// Posted on the main queue for each KEY nudge (path B): userInfo "waiting" (Int).
+    /// Posted when HELLO shows a different KEY pairing identity: the Nostr client clears its device pairing and reloads (issue #22).
+    static let clientReset = Notification.Name("NostrLink.clientReset")
     static let nudged = Notification.Name("NostrLink.nudged")
 
     /// One app-channel request on the shared link; the answer whatever its type
@@ -427,7 +429,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             LinkLog.shared.add(String(format: "  refused: command %02x, status %02x", cmd, st))
             // Only refusals of our own commands count: PAIR THE APP shares 8F1A0006.
             guard NostrLink.ours.contains(cmd) else { return }
-            if st == 0x08 {
+            if st == 0x08 || st == 0x0A {                 // this client gone, or (11ah) the KEY knows no phone: not paired
                 // Forget the pairing only if it is still the one this link used: a
                 // re-pair saved meanwhile must survive the old link's refusal.
                 if Credentials.load() == c { Credentials.forget() }
@@ -446,7 +448,11 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             helloCtr = 0
             let b = [UInt8](a.body)
             if a.rsp == AppChannel.rHello, b.count >= 2 {
-                LinkLog.shared.add(String(format: "  HELLO: life %02x", b[1]))
+                LinkLog.shared.add(String(format: "  HELLO: life %02x", b[1]) + (b.count >= 18 ? ", pair id " + b[10..<18].map { String(format: "%02x", $0) }.joined() : ""))
+                if PairIdentity.note(helloBody: a.body) {
+                    LinkLog.shared.add("  the KEY's pairing identity changed: the Nostr client's device pairing is cleared")
+                    NotificationCenter.default.post(name: NostrLink.clientReset, object: nil)
+                }
                 if b[1] != 0x03 { lost(NostrLink.notNostrBT); return }
             } else if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body) {
                 LinkLog.shared.add("  HELLO refused as a replay: counter raised above \(f)")

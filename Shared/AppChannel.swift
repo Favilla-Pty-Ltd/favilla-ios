@@ -368,6 +368,13 @@ enum AppChannel {
         /// [0x22][extPub 65][nonce 16].
         var reveal: Data { Data([AppChannel.pairReveal]) + extPub + nonce }
 
+        /// The QR the KEY scans instead of showing a code (issue #22, KEY 11ah):
+        /// the same extPub (compressed) and nonce as the REVEAL.
+        var qrText: String {
+            let hex: (Data) -> String = { $0.map { String(format: "%02x", $0) }.joined() }
+            return "favilla:pair?v=1&p=\(hex(priv.publicKey.compressedRepresentation))&n=\(hex(nonce))"
+        }
+
         /// From the KEY's [0xA0][keyPub 65][clientId 8]: the channel key and the 6-digit code.
         func derive(_ a0: Data) throws -> (Credentials, String) {
             let b = [UInt8](a0)
@@ -395,7 +402,7 @@ enum AppChannel {
         case 0x06: return "Your KEY is busy with another request. Finish it on the KEY, then try again."
         case 0x07: return "The KEY couldn't read the request."
         case 0x08: return "This app isn't paired with the KEY any more. Pair it again in the Favilla app: This iPhone > PAIR THE APP."
-        case 0x0A: return "PAIR A PHONE isn't open on the KEY. Open it, then try again."
+        case 0x0A: return "The KEY doesn't know this iPhone. On the KEY: Settings > Network > Pair a phone, then PAIR THE APP in Favilla (Settings > This iPhone)."
         case 0x0B: return "Pairing was refused on the KEY."
         case 0x0C: return "The KEY already has 4 apps paired. Forget phones on the KEY (Settings > Bluetooth), then pair again."
         case 0x0E: return "The KEY couldn't save the pairing. Try again."
@@ -489,5 +496,47 @@ struct Credentials: Equatable {
         _ = lseek(fd, 0, SEEK_SET)
         _ = out.withUnsafeBufferPointer { Darwin.write(fd, $0.baseAddress, $0.count) }
         defaults.set(v, forKey: ctrKey)
+    }
+}
+
+// MARK: - The KEY's pairing identity (issue #22, KEY 11ah)
+
+/// HELLO's answer carries the first 8 bytes of the KEY's pairing key
+/// (`[status][life][drop 8][pair id 8]`, 18 bytes from 11ah). When it changes,
+/// the KEY was wiped and set up again, and the Nostr client's pinned device
+/// key and session are stale: they are cleared before the client's next
+/// session (NostrClientView), and after every successful app pairing.
+enum PairIdentity {
+    private static let store = UserDefaults(suiteName: "group.io.favillakey.app")!
+    private static let idKey = "keyPairId"
+    private static let resetKey = "clientResetNeeded"
+
+    /// The pair id in a HELLO body, when the KEY sends one.
+    static func pairId(in helloBody: Data) -> Data? {
+        helloBody.count >= 18 ? Data(helloBody[10..<18]) : nil
+    }
+
+    /// Note the pair id a HELLO carried. Returns true when it differs from the
+    /// last one seen (a different or re-set-up KEY), having flagged the reset.
+    @discardableResult
+    static func note(helloBody: Data) -> Bool {
+        guard let id = pairId(in: helloBody) else { return false }
+        let old = store.data(forKey: idKey)
+        guard old != id else { return false }
+        store.set(id, forKey: idKey)
+        if old != nil { store.set(true, forKey: resetKey) }
+        return old != nil
+    }
+
+    /// After an app pairing: the client enrols afresh with this KEY.
+    static func pairedAgain() { store.set(true, forKey: resetKey) }
+
+    static var resetNeeded: Bool { store.bool(forKey: resetKey) }
+    static func resetDone() { store.removeObject(forKey: resetKey) }
+
+    /// The keys the client keeps for its device pairing.
+    static let clientKeys = ["kv_device_pub", "kv_session", "kv_phone_id", "kv_pair_eph"]
+    static var clearScript: String {
+        "try{" + clientKeys.map { "localStorage.removeItem('\($0)');" }.joined() + "}catch(e){};'cleared'"
     }
 }

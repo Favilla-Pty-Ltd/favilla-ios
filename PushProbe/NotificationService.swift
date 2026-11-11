@@ -202,6 +202,7 @@ final class NotificationService: UNNotificationServiceExtension {
             try await s.open()
             let a = try await s.request(AppChannel.cHello, Data(), timeout: 4)
             guard a.rsp == AppChannel.rHello else { finishProbe(false, String(format: "KEY answered type %02x", a.rsp), s); return }
+            PairIdentity.note(helloBody: a.body)
             let b = [UInt8](a.body)
             let life = b.count > 1 ? (b[1] == 0x03 ? "NOSTR, Bluetooth mode" : String(format: "life 0x%02x", b[1])) : "?"
             let drop = b.count >= 10 ? String(bytes: b[2..<10].filter { $0 != 0 }, encoding: .ascii) ?? "?" : "?"

@@ -23,6 +23,7 @@ final class AccountsModel: ObservableObject {
     @Published private(set) var busy = ""
     @Published private(set) var status = ""
     @Published private(set) var oldFirmware = false
+    @Published private(set) var listOff = false     // codes on the KEY, but the keyboard list is off: iOS can't offer them
     @Published private(set) var log: [String] = []
     private var session: KeySession?
 
@@ -72,6 +73,11 @@ final class AccountsModel: ObservableObject {
                 }
                 entries = got.filter { !$0.passkey }
                 oldFirmware = !entries.isEmpty && entries.allSatisfy { $0.health == nil }
+                // The list above the keyboard (when on) follows the KEY's: this is
+                // where iOS learns which sites have a code, so Favilla shows on
+                // their code fields.
+                if AccountList.isOn { AccountList.replace(with: got) { n in Bunker.log("accounts: \(n) listed for the keyboard bar") } }
+                listOff = !AccountList.isOn && got.contains { $0.health?.hasCode == true }
                 note("list: \(entries.count) accounts" + (oldFirmware ? " (no health: KEY before 11s)" : ""))
             } catch {
                 status = "\(error)"
@@ -245,6 +251,10 @@ struct AccountsView: View {
                     .background(Brand.card)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .padding(.horizontal, 16)
+                    if m.listOff {
+                        Text("To get these codes above the keyboard, turn on \"Show my accounts in the keyboard bar\" on the Settings page (it holds sites and usernames only, never a password or code), then Refresh here.")
+                            .font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 16)
+                    }
                     if m.oldFirmware {
                         Text("Health badges need KEY firmware 11s or later.").font(Brand.small).foregroundStyle(Brand.grey).padding(.horizontal, 16)
                     }

@@ -21,6 +21,7 @@ enum AccountList {
         var user: String
         var credentialID: Data?
         var userHandle: Data?
+        var code: Bool? = nil        // 11v: a one-time code is linked (LIST v2 health bit 7)
     }
 
     private static let onKey = "accountListOn"
@@ -57,13 +58,13 @@ enum AccountList {
                 guard let id = x.credentialID, !id.isEmpty, let h = x.userHandle else { return nil }
                 return Entry(passkey: true, site: site, user: x.user, credentialID: id, userHandle: h)
             }
-            return Entry(passkey: false, site: site, user: x.user)
+            return Entry(passkey: false, site: site, user: x.user, code: x.health?.hasCode == true)
         }
         save(e)
         ASCredentialIdentityStore.shared.removeAllCredentialIdentities { _, _ in
             ASCredentialIdentityStore.shared.getState { state in
                 guard state.isEnabled, !e.isEmpty else { DispatchQueue.main.async { done(e.count) }; return }
-                ASCredentialIdentityStore.shared.saveCredentialIdentities(e.map(identity)) { _, _ in
+                ASCredentialIdentityStore.shared.saveCredentialIdentities(e.flatMap(identities)) { _, _ in
                     DispatchQueue.main.async { done(e.count) }
                 }
             }
@@ -83,14 +84,22 @@ enum AccountList {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { once() }
         ASCredentialIdentityStore.shared.getState { state in
             guard state.isEnabled else { once(); return }
-            ASCredentialIdentityStore.shared.saveCredentialIdentities([identity(e)]) { _, _ in once() }
+            ASCredentialIdentityStore.shared.saveCredentialIdentities(identities(e)) { _, _ in once() }
         }
     }
 
-    private static func identity(_ e: Entry) -> ASCredentialIdentity {
+    /// What iOS lists for an entry. A one-time-code identity is what makes
+    /// Favilla appear above the keyboard on a code field at all: without one
+    /// iOS offers only the codes it read from Messages and Mail.
+    private static func identities(_ e: Entry) -> [ASCredentialIdentity] {
         if e.passkey, let id = e.credentialID, let handle = e.userHandle {
-            return ASPasskeyCredentialIdentity(relyingPartyIdentifier: e.site, userName: e.user, credentialID: id, userHandle: handle, recordIdentifier: nil)
+            return [ASPasskeyCredentialIdentity(relyingPartyIdentifier: e.site, userName: e.user, credentialID: id, userHandle: handle, recordIdentifier: nil)]
         }
-        return ASPasswordCredentialIdentity(serviceIdentifier: ASCredentialServiceIdentifier(identifier: e.site, type: .domain), user: e.user, recordIdentifier: nil)
+        let sid = ASCredentialServiceIdentifier(identifier: e.site, type: .domain)
+        var out: [ASCredentialIdentity] = [ASPasswordCredentialIdentity(serviceIdentifier: sid, user: e.user, recordIdentifier: nil)]
+        if e.code == true, #available(iOS 18.0, *) {
+            out.append(ASOneTimeCodeCredentialIdentity(serviceIdentifier: sid, label: e.user, recordIdentifier: nil))
+        }
+        return out
     }
 }

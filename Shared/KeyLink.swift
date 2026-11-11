@@ -470,7 +470,7 @@ extension KeyLink {
             sendReq(AppChannel.cOtp, AppChannel.otpBody(site: s))
         case .list:
             add("Asking for the list")
-            sendReq(AppChannel.cList, AppChannel.listBody(start: 0))
+            sendReq(AppChannel.cList, AppChannel.listBody(start: 0, health: true))
         case .pairApp:
             break
         }
@@ -572,7 +572,7 @@ extension KeyLink {
                 add("List: \(listGot.count) of \(page.total)")
                 if page.more, !page.entries.isEmpty, listGot.count < 2000 {
                     listStart += page.entries.count
-                    sendReq(AppChannel.cList, AppChannel.listBody(start: listStart))
+                    sendReq(AppChannel.cList, AppChannel.listBody(start: listStart, health: true))
                 } else {
                     finish(.list(listGot), "List in \(ms) ms: \(listGot.count) entries")
                 }

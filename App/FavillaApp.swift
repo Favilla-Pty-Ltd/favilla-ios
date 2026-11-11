@@ -156,7 +156,7 @@ struct HomeBody: View {
                         Text("Show my accounts in the keyboard bar").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
                     }
                     .tint(Brand.brass)
-                    Text("iOS keeps a list of the site names and usernames you use through Favilla, so it can offer them the moment you tap a login field. Passwords and passkeys stay on the KEY until you approve one there.")
+                    Text("iOS keeps a list of the site names and usernames you use through Favilla, so it can offer them the moment you tap a login field, and offer Favilla on a code field for sites with a one-time code on the KEY. Passwords, codes and passkeys stay on the KEY until you approve one there.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(16)

@@ -368,13 +368,6 @@ enum AppChannel {
         /// [0x22][extPub 65][nonce 16].
         var reveal: Data { Data([AppChannel.pairReveal]) + extPub + nonce }
 
-        /// The QR the KEY scans instead of showing a code (issue #22, KEY 11ah):
-        /// the same extPub (compressed) and nonce as the REVEAL.
-        var qrText: String {
-            let hex: (Data) -> String = { $0.map { String(format: "%02x", $0) }.joined() }
-            return "favilla:pair?v=1&p=\(hex(priv.publicKey.compressedRepresentation))&n=\(hex(nonce))"
-        }
-
         /// From the KEY's [0xA0][keyPub 65][clientId 8]: the channel key and the 6-digit code.
         func derive(_ a0: Data) throws -> (Credentials, String) {
             let b = [UInt8](a0)
@@ -456,6 +449,7 @@ struct Credentials: Equatable {
     static func forget() {
         SecItemDelete(query as CFDictionary)
         defaults.removeObject(forKey: ctrKey)
+        withCounter { $0 = 0 }      // a new pairing starts its counter afresh (issue #22)
     }
 
     static var isPaired: Bool { load() != nil }
@@ -516,20 +510,37 @@ enum PairIdentity {
         helloBody.count >= 18 ? Data(helloBody[10..<18]) : nil
     }
 
-    /// Note the pair id a HELLO carried. Returns true when it differs from the
-    /// last one seen (a different or re-set-up KEY), having flagged the reset.
+    /// Note the pair id a HELLO carried. A first id is kept. One that differs
+    /// from the kept one means the KEY was wiped and set up again: everything
+    /// the app holds for it is cleared (resetAll) and true is returned, so the
+    /// caller shows the pairing page.
     @discardableResult
     static func note(helloBody: Data) -> Bool {
         guard let id = pairId(in: helloBody) else { return false }
         let old = store.data(forKey: idKey)
-        guard old != id else { return false }
+        if old == id { return false }
+        if old == nil { store.set(id, forKey: idKey); return false }
+        resetAll(why: "HELLO pair id changed")
         store.set(id, forKey: idKey)
-        if old != nil { store.set(true, forKey: resetKey) }
-        return old != nil
+        return true
+    }
+
+    /// Everything the app holds for the KEY goes: the channel key and client id
+    /// (Keychain), the counter, the pair id, and the Nostr client's device
+    /// pairing (cleared before its next load). Issue #22 ruling, 11 Nov.
+    static func resetAll(why: String) {
+        Credentials.forget()
+        store.removeObject(forKey: idKey)
+        store.set(true, forKey: resetKey)
+        Bunker.log("pairing: cleared everything kept for the KEY (\(why))")
+        NotificationCenter.default.post(name: PairIdentity.cleared, object: nil)
     }
 
     /// After an app pairing: the client enrols afresh with this KEY.
     static func pairedAgain() { store.set(true, forKey: resetKey) }
+
+    /// Posted by resetAll: the Nostr client clears its device pairing and reloads; the settings page shows Not paired.
+    static let cleared = Notification.Name("PairIdentity.cleared")
 
     static var resetNeeded: Bool { store.bool(forKey: resetKey) }
     static func resetDone() { store.removeObject(forKey: resetKey) }

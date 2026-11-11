@@ -79,48 +79,37 @@ struct HomeBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            // YOUR KEY
+            // YOUR KEY. Not paired (fresh install, a wiped KEY, a pairing the KEY
+            // forgot): one page, one instruction (issue #22 ruling, 11 Nov).
             BrandSection(title: "YOUR KEY") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
-                    if let d = KeyStatus.detail(link) {
-                        Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
-                    }
-                    BrandButton(title: link.busy ? "CANCEL" : "FIND MY KEY", filled: !link.busy) {
-                        link.busy ? link.cancel() : link.probe()
-                    }
-                    Text("Pairing lives under \"This app\" below: one screen, with a QR for the KEY's camera.")
-                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(16)
-                .background(Brand.card)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-
-                // The app channel (KEY 9g): the KEY answers only this paired app.
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("This app").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
-                        Spacer()
-                        Text(appPaired ? "Paired" : "Not paired").font(Brand.body).foregroundStyle(appPaired ? Brand.brass : Brand.grey)
-                    }
-                    if let qr = link.appQR {
-                        // Issue #22: the KEY's camera reads this and pairs without a
-                        // press; the code under it is for a KEY that can't see it.
-                        if let img = SetupKeyQR.qr(qr) {
-                            Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
-                                .frame(maxWidth: 260).padding(14).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 12))
-                                .frame(maxWidth: .infinity)
-                                .accessibilityLabel("Pairing QR for the KEY's camera")
-                        }
-                        Text("Hold the KEY's camera to this QR: it pairs on its own.")
+                if !appPaired {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Your KEY isn't paired with this iPhone.").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                        Text("On the KEY: Settings > Network > Pair a phone, then tap Pair. If iPhone asks for a number, type the one the KEY shows.")
                             .font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
+                        if let code = link.appCode {
+                            Text(code).font(Brand.font(30, .bold)).monospacedDigit().foregroundStyle(Brand.brass).accessibilityLabel("Code \(code)")
+                            Text("On the KEY: if PAIR THE APP shows the same number, press ENTER.")
+                                .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        } else if let d = KeyStatus.detail(link), link.busy || link.result != nil {
+                            Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        }
+                        BrandButton(title: link.busy ? "CANCEL" : "PAIR", filled: !link.busy) {
+                            link.busy ? link.cancel() : link.pairApp()
+                        }
                     }
-                    if let code = link.appCode {
-                        Text(code).font(Brand.font(30, .bold)).monospacedDigit().foregroundStyle(Brand.brass).accessibilityLabel("Code \(code)")
-                        Text(link.appQR == nil ? "On the KEY: if PAIR THE APP shows the same number, press ENTER." : "Or compare this number on the KEY and press ENTER there.")
-                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                    }
-                    if appPaired {
+                    .padding(16)
+                    .background(Brand.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                        if let d = KeyStatus.detail(link) {
+                            Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        }
+                        BrandButton(title: link.busy ? "CANCEL" : "FIND MY KEY", filled: !link.busy) {
+                            link.busy ? link.cancel() : link.probe()
+                        }
                         Text("Passwords, passkeys, one-time codes and the account list go over the app's own locked channel. Other apps on this iPhone can't ask the KEY for anything.")
                             .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                         Button {
@@ -128,21 +117,11 @@ struct HomeBody: View {
                         } label: {
                             Text("Forget the app's pairing").font(Brand.body).foregroundStyle(Brand.danger).frame(minHeight: 44)
                         }
-                    } else {
-                        if link.appQR == nil {
-                            // One screen, one instruction (issue #22): the KEY opens
-                            // the window, iOS asks its number, then the QR and code.
-                            Text("On the KEY: Settings > Network > Pair a phone. Then tap PAIR THE APP here; if iPhone asks for a number, type the one the KEY shows.")
-                                .font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
-                        }
-                        BrandButton(title: link.busy && link.mode == .pairApp ? "CANCEL" : "PAIR THE APP", filled: !link.busy) {
-                            link.busy ? link.cancel() : link.pairApp()
-                        }
                     }
+                    .padding(16)
+                    .background(Brand.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
-                .padding(16)
-                .background(Brand.card)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
             }
 
             // ACCOUNTS (11s): every password on the KEY, its health, the breach check
@@ -224,6 +203,9 @@ struct HomeBody: View {
         }
         .onChange(of: phase) { _, p in
             if p == .active { listOn = AccountList.isOn; count = AccountList.entries.count; appPaired = KeyLink.appPaired }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PairIdentity.cleared)) { _ in
+            appPaired = false
         }
         .onReceive(link.$outcome) { o in
             appPaired = KeyLink.appPaired   // also catches a pairing the KEY forgot (0x08)

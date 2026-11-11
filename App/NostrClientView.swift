@@ -79,7 +79,7 @@ struct NostrClientView: UIViewRepresentable {
             PairIdentity.resetDone()
             Bunker.log("client: device pairing cleared (the KEY's pairing identity changed)")
         }
-        context.coordinator.resetObserver = NotificationCenter.default.addObserver(forName: NostrLink.clientReset, object: nil, queue: .main) { [weak wv] _ in
+        context.coordinator.resetObserver = NotificationCenter.default.addObserver(forName: PairIdentity.cleared, object: nil, queue: .main) { [weak wv] _ in
             guard let wv else { return }
             PairIdentity.resetDone()
             wv.evaluateJavaScript(PairIdentity.clearScript + ";location.reload();") { _, _ in }

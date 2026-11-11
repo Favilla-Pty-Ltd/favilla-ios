@@ -66,8 +66,6 @@ final class KeyLink: NSObject, ObservableObject {
     @Published private(set) var pairing = false
     /// PAIR THE APP: the code to compare with the KEY's screen ("123 456").
     @Published private(set) var appCode: String?
-    /// The pairing QR for the KEY's camera (issue #22), up from COMMIT to PAIR_DONE.
-    @Published private(set) var appQR: String?
     /// The site or app iOS asked about, when run from the AutoFill sheet.
     var site: String = ""
     /// `site` is a native app's name (iOS 26.2+ gives an app ID and name for apps
@@ -181,7 +179,7 @@ final class KeyLink: NSObject, ObservableObject {
         lines = []
         waitingOnKey = false
         pairing = false
-        appCode = nil; appQR = nil
+        appCode = nil
         resetLinkState()
         started = Date()
         if !site.isEmpty, m != .probe, m != .list, m != .pairApp { add("Asked for: \(site)") }
@@ -256,7 +254,7 @@ final class KeyLink: NSObject, ObservableObject {
         outcome = o
         waitingOnKey = false
         pairing = false
-        appCode = nil; appQR = nil
+        appCode = nil
         busy = false
         NotificationCenter.default.post(name: KeyLink.didFinish, object: self)
     }
@@ -443,8 +441,7 @@ extension KeyLink {
             let pr = AppChannel.Pairing()
             appPairing = pr
             stage = .pairCommit
-            appQR = pr.qrText
-            add("Asking the KEY to pair with the app; showing the QR for its camera")
+            add("Asking the KEY to pair with the app")
             sendChan(pr.commit)
             return
         }
@@ -502,7 +499,7 @@ extension KeyLink {
             pairCreds = c
             appCode = AppChannel.spaced(code)
             stage = .pairReveal
-            add("Code \(AppChannel.spaced(code)): let the KEY scan the QR, or check the code matches on the KEY and press ENTER there")
+            add("Code \(AppChannel.spaced(code)): check it matches PAIR THE APP on the KEY, then press ENTER there")
             waitingOnKey = true
             sendChan(pr.reveal)
         case (AppChannel.rPairDone?, .pairReveal):
@@ -526,8 +523,9 @@ extension KeyLink {
         } catch AppChannel.Failure.unauthenticated(_, let st) {
             if st == 0x08 || st == 0x0A {
                 // 0x08: this client is gone from the KEY. 0x0A (11ah): the KEY
-                // knows no phone at all (wiped). Either way: not paired.
-                Credentials.forget()
+                // knows no phone at all (wiped). Either way: not paired, and
+                // everything kept for the KEY goes (issue #22 ruling).
+                PairIdentity.resetAll(why: String(format: "refused 0x%02X", st))
                 finish(.failed(AppChannel.statusText(st)), String(format: "KEY: not paired (0x%02X; forgot the stored pairing)", st)); return
             }
             if stage == .time { add(String(format: "The KEY didn't take the time (0x%02X); carrying on", st)); startOp(); return }
@@ -548,7 +546,9 @@ extension KeyLink {
         switch (mode, a.rsp) {
         case (.probe, AppChannel.rHello):
             let b = [UInt8](a.body)
-            if PairIdentity.note(helloBody: a.body) { add("The KEY's pairing identity changed (set up again): the Nostr client will enrol afresh") }
+            if PairIdentity.note(helloBody: a.body) {
+                finish(.failed("This KEY was set up again since it was paired. Pair it again."), "The KEY's pairing identity changed: everything kept for it was cleared"); return
+            }
             let drop = b.count >= 10 ? String(decoding: b[2..<10].filter { $0 != 0 }, as: UTF8.self) : "?"
             let life = b.count >= 2 ? KeyLink.lifeText(b[1]) : "?"
             finish(.ok("App paired. KEY firmware \(drop), \(life)."), "OK in \(ms) ms: app channel, firmware \(drop), \(life)")

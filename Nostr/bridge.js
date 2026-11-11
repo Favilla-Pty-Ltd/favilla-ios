@@ -405,6 +405,13 @@
   // whatever the KEY is doing. The header mark still tells the truth: it
   // resolves on its own heartbeat once the link is up.
   (function () {
+    // Just the ember: no wordmark, no "Waking the KEY", no slow-start hint
+    // (this script runs before the page parses, so a style rule is the way).
+    try {
+      var st = document.createElement('style');
+      st.textContent = '#fk-boot .fkb-text,#fk-boot .fkb-slow{display:none !important}';
+      (document.head || document.documentElement).appendChild(st);
+    } catch (e) {}
     var at = Date.now() + 1500;
     (function go() {
       if (Date.now() > at + 10000) return;                 // no overlay on this page

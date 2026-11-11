@@ -225,6 +225,9 @@ struct NostrClientView: UIViewRepresentable {
                 CallRing.shared.pwaIncoming(name: String(name.prefix(60)), video: m["video"] as? Bool ?? false)
             } else if message.name == "favillaApp", let phase = m["callPhase"] as? String {
                 CallRing.shared.pwaState(phase)
+                // The call is over in the client: a call window still up (its page
+                // didn't close itself) goes, so the next call gets a fresh one.
+                if phase == "idle", let w = callWindow { w.closed(); Bunker.log("call window: closed with the call") }
             } else if message.name == "favillaApp", let bg = m["bg"] as? String, let c = Coordinator.colour(css: bg) {
                 webView?.backgroundColor = c
                 webView?.scrollView.backgroundColor = c
@@ -268,7 +271,8 @@ struct NostrClientView: UIViewRepresentable {
             guard let url = a.request.url else { return nil }
             // The call window: a real child web view, so the PWA keeps its handle
             // on it (window.open's return, postMessage both ways). See CallWindow.
-            if wv === webView, CallWindow.isCall(url), callWindow == nil, let top = WebExtras.top(from: wv) {
+            if wv === webView, CallWindow.isCall(url) {
+                if let old = callWindow { old.onClose = nil; old.closed(); callWindow = nil; Bunker.log("call window: replaced one left from the last call") }
                 c.allowsInlineMediaPlayback = true
                 c.mediaTypesRequiringUserActionForPlayback = []
                 let child = WKWebView(frame: .zero, configuration: c)
@@ -283,7 +287,7 @@ struct NostrClientView: UIViewRepresentable {
                 w.modalPresentationStyle = .overFullScreen
                 w.onClose = { [weak self] in self?.callWindow = nil }
                 callWindow = w
-                top.present(w, animated: true)
+                showCallWindow()
                 return child
             }
             WebExtras.open(url, from: wv)
@@ -291,6 +295,26 @@ struct NostrClientView: UIViewRepresentable {
         }
 
         private var callWindow: CallWindow?
+        private var callWindowWait: NSObjectProtocol?
+
+        /// Put the call window on screen. Answered from the lock screen, the
+        /// page can open it before the app is in front (no window to present
+        /// from yet): then it goes up as soon as the app is active.
+        func showCallWindow() {
+            guard let w = callWindow, w.presentingViewController == nil else { return }
+            if let top = WebExtras.top(from: webView), UIApplication.shared.applicationState == .active {
+                top.present(w, animated: true) { Bunker.log("call window: shown") }
+                return
+            }
+            Bunker.log("call window: waiting for the app to come to the front")
+            if callWindowWait == nil {
+                callWindowWait = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    guard let self else { return }
+                    if let o = self.callWindowWait { NotificationCenter.default.removeObserver(o); self.callWindowWait = nil }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.showCallWindow() }
+                }
+            }
+        }
 
         // The call window closed itself (hang-up).
         func webViewDidClose(_ wv: WKWebView) {

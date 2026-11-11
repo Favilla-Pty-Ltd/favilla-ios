@@ -124,7 +124,7 @@ enum Bunker {
     static func log(_ line: String) {
         var all = store.stringArray(forKey: "bunkerLog") ?? []
         all.append(ISO8601DateFormatter().string(from: Date()) + " " + line)
-        store.set(Array(all.suffix(40)), forKey: "bunkerLog")
+        store.set(Array(all.suffix(120)), forKey: "bunkerLog")
     }
 
     /// The 0xB9 answer, or a sentence saying why not.

@@ -398,6 +398,21 @@
     }).observe(r, { attributes: true, attributeFilter: ['hidden'] });
   }
 
+  // ---- 7c. the launch ember never waits for the KEY --------------------------------
+  // The page's boot overlay (fk-boot) breathes until the KEY answers /api/link,
+  // which in the app means waking the KEY over Bluetooth: seconds, or 30 s to
+  // the give-up when it's off. Josh (11 Nov): pulse for 1.5 s, then the burst,
+  // whatever the KEY is doing. The header mark still tells the truth: it
+  // resolves on its own heartbeat once the link is up.
+  (function () {
+    var at = Date.now() + 1500;
+    (function go() {
+      if (Date.now() > at + 10000) return;                 // no overlay on this page
+      if (Date.now() < at || typeof window.__fkBootDone !== 'function') { setTimeout(go, 100); return; }
+      try { window.__fkBootDone(); } catch (e) {}
+    })();
+  })();
+
   // ---- 8. no "update ready" loop ------------------------------------------------
   // The client compares its build with the one the KEY serves and reloads to
   // pick the newer one up. In the app the client is a bundled copy, and a

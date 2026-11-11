@@ -275,7 +275,12 @@ struct NostrClientView: UIViewRepresentable {
                 child.navigationDelegate = self
                 child.uiDelegate = self
                 let w = CallWindow(child)
-                w.modalPresentationStyle = .fullScreen
+                // Over, not instead of: a .fullScreen presentation takes the
+                // client's view out of the hierarchy, WebKit then throttles the
+                // page, its pings to the call window stop, and the window's
+                // watchdog hangs up ("You hung up", 11 Nov). The client keeps
+                // relaying the signalling at full speed behind this one.
+                w.modalPresentationStyle = .overFullScreen
                 w.onClose = { [weak self] in self?.callWindow = nil }
                 callWindow = w
                 top.present(w, animated: true)

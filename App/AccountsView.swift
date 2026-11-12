@@ -272,6 +272,65 @@ final class AccountsModel: ObservableObject {
         if !h.checked { return "The KEY hasn't scored this one yet. Try again in a few seconds." }
         return h.breached ? "Seen in a breach. Change this password." : "Not in any known breach."
     }
+
+    private func health(_ s: KeySession, body: Data) async throws -> AppChannel.HealthPage {
+        let a = try await s.request(AppChannel.cHealth, body, timeout: 20)
+        if a.rsp == AppChannel.rErr { throw KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF)) }
+        guard a.rsp == AppChannel.rHealth else { throw KeySession.Failure("This KEY doesn't have the breach check yet (firmware 11s).") }
+        do { return try AppChannel.parseHealth(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(AccountsModel.refusal(st)) }
+    }
+
+    /// The HIBP range bucket for a 5-hex-digit prefix: the suffixes seen at least once.
+    static func hibp(_ prefix: String) async throws -> [String] {
+        var q = URLRequest(url: URL(string: "https://api.pwnedpasswords.com/range/\(prefix)")!, timeoutInterval: 15)
+        q.setValue("true", forHTTPHeaderField: "Add-Padding")
+        q.setValue("Favilla iOS", forHTTPHeaderField: "User-Agent")
+        let (d, r) = try await URLSession.shared.data(for: q)
+        guard (r as? HTTPURLResponse)?.statusCode == 200, let text = String(data: d, encoding: .utf8) else {
+            throw KeySession.Failure("Have I Been Pwned didn't answer (bucket \(prefix)).")
+        }
+        return text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { line in
+            let parts = line.split(separator: ":")
+            guard parts.count == 2, let n = Int(parts[1].trimmingCharacters(in: .whitespaces)), n > 0 else { return nil }
+            let sfx = String(parts[0]).uppercased()
+            return sfx.count == 35 ? sfx : nil
+        }
+    }
+    private func hibp(_ prefix: String) async throws -> [String] { try await AccountsModel.hibp(prefix) }
+
+    /// OTP (11v): the code linked to this entry. The KEY shows that code alone
+    /// when the ask comes within 60 s of a FILL it answered for the entry;
+    /// otherwise the owner picks it on the KEY. ENTER on the KEY sends it.
+    func code(_ e: AppChannel.ListEntry) async -> Result<String, KeySession.Failure> {
+        guard let site = KeyLink.siteBytes(site: e.site, appName: false) else { return .failure(KeySession.Failure("That site name is too long for the KEY.")) }
+        do {
+            let s = try await open()
+            let a = try await s.request(AppChannel.cOtp, AppChannel.otpBody(site: site), timeout: 40)
+            if a.rsp == AppChannel.rErr { return .failure(KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF))) }
+            guard a.rsp == AppChannel.rOtp else { return .failure(KeySession.Failure("The KEY answered with type \(String(format: "%02x", a.rsp)).")) }
+            do { return .success(try AppChannel.parseOtp(a.body)) }
+            catch AppChannel.BodyFailure.status(let st) { return .failure(KeySession.Failure(KeyLink.otpMessage(st))) }
+            catch { return .failure(KeySession.Failure("The KEY's code couldn't be read.")) }
+        } catch let f as KeySession.Failure { return .failure(f) }
+        catch { return .failure(KeySession.Failure("\(error)")) }
+    }
+
+    /// SHOW: the entry's PASSWORD screen on the KEY, so the sign-in that follows is one press.
+    func show(_ e: AppChannel.ListEntry) async -> String? {
+        guard let id = e.id else { return "This KEY can't put an entry on its screen yet (firmware 11s)." }
+        do {
+            let s = try await open()
+            let a = try await s.request(AppChannel.cShow, id, timeout: 8)
+            if a.rsp == AppChannel.rErr { return AccountsModel.refusal(a.body.first ?? 0xFF) }
+            guard a.rsp == AppChannel.rAck, let st = a.body.first else { return "The KEY's answer couldn't be read." }
+            switch st {
+            case 0x00: return nil
+            case 0x03: return "The KEY has no entry with that id any more. Refresh the list."
+            case 0x05: return "Your KEY is locked. Enter the VAULT PIN on the KEY."
+            default: return AppChannel.statusText(st)
+            }
+        } catch { return "\(error)" }
+    }
 }
 
 // MARK: - The page

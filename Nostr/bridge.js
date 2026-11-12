@@ -469,10 +469,43 @@
   window.__favillaKeyGone = function (why) {
     try {
       if (typeof window._dmLockDrop === 'function') window._dmLockDrop('KEY gone over Bluetooth: ' + (why || ''));
+      else wipeDmsDirect('KEY gone (no poller yet): ' + (why || ''));
       if (typeof window.keyLinkBeat === 'function') setTimeout(window.keyLinkBeat, 300);
       console.log('[dev] KEY gone over Bluetooth: ' + (why || ''));
     } catch (e) {}
   };
+  // The page's _dmLockDrop exists only once its /info poller has started
+  // (after a pairing or reconnect). Before that, do the same thing by hand.
+  function wipeDmsDirect(reason) {
+    try {
+      if (typeof dmState === 'undefined') return;
+      if (!dmState.cacheKey && !Object.keys(dmState.threads || {}).length) return;
+      dmState.cacheKey = null; dmState.threads = {}; dmState._threadsLoaded = false; dmState.fetched = false;
+      try { dmRenderConversationList(); } catch (e) {}
+      if (dmState.currentPeer) { try { dmRenderThread(dmState.currentPeer); } catch (e) {} }
+      console.log('[dm] ' + reason + ': cleared in-memory DM history');
+    } catch (e) {}
+  }
+  // Standing guard (12 Nov): the paths above all fire on a transition (the
+  // link was up, now it isn't). A page that was suspended in the background,
+  // or whose web content was reloaded, can miss the transition and keep
+  // showing threads with the ember dark. So every few seconds while visible:
+  // if the heartbeat's last verdict was "not reachable" (two misses, so not a
+  // blip) and plaintext threads are in memory, wipe them. Nothing is lost:
+  // the relays hold the messages and they come back when the KEY does.
+  setInterval(function () {
+    try {
+      if (document.visibilityState !== 'visible') return;
+      if (window.keyLinkUp !== false) return;
+      if (typeof dmState === 'undefined' || !Object.keys(dmState.threads || {}).length) return;
+      if (typeof window._dmLockDrop === 'function') window._dmLockDrop('KEY not reachable (standing check)');
+      else wipeDmsDirect('KEY not reachable (standing check)');
+    } catch (e) {}
+  }, 4000);
+  // Back to the foreground: probe at once rather than at the next 10 s tick.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && typeof window.keyLinkBeat === 'function') setTimeout(window.keyLinkBeat, 200);
+  });
 
   // ---- 8. no "update ready" loop ------------------------------------------------
   // The client compares its build with the one the KEY serves and reloads to

@@ -90,6 +90,24 @@ struct NostrClientView: UIViewRepresentable {
             let why = (n.userInfo?["why"] as? String ?? "KEY gone").replacingOccurrences(of: "'", with: "")
             wv.evaluateJavaScript("window.__favillaKeyGone && window.__favillaKeyGone('\(why)')") { _, _ in }
         }
+        // Back from the background (12 Nov): the drop above is a transition, and
+        // the app may have been suspended through it (the KEY switched off or
+        // walked away while the phone sat locked). On return, check the standing
+        // state: not connected after a moment is gone, however it got there.
+        context.coordinator.activeObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak wv] _ in
+            guard KeyRoute.current == .bluetooth else { return }
+            let check: (Bool) -> Void = { [weak wv] final in
+                guard let wv else { return }
+                switch NostrLink.shared.state {
+                case .ready: return
+                case .connecting where !final: return
+                default:
+                    wv.evaluateJavaScript("window.__favillaKeyGone && window.__favillaKeyGone('not connected after the app came back')") { _, _ in }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { check(false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { check(true) }
+        }
         context.coordinator.resetObserver = NotificationCenter.default.addObserver(forName: PairIdentity.cleared, object: nil, queue: .main) { [weak wv] _ in
             guard let wv else { return }
             PairIdentity.resetDone()
@@ -131,6 +149,7 @@ struct NostrClientView: UIViewRepresentable {
         var importObserver: NSObjectProtocol?
         var resetObserver: NSObjectProtocol?
         var goneObserver: NSObjectProtocol?
+        var activeObserver: NSObjectProtocol?
         var stateSink: AnyCancellable?
 
         /// The bridge's recent call wraps, into the PWA (bridge.js). Kept up

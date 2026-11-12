@@ -363,7 +363,7 @@
     function fwd(level, args) {
       try {
         var s = Array.prototype.map.call(args, function (a) { return typeof a === 'string' ? a : (a && a.message) || JSON.stringify(a); }).join(' ');
-        if (!/^\[(calls|dev|sat|fsec|pwac)\]/.test(s)) return;
+        if (!/^\[(calls|dev|sat|fsec|pwac|mmx|dm)\]/.test(s)) return;
         var mh = window.webkit && webkit.messageHandlers;
         if (mh && mh.favillaApp) mh.favillaApp.postMessage({ log: (level === 'log' ? '' : level + ': ') + s.slice(0, 300) });
       } catch (e) {}

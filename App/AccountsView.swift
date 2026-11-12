@@ -207,6 +207,7 @@ final class AccountsModel: ObservableObject {
 // MARK: - The page
 
 struct AccountsView: View {
+    var pushed = false                 // inside Settings' stack: no Done, no stack of its own
     @StateObject private var m = AccountsModel()
     @State private var picked: PickedAccount?
     @State private var filter = ""
@@ -231,7 +232,10 @@ struct AccountsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        if pushed { page } else { NavigationStack { page }.preferredColorScheme(.dark) }
+    }
+
+    private var page: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     summary
@@ -269,15 +273,14 @@ struct AccountsView: View {
             .background(Brand.bg.ignoresSafeArea())
             .navigationTitle("Accounts")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Brand.bg, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { m.close(); dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) }
+                if !pushed { ToolbarItem(placement: .cancellationAction) { Button("Done") { m.close(); dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) } }
             }
             .sheet(item: $picked) { p in AccountSheet(e: p.e, model: m) }
             .sheet(item: $qr) { p in SetupKeyQR(prefill: p) }
             .onAppear { if m.entries.isEmpty { m.load() } }
             .onDisappear { m.close() }
-        }
-        .preferredColorScheme(.dark)
     }
 
     private var summary: some View {

@@ -89,13 +89,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
 /// Settings > This iPhone > Push test.
 struct PushTestSection: View {
+    var titled = true
     @ObservedObject private var t = PushTest.shared
     @State private var copied = false
     @State private var showAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("PUSH TEST").font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
+            if titled { Text("PUSH TEST").font(Brand.label).tracking(2).foregroundStyle(Brand.brass) }
             VStack(alignment: .leading, spacing: 12) {
                 Text("Checks whether a notification can reach your KEY over Bluetooth by itself, with this app closed. Each test push asks the KEY one harmless question (HELLO) and puts the answer in the notification.")
                     .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)

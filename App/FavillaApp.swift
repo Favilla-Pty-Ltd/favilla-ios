@@ -2,7 +2,7 @@
 // own PWA, NostrClientView, 7 Nov 2026). Its Settings has a "This iPhone" row
 // that opens the app's own screen (LinkSettingsView): how the phone reaches the
 // KEY, the KEY's pairing, the opt-in account list, and the last AutoFill
-// request (HomeBody, mockup 1d, 6 Nov 2026). The sign-in itself happens in the
+// request (ThisPhoneView in SettingsPages.swift, 12 Nov 2026). The sign-in itself happens in the
 // AutoFill sheet (CredentialProviderViewController).
 
 import SwiftUI
@@ -41,7 +41,7 @@ struct RootView: View {
             .background(Color(uiColor: pageColour).ignoresSafeArea())
             .preferredColorScheme(RootView.isLight(pageColour) ? .light : .dark)
             .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route) }) {
-                LinkSettingsView(link: link, route: $route)
+                ThisPhoneView(link: link, route: $route)
             }
             // iOS opens the app with this activity when the owner picks Favilla in
             // another password manager's export (CredentialImport.swift).
@@ -67,159 +67,61 @@ struct RootView: View {
     }
 }
 
-struct HomeBody: View {
+/// The card at the top of This iPhone: the KEY's pairing state. Not paired
+/// (fresh install, a wiped KEY, a pairing the KEY forgot): one page, one
+/// instruction (issue #22 ruling, 11 Nov). Paired: the status and FIND MY KEY.
+struct KeyCard: View {
     @ObservedObject var link: KeyLink
-    @State private var listOn = AccountList.isOn
-    @State private var count = AccountList.entries.count
-    @State private var showLast = false
-    @State private var appPaired = KeyLink.appPaired
-    @State private var listNote: String?
-    @State private var showAccounts = false
-    @Environment(\.scenePhase) private var phase
+    @Binding var appPaired: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            // YOUR KEY. Not paired (fresh install, a wiped KEY, a pairing the KEY
-            // forgot): one page, one instruction (issue #22 ruling, 11 Nov).
-            BrandSection(title: "YOUR KEY") {
-                if !appPaired {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Your KEY isn't paired with this iPhone.").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
-                        Text("On the KEY: Settings > Network > Pair a phone, then tap Pair. If iPhone asks for a number, type the one the KEY shows.")
-                            .font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
-                        if let code = link.appCode {
-                            Text(code).font(Brand.font(30, .bold)).monospacedDigit().foregroundStyle(Brand.brass).accessibilityLabel("Code \(code)")
-                            Text("On the KEY: if PAIR THE APP shows the same number, press ENTER.")
-                                .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                        } else if let d = KeyStatus.detail(link), link.busy || link.result != nil {
-                            Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
-                        }
-                        BrandButton(title: link.busy ? "CANCEL" : "PAIR", filled: !link.busy) {
-                            link.busy ? link.cancel() : link.pairApp()
-                        }
-                    }
-                    .padding(16)
-                    .background(Brand.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
-                        if let d = KeyStatus.detail(link) {
-                            Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
-                        }
-                        BrandButton(title: link.busy ? "CANCEL" : "FIND MY KEY", filled: !link.busy) {
-                            link.busy ? link.cancel() : link.probe()
-                        }
-                        Text("Passwords, passkeys, one-time codes and the account list go over the app's own locked channel. Other apps on this iPhone can't ask the KEY for anything.")
-                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                        Button {
-                            link.forgetApp(); appPaired = false
-                        } label: {
-                            Text("Forget the app's pairing").font(Brand.body).foregroundStyle(Brand.danger).frame(minHeight: 44)
-                        }
-                    }
-                    .padding(16)
-                    .background(Brand.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-            }
-
-            // ACCOUNTS (11s): every password on the KEY, its health, the breach check
-            if appPaired {
-                BrandSection(title: "ACCOUNTS") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Every account on the KEY, with its health: weak, reused, seen in a breach, made on the KEY. The breach check never sends a password.")
-                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                        BrandButton(title: "OPEN ACCOUNTS", filled: false) { showAccounts = true }
-                    }
-                    .padding(16)
-                    .background(Brand.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .sheet(isPresented: $showAccounts) { AccountsView() }
-            }
-
-            // SIGNING IN
-            BrandSection(title: "SIGNING IN") {
+        BrandSection(title: "YOUR KEY") {
+            if !appPaired {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle(isOn: Binding(get: { listOn }, set: { on in
-                        listOn = on
-                        AccountList.setOn(on) { _ in count = AccountList.entries.count }
-                    })) {
-                        Text("Show my accounts in the keyboard bar").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                    Text("Your KEY isn't paired with this iPhone.").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                    Text("On the KEY: Settings > Network > Pair a phone, then tap Pair. If iPhone asks for a number, type the one the KEY shows.")
+                        .font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
+                    if let code = link.appCode {
+                        Text(code).font(Brand.font(30, .bold)).monospacedDigit().foregroundStyle(Brand.brass).accessibilityLabel("Code \(code)")
+                        Text("On the KEY: if PAIR THE APP shows the same number, press ENTER.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    } else if let d = KeyStatus.detail(link), link.busy || link.result != nil {
+                        Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
                     }
-                    .tint(Brand.brass)
-                    Text("iOS keeps a list of the site names and usernames you use through Favilla, so it can offer them the moment you tap a login field, and offer Favilla on a code field for sites with a one-time code on the KEY. Passwords, codes and passkeys stay on the KEY until you approve one there.")
-                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    BrandButton(title: link.busy ? "CANCEL" : "PAIR", filled: !link.busy) {
+                        link.busy ? link.cancel() : link.pairApp()
+                    }
                 }
                 .padding(16)
                 .background(Brand.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-
-                if listOn {
-                    VStack(spacing: 0) {
-                        HStack {
-                            Text("Accounts listed").font(Brand.body).foregroundStyle(Brand.ink)
-                            Spacer()
-                            Text("\(count)").font(Brand.body).foregroundStyle(Brand.grey)
-                        }
-                        .padding(16)
-                        Divider().overlay(Brand.line)
-                        Button {
-                            AccountList.setOn(false) { _ in AccountList.setOn(true) { _ in count = AccountList.entries.count } }
-                        } label: {
-                            Text("Remove the list from this iPhone").font(Brand.body).foregroundStyle(Brand.danger)
-                                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(.horizontal, 16)
-                        }
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                        Spacer()
+                        Text("Paired").font(Brand.small).foregroundStyle(Brand.brass)
                     }
-                    .background(Brand.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    if appPaired {
-                        BrandButton(title: link.busy && link.mode == .list ? "CANCEL" : "FILL THE LIST FROM MY KEY", filled: false) {
-                            link.busy ? link.cancel() : link.list()
-                        }
-                        Text(listNote ?? "The KEY asks first (Share list?): press ENTER on the KEY. Only site names and usernames come over, never passwords.")
-                            .font(Brand.small).foregroundStyle(listNote == nil ? Brand.grey : Brand.ink).fixedSize(horizontal: false, vertical: true)
+                    if let d = KeyStatus.detail(link) {
+                        Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("It fills as you sign in through Favilla. Off: Favilla is one entry under the key icon, and iOS holds no account names.")
+                    BrandButton(title: link.busy ? "CANCEL" : "FIND MY KEY", filled: false) {
+                        link.busy ? link.cancel() : link.probe()
+                    }
+                    Text("Passwords, passkeys, one-time codes and the account list go over the app's own locked channel. Other apps on this iPhone can't ask the KEY for anything.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("Off: Favilla is one entry under the key icon, and iOS holds no account names.")
-                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        link.forgetApp(); appPaired = false
+                    } label: {
+                        Text("Forget the app's pairing").font(Brand.body).foregroundStyle(Brand.danger).frame(minHeight: 44)
+                    }
                 }
-                Text("Turn on Favilla in Settings > General > AutoFill & Passwords.")
-                    .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-            }
-
-            // LAST REQUEST (bench)
-            BrandSection(title: "LAST REQUEST") {
-                Button(showLast ? "Hide" : "Show the last sign-in's steps") { showLast.toggle() }
-                    .font(Brand.body).foregroundStyle(Brand.brass).frame(minHeight: 44)
-                if showLast {
-                    LogBox(lines: (LastRequest.load() ?? "No request yet.").components(separatedBy: "\n"), maxHeight: 260)
-                        .textSelection(.enabled)
-                }
+                .padding(16)
+                .background(Brand.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
             }
         }
-        .onChange(of: phase) { _, p in
-            if p == .active { listOn = AccountList.isOn; count = AccountList.entries.count; appPaired = KeyLink.appPaired }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: PairIdentity.cleared)) { _ in
-            appPaired = false
-        }
-        .onReceive(link.$outcome) { o in
-            appPaired = KeyLink.appPaired   // also catches a pairing the KEY forgot (0x08)
-            switch o {
-            case .list(let l)?:
-                AccountList.replace(with: l) { n in
-                    count = AccountList.entries.count
-                    listNote = n == l.count ? "\(n) accounts from your KEY." : "\(n) of the KEY's \(l.count) accounts listed. iOS lists websites only; left out: \(AccountList.leftOutText())."
-                }
-            case .failed(let why)? where link.mode == .list:
-                listNote = why
-            default: break
-            }
-        }
+        .onReceive(link.$outcome) { _ in appPaired = KeyLink.appPaired }   // also catches a pairing the KEY forgot (0x08)
     }
 }
 

@@ -113,6 +113,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     /// Posted on the main queue for each KEY nudge (path B): userInfo "waiting" (Int).
     static let nudged = Notification.Name("NostrLink.nudged")
+    /// Posted when the KEY drops the link the client was using (off, out of
+    /// range, Bluetooth off): the client wipes its plaintext DMs at once
+    /// instead of after 45 s of failed polls (12 Nov).
+    static let keyGone = Notification.Name("NostrLink.keyGone")
 
     /// One app-channel request on the shared link; the answer whatever its type
     /// (an API refusal becomes an error; for the bunker commands the caller reads 0xBF itself).
@@ -565,8 +569,10 @@ extension NostrLink: CBCentralManagerDelegate {
         LinkLog.shared.add("disconnected" + (error.map { ": \($0.localizedDescription)" } ?? ""))
         if KeyLink.keyForgotPhone(error) { lost(KeyLink.forgetOnPhone); return }
         // Keep the queue: the next request reconnects. Only the one in flight fails.
+        let wasUp = state == .ready || current != nil
         drop()
         state = .idle
+        if wasUp { NotificationCenter.default.post(name: NostrLink.keyGone, object: nil, userInfo: ["why": error?.localizedDescription ?? "the KEY dropped the link"]) }
         // Back-off (issue #20 item 2): 75 connect/disconnect pairs in 350 ms
         // after a drop, because the queue reconnected at once each time.
         let delay = reconnectDelay

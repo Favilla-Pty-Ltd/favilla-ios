@@ -448,6 +448,20 @@
     })();
   })();
 
+  // ---- 7d. the KEY is gone: plaintext DMs go now --------------------------------
+  // The page learns of a lock from its 10 s probe and of a vanished KEY after
+  // 45 s of failed polls. Over Bluetooth the app sees the link drop within a
+  // second (KEY off, out of range, Bluetooth off) and says so here: the page
+  // wipes its in-memory DM history and cache key as it does on a lock, and
+  // the ember repaints on the next probe.
+  window.__favillaKeyGone = function (why) {
+    try {
+      if (typeof window._dmLockDrop === 'function') window._dmLockDrop('KEY gone over Bluetooth: ' + (why || ''));
+      if (typeof window.keyLinkBeat === 'function') setTimeout(window.keyLinkBeat, 300);
+      console.log('[dev] KEY gone over Bluetooth: ' + (why || ''));
+    } catch (e) {}
+  };
+
   // ---- 8. no "update ready" loop ------------------------------------------------
   // The client compares its build with the one the KEY serves and reloads to
   // pick the newer one up. In the app the client is a bundled copy, and a

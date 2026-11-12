@@ -79,6 +79,11 @@ struct NostrClientView: UIViewRepresentable {
             PairIdentity.resetDone()
             Bunker.log("client: device pairing cleared (the KEY's pairing identity changed)")
         }
+        context.coordinator.goneObserver = NotificationCenter.default.addObserver(forName: NostrLink.keyGone, object: nil, queue: .main) { [weak wv] n in
+            guard let wv, KeyRoute.current == .bluetooth else { return }
+            let why = (n.userInfo?["why"] as? String ?? "KEY gone").replacingOccurrences(of: "'", with: "")
+            wv.evaluateJavaScript("window.__favillaKeyGone && window.__favillaKeyGone('\(why)')") { _, _ in }
+        }
         context.coordinator.resetObserver = NotificationCenter.default.addObserver(forName: PairIdentity.cleared, object: nil, queue: .main) { [weak wv] _ in
             guard let wv else { return }
             PairIdentity.resetDone()
@@ -119,6 +124,7 @@ struct NostrClientView: UIViewRepresentable {
         var wakeObserver: NSObjectProtocol?
         var importObserver: NSObjectProtocol?
         var resetObserver: NSObjectProtocol?
+        var goneObserver: NSObjectProtocol?
 
         /// The bridge's recent call wraps, into the PWA (bridge.js). Kept up
         /// while the ring is up and the client hasn't got the call: on a cold

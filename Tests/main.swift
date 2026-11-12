@@ -334,6 +334,22 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         big += AppChannel.h(vk.key, Data("RSP".utf8) + big).prefix(16)
         check((try? AppChannel.open(big, vk))?.body == long, "11ad: a 9000-byte encrypted answer opens")
     }
+    // 11ax (issue #30): PW_SAVE's body crosses encrypted, 0x47 in the answer
+    // byte's place. Vector from the doc and tests/pw_save_test.cpp.
+    do {
+        let vk = Credentials(key: Data((0..<32).map { UInt8($0) }), clientId: Data((0..<8).map { UInt8(0xA0 + $0) }))
+        let plain = try AppChannel.pwSaveBody(id: nil, site: "proton.me", user: "favillakey", pass: "hunter2", note: "").get()
+        check(hx(plain) == "00000000000000000970726f746f6e2e6d650a666176696c6c616b65790768756e7465723200", "11ax: PW_SAVE body for a new entry")
+        let msg = AppChannel.request(AppChannel.cPwSave, vk, ctr: 7, body: plain)
+        check(hx(msg.subdata(in: 13..<(msg.count - 16))) == "2ecc7f5386084dacbafe031c7f0a0a26a881f92d9ac2ea98b02fc77c89b62f713c3a64d57f01", "11ax: PW_SAVE body encrypted as the firmware's vector")
+        check(msg.suffix(16) == AppChannel.h(vk.key, Data("REQ".utf8) + msg.prefix(msg.count - 16)).prefix(16), "11ax: PW_SAVE mac over the ciphertext")
+        let del = AppChannel.request(AppChannel.cPwDelete, vk, ctr: 8, body: AppChannel.pwDeleteBody([Data(repeating: 1, count: 8)])!)
+        check(hx(del.subdata(in: 13..<22)) == "010101010101010101", "11ax: PW_DELETE body stays in clear")
+        check(AppChannel.pwSaveBody(id: nil, site: "a.com", user: "x", pass: "", note: "") == .failure(.needsPassword), "11ax: a new entry needs a password")
+        check(AppChannel.pwSaveBody(id: Data(count: 8), site: "a.com", user: "x\ny", pass: "", note: "") == .failure(.control("username")), "11ax: control characters refused")
+        check(AppChannel.pwSaveBody(id: Data(count: 8), site: String(repeating: "a", count: 200), user: "", pass: "", note: "") == .failure(.siteTooLong), "11ax: site over 199 bytes refused")
+        check(AppChannel.parsePwResult(Data([1] + [UInt8](repeating: 9, count: 8) + [0])) == AppChannel.PwResult(state: 1, id: Data(repeating: 9, count: 8), reason: 0), "11ax: PW_RESULT parses")
+    }
     check(LinkLog.path(of: try ApiWire.encode(ApiRequest(method: "GET", host: "", path: "/api/pair/sas?pair_id=7", headers: [:], body: Data(), timeout: 5)).unwrap()) == "GET /api/pair/sas", "log: path without its query")
 } catch { check(false, "issue #9 tests threw \(error)") }
 

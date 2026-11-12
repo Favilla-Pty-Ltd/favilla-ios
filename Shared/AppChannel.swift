@@ -52,6 +52,14 @@ enum AppChannel {
     static let cAssess: UInt8 = 0x46   // 11ab: [max] -> rAck [status][opening][unseen u16 LE]: score never-assessed entries (0x45 is the browser channel's)     // [id 8] -> rAck [status]: the entry's PASSWORD screen on the KEY
     static let cHealth: UInt8 = 0x44   // none -> prefixes wanted; [prefix 3][n u16][suffix 18 x n] -> what is still pending
     static let rHealth: UInt8 = 0xC0   // encrypted: [status][pending u16][count][prefix 3 x count]
+    // 11ax (issue #30): add, edit and delete from the Accounts page, VAULT mode.
+    static let cPwSave: UInt8 = 0x47     // ENCRYPTED request body [id 8][sLen][site][uLen][user][pLen][pass][nLen][note] -> rAck [status]
+    static let cPwDelete: UInt8 = 0x48   // [n][id 8 x n], n 1..20 -> rAck [status]
+    static let cPwResult: UInt8 = 0x49   // none -> rAck [state][id 8][reason]
+    static let cAssessOne: UInt8 = 0x4A  // [id 8] -> rAck [status][queued]; then HEALTH with no body (both lives)
+    /// Requests whose body crosses encrypted, with the command byte in the
+    /// answer byte's place in the keystream (11ax: PW_SAVE only).
+    static let encryptedRequests: Set<UInt8> = [cPwSave]
     static let rErr: UInt8 = 0xBF
 
     /// Answers whose body is encrypted.
@@ -141,7 +149,8 @@ enum AppChannel {
 
     /// [cmd][clientId 8][ctr 4 LE][body][mac16], mac16 = H(K, "REQ" || everything before it)[0..15].
     static func request(_ cmd: UInt8, _ creds: Credentials, ctr: UInt32, body: Data = Data()) -> Data {
-        var m = Data([cmd]); m.append(creds.clientId); m.append(le32(ctr)); m.append(body)
+        var m = Data([cmd]); m.append(creds.clientId); m.append(le32(ctr))
+        m.append(encryptedRequests.contains(cmd) ? keystream(body, rsp: cmd, ctr: ctr, creds) : body)
         m.append(h(creds.key, Data("REQ".utf8) + m).prefix(16))
         return m
     }
@@ -254,6 +263,82 @@ enum AppChannel {
         d.append(UInt8(suffixes.count & 0xFF)); d.append(UInt8(suffixes.count >> 8))
         for s in suffixes { guard s.count == 35, let x = packHex(s + "0") else { return nil }; d.append(contentsOf: x) }
         return d
+    }
+
+    // MARK: 11ax: vault edits (issue #30)
+
+    /// The KEY's own field limits: site 1..199 bytes, the others up to 128, and
+    /// 415 bytes in all (431 sealed less 16 of lengths and dates; the PWA's LIM).
+    static let pwSiteMax = 199, pwFieldMax = 128, pwAllMax = 415
+
+    enum PwFieldProblem: Error, Equatable { case siteEmpty, siteTooLong, tooLong(String), tooLongInAll, control(String), needsPassword }
+
+    /// UTF-8 with no control characters (U+0000..U+001F, DEL, U+0080..U+009F):
+    /// what the KEY accepts.
+    static func pwTextOK(_ s: String) -> Bool {
+        !s.unicodeScalars.contains { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) }
+    }
+
+    /// PW_SAVE body, before encryption. `id` nil: a new entry (needs a
+    /// password). An edit: empty `pass` keeps the password, empty `note` keeps
+    /// the note; site and user are replaced as sent.
+    static func pwSaveBody(id: Data?, site: String, user: String, pass: String, note: String) -> Result<Data, PwFieldProblem> {
+        let s = Data(site.utf8), u = Data(user.utf8), p = Data(pass.utf8), n = Data(note.utf8)
+        if s.isEmpty { return .failure(.siteEmpty) }
+        if s.count > pwSiteMax { return .failure(.siteTooLong) }
+        for (name, f) in [("username", u), ("password", p), ("note", n)] where f.count > pwFieldMax { return .failure(.tooLong(name)) }
+        if s.count + u.count + p.count + n.count > pwAllMax { return .failure(.tooLongInAll) }
+        for (name, f) in [("site", site), ("username", user), ("password", pass), ("note", note)] where !pwTextOK(f) { return .failure(.control(name)) }
+        if id == nil && p.isEmpty { return .failure(.needsPassword) }
+        var d = id ?? Data(count: 8)
+        guard d.count == 8 else { return .failure(.siteEmpty) }
+        for f in [s, u, p, n] { d.append(UInt8(f.count)); d.append(f) }
+        return .success(d)
+    }
+
+    static func pwProblemText(_ p: PwFieldProblem) -> String {
+        switch p {
+        case .siteEmpty: return "The site can't be empty."
+        case .siteTooLong: return "The site is too long for the KEY: 199 bytes at most."
+        case .tooLong(let f): return "The \(f) is too long for the KEY: 128 bytes at most."
+        case .tooLongInAll: return "Too long for the KEY: site, username, password and note come to 415 bytes at most together."
+        case .control(let f): return "The \(f) has a character the KEY can't store (a line break or other control character)."
+        case .needsPassword: return "A new entry needs a password."
+        }
+    }
+
+    /// PW_DELETE body: [n][id 8 x n], n 1..20.
+    static func pwDeleteBody(_ ids: [Data]) -> Data? {
+        guard (1...20).contains(ids.count), ids.allSatisfy({ $0.count == 8 }) else { return nil }
+        var d = Data([UInt8(ids.count)])
+        for i in ids { d.append(i) }
+        return d
+    }
+
+    struct PwResult: Equatable {
+        var state: UInt8      // 0 asking, 1 done, 2 declined, 3 timed out, 4 changed meanwhile, 5 failed, 6 no job
+        var id: Data
+        var reason: UInt8
+    }
+    static func parsePwResult(_ b: Data) -> PwResult? {
+        let v = [UInt8](b)
+        guard v.count >= 10 else { return nil }
+        return PwResult(state: v[0], id: Data(v[1..<9]), reason: v[9])
+    }
+
+    /// PW_SAVE / PW_DELETE / ASSESS_ONE statuses (at once) and PW_RESULT reasons.
+    static func pwStatusText(_ s: UInt8) -> String {
+        switch s {
+        case 0x03: return "The KEY has no entry with that id any more. The list has been read again."
+        case 0x04: return "Your KEY is in NOSTR mode. Editing accounts needs its VAULT side: on the KEY choose VAULT, enter the VAULT PIN, and leave it on its home screen."
+        case 0x05: return "Your KEY is locked. Enter the VAULT PIN on the KEY, then try again."
+        case 0x06: return "The KEY is already asking about another entry. Answer it on the KEY first."
+        case 0x10: return "The KEY is full: 200 records, passkeys and passwords together."
+        case 0x11: return "The KEY has used its record opens for this sitting. Lock and unlock the KEY, then try again."
+        case 0x12: return "Too long for the KEY: site, username, password and note come to 415 bytes at most together."
+        case 0x0E: return "The KEY couldn't write the entry. Try again."
+        default: return statusText(s)
+        }
     }
 
     static func packHex(_ s: String) -> [UInt8]? {

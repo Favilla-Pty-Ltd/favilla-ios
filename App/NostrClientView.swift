@@ -11,6 +11,7 @@
 //  - camera and microphone (pairing QR, calls) are granted to the bundled page only;
 //  - the page's storage (localStorage) persists in the app's default data store.
 
+import Combine
 import SwiftUI
 import WebKit
 
@@ -79,6 +80,11 @@ struct NostrClientView: UIViewRepresentable {
             PairIdentity.resetDone()
             Bunker.log("client: device pairing cleared (the KEY's pairing identity changed)")
         }
+        // A failed reach (scan or connect) counts as gone as much as a drop.
+        context.coordinator.stateSink = NostrLink.shared.$state.receive(on: DispatchQueue.main).sink { [weak wv] st in
+            guard let wv, KeyRoute.current == .bluetooth, case .failed(let why) = st else { return }
+            wv.evaluateJavaScript("window.__favillaKeyGone && window.__favillaKeyGone('\(why.replacingOccurrences(of: "'", with: ""))')") { _, _ in }
+        }
         context.coordinator.goneObserver = NotificationCenter.default.addObserver(forName: NostrLink.keyGone, object: nil, queue: .main) { [weak wv] n in
             guard let wv, KeyRoute.current == .bluetooth else { return }
             let why = (n.userInfo?["why"] as? String ?? "KEY gone").replacingOccurrences(of: "'", with: "")
@@ -125,6 +131,7 @@ struct NostrClientView: UIViewRepresentable {
         var importObserver: NSObjectProtocol?
         var resetObserver: NSObjectProtocol?
         var goneObserver: NSObjectProtocol?
+        var stateSink: AnyCancellable?
 
         /// The bridge's recent call wraps, into the PWA (bridge.js). Kept up
         /// while the ring is up and the client hasn't got the call: on a cold

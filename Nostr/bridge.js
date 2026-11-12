@@ -454,6 +454,18 @@
   // second (KEY off, out of range, Bluetooth off) and says so here: the page
   // wipes its in-memory DM history and cache key as it does on a lock, and
   // the ember repaints on the next probe.
+  // The page's own verdict too: when its probe says the KEY is not reachable
+  // after it was, wipe at once. Its /info poller would do this after 45 s,
+  // but only while its session with the KEY is live, and a vanished KEY ends
+  // that session first, so the poller never gets there.
+  (function () {
+    var wasUp = null;
+    window.addEventListener('keylink', function (e) {
+      var up = !!(e && e.detail && e.detail.up);
+      if (wasUp === true && !up) window.__favillaKeyGone('not reachable (the page\'s probe)');
+      wasUp = up;
+    });
+  })();
   window.__favillaKeyGone = function (why) {
     try {
       if (typeof window._dmLockDrop === 'function') window._dmLockDrop('KEY gone over Bluetooth: ' + (why || ''));

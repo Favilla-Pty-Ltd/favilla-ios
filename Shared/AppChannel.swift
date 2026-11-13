@@ -256,11 +256,15 @@ enum AppChannel {
     }
 
     /// HEALTH body for one bucket: [prefix 3][n u16 LE][suffix 18 x n]; a suffix is
-    /// 35 hex digits packed high nibble first, the trailing nibble 0.
-    static func healthBody(prefix: String, suffixes: [String]) -> Data? {
-        guard prefix.count == 5, let p = packHex(prefix + "0"), suffixes.count <= 1200 else { return nil }
+    /// 35 hex digits packed high nibble first, the trailing nibble 0. 11bc: a
+    /// bucket over `healthPart` lines goes as parts, bit 15 of n (`more`) set on
+    /// all but the last; the KEY records the verdict when the last arrives.
+    static let healthPart = 1000
+    static func healthBody(prefix: String, suffixes: [String], more: Bool = false) -> Data? {
+        guard prefix.count == 5, let p = packHex(prefix + "0"), suffixes.count <= healthPart else { return nil }
         var d = Data(p)
-        d.append(UInt8(suffixes.count & 0xFF)); d.append(UInt8(suffixes.count >> 8))
+        let n = suffixes.count | (more ? 0x8000 : 0)
+        d.append(UInt8(n & 0xFF)); d.append(UInt8(n >> 8))
         for s in suffixes { guard s.count == 35, let x = packHex(s + "0") else { return nil }; d.append(contentsOf: x) }
         return d
     }

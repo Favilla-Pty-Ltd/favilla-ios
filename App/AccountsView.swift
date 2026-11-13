@@ -141,17 +141,37 @@ final class AccountsModel: ObservableObject {
             for prefix in page.prefixes {
                 let suffixes = try await hibp(prefix)
                 buckets += 1
-                var sent = 0
+                // 11bc (issue #32): parts of up to 1,000, bit 15 on all but the last.
+                var sent = 0, parts = 0
                 repeat {
-                    let slice = Array(suffixes[sent..<min(sent + 1200, suffixes.count)])
-                    guard let body = AppChannel.healthBody(prefix: prefix, suffixes: slice) else { throw KeySession.Failure("A breach bucket couldn't be packed.") }
+                    let end = min(sent + AppChannel.healthPart, suffixes.count)
+                    let slice = Array(suffixes[sent..<end])
+                    guard let body = AppChannel.healthBody(prefix: prefix, suffixes: slice, more: end < suffixes.count) else { throw KeySession.Failure("A breach bucket couldn't be packed.") }
                     _ = try await health(s, body: body)
-                    sent += slice.count
+                    sent = end; parts += 1
                 } while sent < suffixes.count
-                note("bucket \(prefix): \(suffixes.count) hashes to the KEY")
+                note("bucket \(prefix): \(suffixes.count) hashes to the KEY in \(parts) part\(parts == 1 ? "" : "s")")
             }
         }
         return (buckets, lastPending)
+    }
+
+    // MARK: 11az: old copies kept by CHANGE PASSWORD (issue #31)
+
+    /// The KEY keeps the old password as an ordinary entry "<site> (old)",
+    /// same username, until the owner says the site took the new one.
+    static let oldSuffix = " (old)"
+    static func isOld(_ e: AppChannel.ListEntry) -> Bool { e.site.hasSuffix(oldSuffix) }
+    /// The old copy kept for this login, if any.
+    func oldCopy(of e: AppChannel.ListEntry) -> AppChannel.ListEntry? {
+        guard !Self.isOld(e) else { return nil }
+        return entries.first { Self.isOld($0) && String($0.site.dropLast(Self.oldSuffix.count)) == e.site && $0.user == e.user }
+    }
+    /// An old copy whose login is on the list: shown under that login, not as a row.
+    func isNested(_ e: AppChannel.ListEntry) -> Bool {
+        guard Self.isOld(e) else { return false }
+        let base = String(e.site.dropLast(Self.oldSuffix.count))
+        return entries.contains { !Self.isOld($0) && $0.site == base && $0.user == e.user }
     }
 
     // MARK: 11ax: add, edit, delete, check one (issue #30)
@@ -349,7 +369,8 @@ struct AccountsView: View {
 
     private var shown: [AppChannel.ListEntry] {
         let f = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        let list = f.isEmpty ? m.entries : m.entries.filter { $0.site.lowercased().contains(f) || $0.user.lowercased().contains(f) }
+        let all = m.entries.filter { !m.isNested($0) }   // old copies sit under their login (11az)
+        let list = f.isEmpty ? all : all.filter { $0.site.lowercased().contains(f) || $0.user.lowercased().contains(f) }
         // Trouble first: breached, then reused, then weak; the rest by site.
         return list.sorted { a, b in
             let ra = rank(a.health), rb = rank(b.health)
@@ -384,7 +405,7 @@ struct AccountsView: View {
                             let key = PickedAccount(e: e).id
                             Button {
                                 if selecting { toggle(key) } else { picked = PickedAccount(e: e) }
-                            } label: { AccountRow(e: e, selecting: selecting, selected: selected.contains(key)) }
+                            } label: { AccountRow(e: e, selecting: selecting, selected: selected.contains(key), oldKept: m.oldCopy(of: e) != nil) }
                             Divider().overlay(Brand.line).padding(.leading, 16)
                         }
                     }
@@ -509,6 +530,7 @@ private struct AccountRow: View {
     let e: AppChannel.ListEntry
     var selecting = false
     var selected = false
+    var oldKept = false
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             if selecting {
@@ -528,6 +550,13 @@ private struct AccountRow: View {
                 if !selecting { Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.grey) }
             }
             Text(e.user).font(Brand.small).foregroundStyle(Brand.grey).lineLimit(1)
+            if oldKept || AccountsModel.isOld(e) {
+                HStack(spacing: 6) {
+                    if oldKept { Pill("Old password kept", tone: .warn) }
+                    if AccountsModel.isOld(e) { Pill("OLD", tone: .quiet) }
+                }
+                .padding(.top, 2)
+            }
             if let h = e.health {
                 HStack(spacing: 6) {
                     if h.breached { Pill("Seen in a breach", tone: .bad) }
@@ -580,6 +609,8 @@ private struct AccountSheet: View {
     @State private var editing = false
     @State private var manageNote = ""
     @State private var checkNote = ""
+    @State private var confirmOld = false
+    @State private var oldNote = ""
 
     var body: some View {
         NavigationStack {
@@ -600,6 +631,12 @@ private struct AccountSheet: View {
                             if h.hasCode { Line("2FA", "A one-time code on the KEY is linked to this account. At a sign-in, the code is one press on the KEY after the password.", bad: false) }
                             if !h.checked { Line("Breach check pending", "Not scored yet. Check this one now, or Check breaches on the list for up to 24 at a time.", bad: false) }
                         }
+                    }
+                    if let old = model.oldCopy(of: e) { oldSection(old) }
+                    else if AccountsModel.isOld(e) {
+                        Line("Old password", "CHANGE PASSWORD on the KEY kept this until the site takes the new one. Delete it below once the new one works, or put it back on the KEY: open it in PASSWORDS, press DOWN for MORE, then PUT THIS ONE BACK.", bad: false)
+                    } else if !oldNote.isEmpty {
+                        Text(oldNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
                     }
                     if e.id != nil {
                         Button { checkOne() } label: {
@@ -695,6 +732,41 @@ private struct AccountSheet: View {
         }
         .preferredColorScheme(.dark)
         .onDisappear { code = "" }
+    }
+
+    /// 11az: the login's old copy, kept until the owner says the new one works.
+    private func oldSection(_ old: AppChannel.ListEntry) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("OLD PASSWORD KEPT").font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
+            Text("You changed this password on the KEY. It kept the old one until you're sure the site took the new one.")
+                .font(Brand.body).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
+            if let h = old.health, h.breached || h.reused {
+                HStack(spacing: 6) {
+                    if h.breached { Pill("Old one seen in a breach", tone: .bad) }
+                    if h.reused { Pill("Old one reused", tone: .warn) }
+                }
+            }
+            BrandButton(title: model.busy == "Deleting…" ? "WAITING FOR THE KEY…" : "NEW ONE WORKS", filled: false) { confirmOld = true }
+                .disabled(!model.busy.isEmpty || old.id == nil)
+            if !model.asking.isEmpty && model.busy == "Deleting…" {
+                Text(model.asking).font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
+            }
+            if !oldNote.isEmpty { Text(oldNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
+            Text("Signed in with the new one? Tap New one works and the KEY deletes the old copy (hold ENTER there).\n\nNeed the old one back? Do it on the KEY: open PASSWORDS, choose \(old.site), press DOWN for MORE, then PUT THIS ONE BACK. This iPhone never holds the old password, so it can't do that itself.")
+                .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .background(Brand.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .confirmationDialog("Delete the old password?", isPresented: $confirmOld, titleVisibility: .visible) {
+            Button("Delete the old copy", role: .destructive) {
+                oldNote = ""
+                Task { oldNote = await model.delete([old]) ?? "Old copy deleted. The new password is the only one now." }
+            }
+            Button("Not yet", role: .cancel) {}
+        } message: {
+            Text("Only once you've signed in to \(e.site) with the new password. The KEY asks too.")
+        }
     }
 
     private func deleteIt() {

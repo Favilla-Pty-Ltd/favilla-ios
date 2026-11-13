@@ -512,6 +512,9 @@ do {
     } else { check(false, "health: the 0xC0 vector opens") }
     let bucket = AppChannel.healthBody(prefix: "5BAA6", suffixes: ["1E4C9B93F3F0682250B6CF8331B7EE68FD8"])
     check(bucket.map(hx) == "5baa6001001e4c9b93f3f0682250b6cf8331b7ee68fd80", "health: one suffix packs as in the vector")
+    // 11bc (issue #32): a part with more to follow sets bit 15 of n.
+    check(AppChannel.healthBody(prefix: "5BAA6", suffixes: ["1E4C9B93F3F0682250B6CF8331B7EE68FD8"], more: true).map(hx) == "5baa6001801e4c9b93f3f0682250b6cf8331b7ee68fd80", "11bc: a HEALTH part with more to follow sets bit 15")
+    check(AppChannel.healthBody(prefix: "5BAA6", suffixes: Array(repeating: "1E4C9B93F3F0682250B6CF8331B7EE68FD8", count: 1001)) == nil, "11bc: over 1,000 lines must go as parts")
     check(hx(AppChannel.request(AppChannel.cHealth, chCreds, ctr: 16, body: bucket ?? Data())) == "440102030405060708100000005baa6001001e4c9b93f3f0682250b6cf8331b7ee68fd80ec9607279f59cb15e70810f133159e4e", "health: HEALTH with one bucket matches")
 
     let refused = DispatchSemaphore(value: 0)

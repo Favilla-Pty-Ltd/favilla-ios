@@ -350,6 +350,42 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         check(AppChannel.pwSaveBody(id: Data(count: 8), site: String(repeating: "a", count: 200), user: "", pass: "", note: "") == .failure(.siteTooLong), "11ax: site over 199 bytes refused")
         check(AppChannel.parsePwResult(Data([1] + [UInt8](repeating: 9, count: 8) + [0])) == AppChannel.PwResult(state: 1, id: Data(repeating: 9, count: 8), reason: 0), "11ax: PW_RESULT parses")
     }
+    // 11bf (issue #36): IMPORT_ITEM bodies, encrypted with 0x4C (the doc's vectors).
+    do {
+        let vk = Credentials(key: Data((0..<32).map { UInt8($0) }), clientId: Data((0..<8).map { UInt8(0xA0 + $0) }))
+        let pw = VaultImport.Item(kind: .password, site: "github.com", user: "favillakey", pass: "hunter2", note: "from Bitwarden")
+        check(hx(pw.body) == "010a6769746875622e636f6d0a666176696c6c616b65790768756e746572320e66726f6d2042697477617264656e", "11bf: password item body")
+        let m1 = AppChannel.request(AppChannel.cImportItem, vk, ctr: 9, body: pw.body)
+        check(hx(m1.subdata(in: 13..<(m1.count - 16))) == "40eecc09628efbdf463d6975b48102cbd1c7754fff37d52cb738766404b6319f6a18b995bf244df0129fc8e0258c", "11bf: password item encrypted as the firmware's vector")
+        let code = VaultImport.Item(kind: .code, site: "github.com", user: "favillakey", digits: 6, period: 30, secret: Data([0x48,0x65,0x6c,0x6c,0x6f,0x21,0xde,0xad,0xbe,0xef]))
+        check(hx(code.body) == "020a6769746875622e636f6d0a666176696c6c616b6579061e0a48656c6c6f21deadbeef", "11bf: one-time code item body")
+        let m2 = AppChannel.request(AppChannel.cImportItem, vk, ctr: 10, body: code.body)
+        check(hx(m2.subdata(in: 13..<(m2.count - 16))) == "22e22922fd54b25add3423b08cd0d9f747adfcc007fc08df82b00f19b05278715a50a708", "11bf: one-time code item encrypted as the firmware's vector")
+        // Base32 and otpauth.
+        check(VaultImport.base32("JBSWY3DPEHPK3PXP") == Data("Hello!".utf8) + Data([0xDE, 0xAD, 0xBE, 0xEF]), "11bf: base32 decodes")
+        check(VaultImport.parseOtp("otpauth://totp/GitHub:favillakey?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&digits=8&period=60")
+              == .success(.init(digits: 8, period: 60, secret: Data("Hello!".utf8) + Data([0xDE, 0xAD, 0xBE, 0xEF]), account: "favillakey")), "11bf: otpauth TOTP parses")
+        if case .failure = VaultImport.parseOtp("otpauth://hotp/X?secret=JBSWY3DPEHPK3PXP&counter=1") {} else { check(false, "11bf: HOTP skipped") }
+        if case .failure = VaultImport.parseOtp("otpauth://totp/X?secret=JBSWY3DPEHPK3PXP&algorithm=SHA256") {} else { check(false, "11bf: SHA256 skipped") }
+        // CSV readers and the plan.
+        let bw = "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n" +
+                 ",,login,GitHub,\"two\nlines\",,0,https://www.GitHub.com/login,favillakey,hunter2,JBSWY3DPEHPK3PXP\n" +
+                 ",,note,Secret note,hi,,0,,,,\n" +
+                 ",,login,Dup,,,0,https://example.com,me,pw,\n" +
+                 ",,login,Old bank,,,0,https://bank.com,me,pw2,otpauth://hotp/Bank?secret=JBSWY3DPEHPK3PXP\n"
+        let r = VaultImport.rows(csv: bw)
+        check(r?.source == "Bitwarden" && r?.rows.count == 3, "11bf: Bitwarden CSV read, notes rows left out")
+        var on = VaultImport.OnKey(); on.pairs.insert(VaultImport.key("example.com", "me"))
+        let p = VaultImport.plan(r?.rows ?? [], source: "Bitwarden", onKey: on)
+        check(p.passwords == 2 && p.codes == 1, "11bf: plan has 2 passwords and 1 code")
+        check(p.items.first?.site == "github.com" && p.items.first?.note == "two / lines", "11bf: site normalised, note line break folded")
+        check(p.items.contains { $0.kind == .code && $0.site == "github.com" && $0.user == "favillakey" }, "11bf: code saved under the login's site")
+        check(p.skipped.contains { $0.why == "already on the KEY" } && p.skipped.contains { $0.why.contains("HOTP") }, "11bf: duplicate and HOTP skipped")
+        let apple = VaultImport.rows(csv: "Title,URL,Username,Password,Notes,OTPAuth\r\nX,https://x.com/,a,b,,\r\n")
+        check(apple?.source == "Apple Passwords" && apple?.rows.first?.url == "https://x.com/", "11bf: Apple Passwords CSV read")
+        let st = VaultImport.parseStatus(Data([2, 0, 3, 0, 1, 0, 0x12]))
+        check(st == .init(state: 2, reason: 0, saved: 3, failed: 1, last: 0x12), "11bf: IMPORT_STATUS parses")
+    }
     check(LinkLog.path(of: try ApiWire.encode(ApiRequest(method: "GET", host: "", path: "/api/pair/sas?pair_id=7", headers: [:], body: Data(), timeout: 5)).unwrap()) == "GET /api/pair/sas", "log: path without its query")
 } catch { check(false, "issue #9 tests threw \(error)") }
 

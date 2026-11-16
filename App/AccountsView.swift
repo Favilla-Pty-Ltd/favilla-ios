@@ -156,6 +156,122 @@ final class AccountsModel: ObservableObject {
         return (buckets, lastPending)
     }
 
+    // MARK: 11bf: import in VAULT mode (issue #36)
+
+    enum ImportPhase: Equatable {
+        case idle
+        case pin                         // the KEY asks for the passkey PIN
+        case sending(done: Int, of: Int)
+        case finished(saved: Int, failed: [VaultImport.Skipped], note: String)
+        case failed(String)
+    }
+    @Published var importPhase: ImportPhase = .idle
+
+    /// Drive the KEY's import window: BEGIN, the PIN on the KEY, each item
+    /// (encrypted) and its result, END. The plan's passwords are dropped from
+    /// memory as they go.
+    func runImport(_ plan: VaultImport.Plan) async {
+        guard busy.isEmpty else { importPhase = .failed("The page is still talking to the KEY. Try again in a moment."); return }
+        busy = "Importing…"
+        importPhase = .pin
+        await importSteps(plan.items)
+        busy = ""
+        load()
+    }
+
+    private func importSteps(_ items: [VaultImport.Item]) async {
+        do {
+            let s = try await open()
+            // 2. BEGIN, then the PIN on the KEY.
+            let b = try await s.request(AppChannel.cImportBegin, Data(), timeout: 8)
+            if b.rsp == AppChannel.rErr {
+                let st = b.body.first ?? 0xFF
+                importPhase = .failed(st == 0x04 ? "Import works in VAULT mode. On the KEY choose VAULT, enter the VAULT PIN, and leave it on its home screen."
+                                      : st == 0x07 ? "This KEY can't import from the app yet: it needs firmware 11bf." : AccountsModel.refusal(st))
+                return
+            }
+            guard b.rsp == AppChannel.rAck, let st = b.body.first else { importPhase = .failed("The KEY's answer couldn't be read."); return }
+            guard st == 0x00 else { importPhase = .failed(VaultImport.beginText(st)); return }
+            note("import: asked for the PIN on the KEY")
+            var opened = false
+            for _ in 0..<110 {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let t = try await importStatus(s) else { importPhase = .failed("The KEY's answer couldn't be read."); return }
+                if t.state == 1 { continue }
+                if t.state == 2 || t.state == 3 { opened = true; break }
+                importPhase = .failed(VaultImport.reasonText(t.reason, closed: t.state == 4))
+                note(String(format: "import: window not opened, state %d reason %02x", t.state, t.reason))
+                return
+            }
+            guard opened else { _ = try? await s.request(AppChannel.cImportEnd, Data(), timeout: 6); importPhase = .failed("No PIN on the KEY in time."); return }
+            note("import: window open, \(items.count) items")
+            // 4. Items, one at a time.
+            var failed: [VaultImport.Skipped] = [], saved = 0, stopped = ""
+            var base = try await importStatus(s).map { $0.saved + $0.failed } ?? 0
+            importPhase = .sending(done: 0, of: items.count)
+            itemLoop: for (n, it) in items.enumerated() {
+                var sent = false
+                for _ in 0..<60 {
+                    let a = try await s.request(AppChannel.cImportItem, it.body, timeout: 8)
+                    let st = a.rsp == AppChannel.rAck ? (a.body.first ?? 0xFF) : 0xFF
+                    if a.rsp == AppChannel.rErr { stopped = AccountsModel.refusal(a.body.first ?? 0xFF); break itemLoop }
+                    if st == 0x06 { try await Task.sleep(nanoseconds: 200_000_000); continue }
+                    if st == 0x00 { sent = true; break }
+                    if st == 0x14 {
+                        let t = try await importStatus(s)
+                        stopped = t.map { VaultImport.reasonText($0.reason, closed: true) } ?? VaultImport.itemText(st)
+                        break itemLoop
+                    }
+                    failed.append(VaultImport.Skipped(label: it.label + (it.kind == .code ? ", code" : ""), why: VaultImport.itemText(st)))
+                    if st == 0x10 { stopped = "The KEY is full (200 records)."; break itemLoop }
+                    break
+                }
+                if sent {
+                    // Its result: saved + failed goes up by one.
+                    var result: UInt8?
+                    for _ in 0..<60 {
+                        try await Task.sleep(nanoseconds: 250_000_000)
+                        guard let t = try await importStatus(s) else { continue }
+                        if t.saved + t.failed > base { base = t.saved + t.failed; result = t.last; break }
+                        if t.state == 4 || t.state == 5 { stopped = VaultImport.reasonText(t.reason, closed: true); break }
+                    }
+                    if let r = result {
+                        if r == 0x00 { saved += 1 } else { failed.append(VaultImport.Skipped(label: it.label + (it.kind == .code ? ", code" : ""), why: VaultImport.itemText(r))) }
+                    } else if stopped.isEmpty {
+                        failed.append(VaultImport.Skipped(label: it.label, why: "no result from the KEY in time"))
+                    }
+                    if !stopped.isEmpty { break itemLoop }
+                }
+                importPhase = .sending(done: n + 1, of: items.count)
+            }
+            let notSent = items.count - saved - failed.count
+            if notSent > 0, !stopped.isEmpty {
+                failed.append(VaultImport.Skipped(label: "\(notSent) more", why: "not sent: " + stopped))
+            }
+            // 5. END (0x06: the last item is still being sealed).
+            for _ in 0..<20 {
+                let e = try await s.request(AppChannel.cImportEnd, Data(), timeout: 8)
+                if e.rsp == AppChannel.rAck, e.body.first == 0x06 { try await Task.sleep(nanoseconds: 300_000_000); continue }
+                if e.rsp == AppChannel.rAck, e.body.count >= 5 {
+                    let v = [UInt8](e.body)
+                    note("import: ended \(String(format: "%02x", v[0])), KEY counts \(Int(v[1]) | Int(v[2]) << 8) saved, \(Int(v[3]) | Int(v[4]) << 8) failed")
+                }
+                break
+            }
+            note("import: \(saved) saved, \(failed.count) not")
+            importPhase = .finished(saved: saved, failed: failed, note: stopped)
+        } catch {
+            note("import failed: \(error)")
+            importPhase = .failed("\(error)")
+        }
+    }
+
+    private func importStatus(_ s: KeySession) async throws -> VaultImport.Status? {
+        let a = try await s.request(AppChannel.cImportStatus, Data(), timeout: 6)
+        guard a.rsp == AppChannel.rAck else { return nil }
+        return VaultImport.parseStatus(a.body)
+    }
+
     // MARK: 11az: old copies kept by CHANGE PASSWORD (issue #31)
 
     /// The KEY keeps the old password as an ordinary entry "<site> (old)",
@@ -362,6 +478,7 @@ struct AccountsView: View {
     @State private var filter = ""
     @State private var qr: SetupKeyQR.Prefill?
     @State private var adding = false
+    @State private var importing = false
     @State private var selecting = false
     @State private var selected: Set<String> = []
     @State private var selStatus = ""
@@ -443,6 +560,7 @@ struct AccountsView: View {
             }
             .sheet(item: $picked) { p in AccountSheet(e: p.e, model: m) }
             .sheet(isPresented: $adding) { EntryEditor(entry: nil, model: m) { adding = false } }
+            .sheet(isPresented: $importing) { ImportSheet(model: m) }
             .sheet(item: $qr) { p in SetupKeyQR(prefill: p) }
             .onAppear { if m.entries.isEmpty { m.load() } }
             .onDisappear { m.close() }
@@ -506,6 +624,11 @@ struct AccountsView: View {
             }
             Button { adding = true } label: {
                 HStack(spacing: 6) { Image(systemName: "plus"); Text("Add an account") }
+                    .font(Brand.small).foregroundStyle(Brand.brass)
+            }
+            .disabled(!m.busy.isEmpty)
+            Button { importing = true } label: {
+                HStack(spacing: 6) { Image(systemName: "square.and.arrow.down"); Text("Import from another manager") }
                     .font(Brand.small).foregroundStyle(Brand.brass)
             }
             .disabled(!m.busy.isEmpty)

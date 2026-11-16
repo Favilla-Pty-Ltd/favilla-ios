@@ -59,7 +59,12 @@ enum AppChannel {
     static let cAssessOne: UInt8 = 0x4A  // [id 8] -> rAck [status][queued]; then HEALTH with no body (both lives)
     /// Requests whose body crosses encrypted, with the command byte in the
     /// answer byte's place in the keystream (11ax: PW_SAVE only).
-    static let encryptedRequests: Set<UInt8> = [cPwSave]
+    // 11bf (issue #36): import in VAULT mode (VaultImport.swift).
+    static let cImportBegin: UInt8 = 0x4B   // none -> rAck [status]
+    static let cImportItem: UInt8 = 0x4C    // ENCRYPTED [kind][...] -> rAck [status]
+    static let cImportStatus: UInt8 = 0x4D  // none -> rAck [state][reason][saved u16][failed u16][last]
+    static let cImportEnd: UInt8 = 0x4E     // none -> rAck [status][saved u16][failed u16]
+    static let encryptedRequests: Set<UInt8> = [cPwSave, cImportItem]
     static let rErr: UInt8 = 0xBF
 
     /// Answers whose body is encrypted.

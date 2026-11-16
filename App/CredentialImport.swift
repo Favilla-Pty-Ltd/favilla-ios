@@ -8,13 +8,11 @@
 // token; ASCredentialImportManager turns the token into the exported data,
 // decrypted by iOS, in this process's memory.
 //
-// What happens to it: only the password logins go on. They are handed to the
-// Nostr client's Passwords page (the KEY's own PWA), which already imports CSV
-// exports: the owner picks the entries, the KEY asks for the PIN once (its
-// import window) and seals them one at a time, marked "imported" and health
-// scored. Nothing is written on the phone: the native side holds the logins
-// until the page has them, then drops them, and the page wipes its copy once
-// the KEY has sealed them (bridge.js).
+// What happens to it: only the password logins go on, through the KEY's
+// import window over the app channel in VAULT mode (KEY 11bf, issue #36;
+// ImportFlowView): duplicates of what the KEY lists are skipped, the KEY asks
+// for the passkey PIN once and seals each one, marked "imported". Nothing is
+// written on the phone; the logins are dropped when the sheet goes.
 //
 // Not imported, and said so on the summary: passkeys (CXF carries the private
 // key; the KEY's passkeys are derived in its G0 from the words, and there is
@@ -128,8 +126,14 @@ final class CredentialImport: ObservableObject {
         return (out, s)
     }
 
+    /// The logins as import rows (VaultImport), for the KEY's window.
+    func rows() -> (source: String, rows: [VaultImport.Row]) {
+        (summary?.from.isEmpty == false ? summary!.from : "another app",
+         logins.map { VaultImport.Row(url: $0.url, name: $0.title, user: $0.user, pass: $0.pass, note: $0.note) })
+    }
+
     /// IMPORT: the logins go to the Nostr client's Passwords page, and this
-    /// side forgets them.
+    /// side forgets them. (Before KEY 11bf; kept for the Wi-Fi route.)
     func send() {
         guard !logins.isEmpty, let d = try? JSONEncoder().encode(logins), let json = String(data: d, encoding: .utf8) else { discard(); return }
         let from = summary?.from ?? ""
@@ -150,7 +154,7 @@ final class CredentialImport: ObservableObject {
         guard let s else { return "" }
         var parts: [String] = []
         if s.passkeys > 0 { parts.append("\(s.passkeys) passkey\(s.passkeys == 1 ? "" : "s") not imported: create new ones on those sites with your KEY") }
-        if s.codes > 0 { parts.append("\(s.codes) one-time code\(s.codes == 1 ? "" : "s") not imported: add them on the KEY from each site's setup QR") }
+        if s.codes > 0 { parts.append("\(s.codes) one-time code\(s.codes == 1 ? "" : "s") not imported from this hand-over: a CSV export from that manager brings codes, or add them on the KEY from each site's setup QR") }
         if s.noPassword > 0 { parts.append("\(s.noPassword) with no password skipped") }
         if s.other > 0 { parts.append("\(s.other) other item\(s.other == 1 ? "" : "s") (cards, notes, Wi-Fi) not imported") }
         return parts.joined(separator: ". ")
@@ -161,10 +165,27 @@ final class CredentialImport: ObservableObject {
 
 struct CredentialImportSheet: View {
     @ObservedObject var model = CredentialImport.shared
+    @StateObject private var accounts = AccountsModel()
+    @State private var flow: (source: String, rows: [VaultImport.Row])?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
+            if let f = flow {
+                ImportFlowView(model: accounts, preset: f) { flow = nil; accounts.close(); dismiss() }
+                    .navigationTitle("Import passwords")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbarBackground(Brand.bg, for: .navigationBar)
+            } else {
+                summaryPage
+            }
+        }
+        .preferredColorScheme(.dark)
+        .interactiveDismissDisabled(model.busy || accounts.importPhase != .idle)
+        .onDisappear { flow = nil; accounts.close() }
+    }
+
+    private var summaryPage: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if let s = model.summary {
@@ -196,10 +217,8 @@ struct CredentialImportSheet: View {
                             }
                             if s.logins > 0 {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    BrandButton(title: s.logins == 1 ? "PICK AND IMPORT ON THE KEY" : "PICK AND IMPORT \(s.logins) ON THE KEY") { model.send(); dismiss() }
-                                    Text("Next: the Nostr client's Passwords page lists them. Untick any you don't want, tap Import on KEY, and enter the PIN on the KEY to open its import window. The KEY seals each one and marks it imported. Nothing is written on this iPhone.")
-                                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                                    Text("The Nostr client must reach your KEY: Bluetooth (the KEY in NOSTR Bluetooth mode) or Wi-Fi, as set in Settings > This iPhone.")
+                                    BrandButton(title: "NEXT") { flow = model.rows(); model.discard() }
+                                    Text("Next: the KEY's list is read so nothing is added twice, then the KEY asks for your passkey PIN and saves each one, marked imported. The KEY must be in VAULT mode. Nothing is written on this iPhone.")
                                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                                 }
                             }
@@ -218,9 +237,6 @@ struct CredentialImportSheet: View {
             .navigationTitle("Import passwords")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Brand.bg, for: .navigationBar)
-        }
-        .preferredColorScheme(.dark)
-        .interactiveDismissDisabled(model.busy)
     }
 
     private func card<C: View>(@ViewBuilder _ c: () -> C) -> some View {

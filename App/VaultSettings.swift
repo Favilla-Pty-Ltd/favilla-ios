@@ -5,6 +5,16 @@ import Foundation
 import SwiftUI
 import UIKit
 
+/// One background task, ended once whichever comes first: the run's end or iOS's expiry.
+@MainActor
+final class BackgroundHold {
+    var id = UIBackgroundTaskIdentifier.invalid
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id); id = .invalid
+    }
+}
+
 @MainActor
 final class VaultService: ObservableObject {
     static let shared = VaultService()
@@ -41,10 +51,22 @@ final class VaultService: ObservableObject {
         guard Credentials.isPaired, KeyRoute.current == .bluetooth else { status = "Choose Bluetooth above and pair the app first."; return }
         busy = backup ? "Backing up…" : "Restoring…"
         status = ""
-        note((backup ? "backup" : "restore") + " started (\(why))")
-        let bg = UIApplication.shared.beginBackgroundTask(withName: "vault") {}
+        // Issue #35: say whether iOS had the app in front; a KEY-started run
+        // usually finds it in the background, woken by the nudge.
+        let where_ = UIApplication.shared.applicationState == .active ? "foreground" : "background"
+        note((backup ? "backup" : "restore") + " started (\(why), app in the \(where_))")
+        // Held from the KEY's ask until VAULT_DONE is sent (or the restore ends),
+        // so iOS doesn't suspend the app between VAULT_GET and VAULT_DONE.
+        let bg = BackgroundHold()
+        bg.id = UIApplication.shared.beginBackgroundTask(withName: "vault") { [weak self] in
+            MainActor.assumeIsolated {      // iOS calls this on the main thread
+                self?.note("iOS ended the background time before the \(backup ? "backup" : "restore") finished")
+                bg.end()
+            }
+        }
+        if where_ == "background" { note(String(format: "background time left: %.0f s", UIApplication.shared.backgroundTimeRemaining)) }
         Task {
-            defer { busy = ""; UIApplication.shared.endBackgroundTask(bg) }
+            defer { busy = ""; bg.end() }
             let out = backup ? await Vault.backup(NostrLink.shared, log: { [weak self] s in Task { @MainActor in self?.note(s) } })
                              : await Vault.restoreOnly(NostrLink.shared, log: { [weak self] s in Task { @MainActor in self?.note(s) } })
             switch out {

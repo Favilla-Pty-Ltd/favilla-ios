@@ -109,7 +109,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     /// The commands that share this link: API, and the bunker's NIP46 / POLL / INFO.
-    static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, AppChannel.cHello, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo, Bunker.cNudgeSet]
+    static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, AppChannel.cHello, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo, Bunker.cNudgeSet,
+                                   Vault.cInfo, Vault.cGet, Vault.cDone, Vault.cPut]
 
     /// Posted on the main queue for each KEY nudge (path B): userInfo "waiting" (Int).
     static let nudged = Notification.Name("NostrLink.nudged")
@@ -196,6 +197,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         // while it was still going out.
         let limit = (j.cmd == Bunker.cNip46 || j.cmd == Bunker.cPoll ? 12 : 6) + Double(msg.count) / (j.cmd == AppChannel.cApi ? 500 : 8_000)
         pendingLimit = limit
+        answerArmed = false
         arm(limit + Double(msg.count) / 2_000) { [weak self] in
             guard let self else { return }
             let pr = self.reasm.progress
@@ -208,7 +210,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func finishCurrent(_ r: Result<AppChannel.Answer, Error>) {
-        timer?.cancel(); timer = nil
+        timer?.cancel(); timer = nil; answerArmed = false
         guard let j = current else { return }
         current = nil
         switch r {
@@ -220,7 +222,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func failAll(_ e: Error) {
-        timer?.cancel(); timer = nil
+        timer?.cancel(); timer = nil; answerArmed = false
         let jobs = (current.map { [$0] } ?? []) + queue
         current = nil; queue = []
         jobs.forEach { $0.done(.failure(e)) }
@@ -278,14 +280,30 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         if writeBytes >= 2048 { LinkLog.shared.add("wrote \(writeBytes) bytes in \(ms) ms") }
         guard current != nil, pendingLimit > 0 else { return }
         let limit = pendingLimit; pendingLimit = 0
+        answerArmed = true
+        armAnswer(limit, "after the last write")
+    }
+
+    private var answerArmed = false   // the answer limit runs (the request is all written)
+
+    private func armAnswer(_ limit: Double, _ since: String) {
         arm(limit) { [weak self] in
             guard let self, let j = self.current else { return }
             let pr = self.reasm.progress
-            LinkLog.shared.add("TIMEOUT ctr \(j.ctr) \(String(format: "%.1f", limit)) s after the last write: \(self.notes) notifications, holding \(pr.have) of \(pr.want) bytes; dropping the link")
+            LinkLog.shared.add("TIMEOUT ctr \(j.ctr) \(String(format: "%.1f", limit)) s \(since): \(self.notes) notifications, holding \(pr.have) of \(pr.want) bytes; dropping the link")
             self.drop()
             self.state = .idle
             self.finishCurrent(.failure(KeyApiError.timedOut))
         }
+    }
+
+    /// Issue #35: a long answer (a 31 KB VAULT_GET) still arriving is not a dead
+    /// link. In the background iOS widens the connection interval and 31 KB can
+    /// take longer than the limit; while its reports keep coming, the limit
+    /// restarts from the latest one.
+    private func answerProgress() {
+        guard current != nil, answerArmed else { return }
+        armAnswer(6, "after the last part of the answer")
     }
 
     func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) {
@@ -656,6 +674,7 @@ extension NostrLink: CBPeripheralDelegate {
         if !quiet { LinkLog.shared.add("notify \(v.count) bytes: \(LinkLog.describe(v))" + (pr0.want > 0 ? " (holding \(pr0.have) of \(pr0.want))" : "") + (error.map { ", error \($0.localizedDescription)" } ?? "")) }
         do {
             for m in try reasm.feed(v) { received(m) }
+            if reasm.progress.have > pr0.have { answerProgress() }
         } catch {
             LinkLog.shared.add("  REASSEMBLY FAILED (\(error)), holding \(pr0.have) of \(pr0.want); dropping the rest of it")
             reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)

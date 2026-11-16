@@ -189,49 +189,87 @@ enum Vault {
 
     /// The whole backup: restore (merge the relay's copy), then collect the KEY's
     /// signed frame, publish it, and tell the KEY what the relay said.
+    ///
+    /// Issue #35 (16 Nov): once the KEY has staged the frame it waits 90 s for
+    /// VAULT_DONE. So from VAULT_GET on, a dropped link is reconnected and the
+    /// step tried again, and whatever happens the KEY hears VAULT_DONE: [1] the
+    /// relay took it, [0] refused, [2] not reached (also when the frame never
+    /// arrived whole), never silence.
     static func backup(_ k: ChannelCaller, log: (String) -> Void) async -> Outcome {
+        let info: Info, relay: URL
         do {
-            let info = try await info(k)
-            guard let relay = info.relay else { return .failed("The KEY named no vault relay.") }
-            let r = try await restore(k, info: info, log: log)
-            log("KEY merged the relay's copy: result \(r.result), \(r.added) added, \(r.removed) removed")
-            guard r.result == 0 || r.result == 11 else { return .failed(words(r.result)) }
-            // 3. the signed frame, in chunks
-            var frame = Data(), total = -1, offset = 0, busy = 0
-            while total < 0 || offset < total {
-                let a = try await k.request(cGet, Data(le32(offset)), timeout: 12)
-                if a.rsp == AppChannel.rErr, a.body.first == 0x06 {
-                    busy += 1
-                    guard busy < 15 else { return .failed("The KEY didn't finish signing the backup.") }
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    continue
-                }
-                if let why = refusal(a) { return .failed(why) }
-                guard a.rsp == rGet, a.body.count >= 9 else { return .failed("The KEY's backup chunk couldn't be read.") }
-                let v = [UInt8](a.body)
-                guard v[0] == 0 else { return .failed(words(v[0])) }
-                let t = Int(u32(v, 1)), o = Int(u32(v, 5))
-                guard o == offset, t > 0, t <= 400_000 else { return .failed("The KEY's backup chunks came out of order.") }
-                total = t
-                frame.append(contentsOf: v[9...])
-                offset = frame.count
-                if v.count == 9 { return .failed("The KEY sent an empty backup chunk.") }
-            }
-            guard let text = String(data: frame, encoding: .utf8), text.hasPrefix("[\"EVENT\"") else { return .failed("The KEY's backup frame isn't a relay message.") }
-            log("signed backup from the KEY: \(frame.count) bytes")
-            // 4 and 5: publish, report
-            let ok = await publish(frame: text, relay: relay)
-            var done = Data([ok == nil ? 2 : (ok!.ok ? 1 : 0)])
-            if let ok, !ok.ok { done.append(Data(ok.message.prefix(200).utf8)) }
-            let d = try await k.request(cDone, done, timeout: 8)
-            if let why = refusal(d) { return .failed(why) }
-            guard let ok else { return .failed("The vault relay couldn't be reached. The KEY keeps the backup pending.") }
-            guard ok.ok else { return .failed("The relay refused the backup: " + ok.message) }
-            log("relay \(info.host): OK")
-            return .backedUp(try? await self.info(k))
+            info = try await self.info(k)
+            guard let r = info.relay else { return .failed("The KEY named no vault relay.") }
+            relay = r
+            let m = try await restore(k, info: info, log: log)
+            log("KEY merged the relay's copy: result \(m.result), \(m.added) added, \(m.removed) removed")
+            guard m.result == 0 || m.result == 11 else { return .failed(words(m.result)) }
         } catch {
             return .failed("\(error)")
         }
+        // 3. the signed frame, in chunks; a dropped link costs a retry, not the run.
+        var frame = Data(), total = -1, offset = 0, busy = 0, drops = 0
+        var problem: String?
+        while total < 0 || offset < total {
+            let a: AppChannel.Answer
+            do { a = try await k.request(cGet, Data(le32(offset)), timeout: 30) }
+            catch {
+                drops += 1
+                log("VAULT_GET at \(offset) failed (\(error)); try \(drops) of 3")
+                if drops >= 3 { problem = "The link to the KEY kept dropping while the backup came across."; break }
+                // From the start: if the KEY staged the frame again, its chunks
+                // must not be mixed with the first copy's.
+                frame = Data(); total = -1; offset = 0
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+            if a.rsp == AppChannel.rErr, a.body.first == 0x06 {
+                busy += 1
+                if busy >= 15 { problem = "The KEY didn't finish signing the backup."; break }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+            if let why = refusal(a) { problem = why; break }
+            guard a.rsp == rGet, a.body.count >= 9 else { problem = "The KEY's backup chunk couldn't be read."; break }
+            let v = [UInt8](a.body)
+            guard v[0] == 0 else { return .failed(words(v[0])) }   // the KEY refused: nothing staged, no DONE owed
+            let t = Int(u32(v, 1)), o = Int(u32(v, 5))
+            guard o == offset, t > 0, t <= 400_000 else { problem = "The KEY's backup chunks came out of order."; break }
+            if v.count == 9 { problem = "The KEY sent an empty backup chunk."; break }
+            total = t
+            frame.append(contentsOf: v[9...])
+            offset = frame.count
+        }
+        var text: String?
+        if problem == nil {
+            text = String(data: frame, encoding: .utf8)
+            if text?.hasPrefix("[\"EVENT\"") != true { problem = "The KEY's backup frame isn't a relay message."; text = nil }
+            else { log("signed backup from the KEY: \(frame.count) bytes") }
+        }
+        // 4. publish
+        var ok: (ok: Bool, message: String)?
+        if let text { ok = await publish(frame: text, relay: relay) }
+        // 5. report, always: [1] taken, [0] refused, [2] not reached or never sent.
+        var done = Data([ok == nil ? 2 : (ok!.ok ? 1 : 0)])
+        if let ok, !ok.ok { done.append(Data(ok.message.prefix(200).utf8)) }
+        if let problem { done.append(Data(("app: " + problem).prefix(200).utf8)) }
+        var told = false
+        for attempt in 1...3 where !told {
+            do {
+                let d = try await k.request(cDone, done, timeout: 10)
+                if let why = refusal(d) { log("VAULT_DONE refused: \(why)") }
+                told = true
+            } catch {
+                log("VAULT_DONE try \(attempt) failed: \(error)")
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+        }
+        log(String(format: "VAULT_DONE [%d] %@", done[0], told ? "sent" : "NOT delivered"))
+        if let problem { return .failed(problem) }
+        guard let ok else { return .failed("The vault relay couldn't be reached. The KEY keeps the backup pending.") }
+        guard ok.ok else { return .failed("The relay refused the backup: " + ok.message) }
+        log("relay \(info.host): OK")
+        return .backedUp(try? await self.info(k))
     }
 
     static func restoreOnly(_ k: ChannelCaller, log: (String) -> Void) async -> Outcome {

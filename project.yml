@@ -86,6 +86,9 @@ targets:
               ProvidesOneTimeCodes: true    # KEY drop 9i: one-time codes (iOS 18 and later)
               SupportsCredentialExchange: true           # issue #16: listed in Apple Passwords > Export Data to Another App (iOS 26.4+)
               SupportedCredentialExchangeVersions: ["1.0"]
+              SupportsGeneratePasswordCredentials: true      # issue #38: strong passwords made by the KEY (iOS 26.2+)
+              SupportsGeneratePasswordCredentialsWithUI: false
+              SupportsSavePasswordCredentials: true          # issue #38: iOS's save goes to the KEY with a held ENTER
     entitlements:
       path: AutoFill/FavillaAutoFill.entitlements
       properties:

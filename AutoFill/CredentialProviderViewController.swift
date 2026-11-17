@@ -130,6 +130,88 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                     algorithms: req.supportedAlgorithms.map { $0.rawValue })
     }
 
+    // MARK: - New passwords (iOS 26.2, KEY 11bi, issue #38)
+
+    // A new-password field: strong passwords made by the KEY (GEN_PW), no sheet.
+    // Apple: save nothing here; the save comes after the form is sent.
+    @available(iOS 26.2, *)
+    override func performWithoutUserInteraction(generatePasswordsRequest request: ASGeneratePasswordsRequest) {
+        let rules = NewPassword.rules(request.passwordFieldPasswordRules)
+        Task { @MainActor in
+            var out: [ASGeneratedPassword] = []
+            var why = ""
+            if let c = Credentials.load() {
+                let s = KeySession(c)
+                do {
+                    try await s.open(timeout: 6)
+                    var kinds: [(ASGeneratedPassword.Kind, UInt8)] = [(.alphanumeric, 0x02)]
+                    if rules.allowsSpecial { kinds.insert((.strong, 0x01), at: 0) }
+                    for (kind, k) in kinds {
+                        let a = try await s.request(AppChannel.cGenPw, NewPassword.genBody(rules, kind: k), timeout: 6)
+                        if a.rsp == AppChannel.rErr { why = NewPassword.genText(a.body.first ?? 0xFF); break }
+                        guard a.rsp == AppChannel.rGenPw else { why = "The KEY's answer couldn't be read."; break }
+                        switch NewPassword.parseGen(a.body) {
+                        case .success(let p): out.append(ASGeneratedPassword(kind: kind, value: p))
+                        case .failure(.status(let st)): why = NewPassword.genText(st)
+                        }
+                    }
+                } catch { why = "\(error)" }
+                s.close()
+            } else { why = "the app isn't paired" }
+            LastRequest.save("Strong password for \(request.serviceIdentifier.identifier)",
+                             [out.isEmpty ? "No password from the KEY: \(why)" : "\(out.count) password(s) from the KEY handed to iOS"])
+            if out.isEmpty {
+                self.extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.failed.rawValue))
+            } else {
+                self.extensionContext.completeGeneratePasswordRequest(results: out, completionHandler: nil)
+            }
+        }
+    }
+
+    // iOS's save after a form: always needs the KEY's ENTER, so the sheet; except
+    // a generated password just filled (wait for the form to be sent) and a login
+    // the KEY itself just sent (its NEW LOGIN / NEW PASSWORD already saved it).
+    @available(iOS 26.2, *)
+    override func performWithoutUserInteractionIfPossible(savePasswordRequest request: ASSavePasswordRequest) {
+        if request.event == .generatedPasswordFilled || alreadyOnKey(request) {
+            extensionContext.completeSavePasswordRequest(completionHandler: nil)
+            return
+        }
+        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userInteractionRequired.rawValue))
+    }
+
+    @available(iOS 26.2, *)
+    override func prepareInterface(for request: ASSavePasswordRequest) {
+        if request.event == .generatedPasswordFilled || alreadyOnKey(request) {
+            extensionContext.completeSavePasswordRequest(completionHandler: nil)
+            return
+        }
+        let (site, _) = Self.pick([request.serviceIdentifier])
+        let job = SaveJob(site: site, user: request.credential.user, pass: request.credential.password)
+        children.forEach { $0.view.removeFromSuperview(); $0.removeFromParent() }
+        let view = SaveToKeyView(job: job, onDone: { [weak self] in
+            self?.closed = true
+            self?.extensionContext.completeSavePasswordRequest(completionHandler: nil)
+        }, onCancel: { [weak self] in
+            self?.closed = true
+            self?.extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue))
+        }).preferredColorScheme(.dark)
+        let host = UIHostingController(rootView: view)
+        host.view.backgroundColor = UIColor(red: 14 / 255, green: 13 / 255, blue: 12 / 255, alpha: 1)
+        addChild(host)
+        host.view.frame = self.view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.view.addSubview(host.view)
+        host.didMove(toParent: self)
+        Task { await job.run() }
+    }
+
+    @available(iOS 26.2, *)
+    private func alreadyOnKey(_ r: ASSavePasswordRequest) -> Bool {
+        let (site, _) = Self.pick([r.serviceIdentifier])
+        return NewPassword.justFilled(site: KeyLink.cleanSite(site) ?? site, user: r.credential.user, password: r.credential.password)
+    }
+
     // Settings > AutoFill & Passwords > Favilla: the link check (and pairing).
     override func prepareInterfaceForExtensionConfiguration() {
         configuring = true
@@ -155,6 +237,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 self.link.note("Login from the KEY (username \(login.user.isEmpty ? "empty" : "\(login.user.count) characters")); handing it to iOS")
                 LastRequest.save("Password for \(host)", self.link.lines)
                 let cred = ASPasswordCredential(user: login.user, password: login.password)
+                NewPassword.recordFill(site: host, user: login.user, password: login.password)   // iOS's save of this same login is skipped (11bi)
                 self.closed = true
                 // An app's name isn't a website iOS can list it under: list websites only.
                 AccountList.record(.init(passkey: false, site: isApp ? "" : host, user: login.user)) {

@@ -126,7 +126,7 @@ struct SignInView: View {
     }
 }
 
-private struct StepRow: View {
+struct StepRow: View {
     let text: String
     let state: Int   // 0 to do, 1 now, 2 done
 

@@ -64,11 +64,14 @@ enum AppChannel {
     static let cImportItem: UInt8 = 0x4C    // ENCRYPTED [kind][...] -> rAck [status]
     static let cImportStatus: UInt8 = 0x4D  // none -> rAck [state][reason][saved u16][failed u16][last]
     static let cImportEnd: UInt8 = 0x4E     // none -> rAck [status][saved u16][failed u16]
+    // 11bi (issue #38): a password made by the KEY for a new-password field.
+    static let cGenPw: UInt8 = 0x4F         // [kind][minLen][maxLen][required][allowed][sLen][specials] -> rGenPw
+    static let rGenPw: UInt8 = 0xC1         // encrypted: [status][pLen][password]
     static let encryptedRequests: Set<UInt8> = [cPwSave, cImportItem]
     static let rErr: UInt8 = 0xBF
 
     /// Answers whose body is encrypted.
-    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp, rApi, rHealth]
+    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp, rApi, rHealth, rGenPw]
 
     // MARK: - Reports
 
@@ -291,7 +294,7 @@ enum AppChannel {
     /// PW_SAVE body, before encryption. `id` nil: a new entry (needs a
     /// password). An edit: empty `pass` keeps the password, empty `note` keeps
     /// the note; site and user are replaced as sent.
-    static func pwSaveBody(id: Data?, site: String, user: String, pass: String, note: String) -> Result<Data, PwFieldProblem> {
+    static func pwSaveBody(id: Data?, site: String, user: String, pass: String, note: String, flags: UInt8? = nil) -> Result<Data, PwFieldProblem> {
         let s = Data(site.utf8), u = Data(user.utf8), p = Data(pass.utf8), n = Data(note.utf8)
         if s.isEmpty { return .failure(.siteEmpty) }
         if s.count > pwSiteMax { return .failure(.siteTooLong) }
@@ -302,6 +305,7 @@ enum AppChannel {
         var d = id ?? Data(count: 8)
         guard d.count == 8 else { return .failure(.siteEmpty) }
         for f in [s, u, p, n] { d.append(UInt8(f.count)); d.append(f) }
+        if let f = flags { d.append(f) }   // 11bi: bit0 keeps the old password as "<site> (old)"
         return .success(d)
     }
 

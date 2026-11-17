@@ -388,6 +388,20 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         let st2 = VaultImport.parseStatus(Data([2, 0, 5, 0, 2, 0, 0x17, 3, 1, 0, 7, 0, 3, 0x00, 0x17, 0x00]))
         check(st2?.ext == true && st2?.queued == 3 && st2?.kept == 1 && st2?.done == 7 && st2?.results == [0x00, 0x17, 0x00], "11bh: IMPORT_STATUS pipelining bytes parse")
     }
+    // 11bi (issue #38): Apple's password rules -> GEN_PW, and its answer.
+    do {
+        check(NewPassword.genBody(NewPassword.rules(nil), kind: 1).map { $0 } == [0x01, 0x14, 0x14, 0x0F, 0x0F, 0x00], "11bi: GEN_PW with no rules is 01 14 14 0F 0F 00")
+        let r = NewPassword.rules("required: lower; required: upper; required: digit; required: [-().&@?'#,/\"+]; minlength: 8; maxlength: 16;")
+        check(r.minLen == 8 && r.maxLen == 16 && r.required == 0x0F && r.allowed == 0x0F && r.specials.contains("@") && !r.specials.contains(" "), "11bi: rules with a special set")
+        let a = NewPassword.rules("allowed: lower, upper, digit; minlength: 12")
+        check(!a.allowsSpecial && a.required & 0x08 == 0 && a.minLen == 12 && a.maxLen == 64, "11bi: letters and digits only")
+        check(NewPassword.parseGen(Data([0, 3]) + Data("aB3".utf8)) == .success("aB3"), "11bi: R_GEN_PW parses")
+        check(NewPassword.parseGen(Data([0x06, 0])) == .failure(.status(0x06)), "11bi: R_GEN_PW refusal")
+        let saveBody = try AppChannel.pwSaveBody(id: Data(count: 8), site: "a.com", user: "u", pass: "p", note: "", flags: 0x01).get()
+        check(saveBody.last == 0x01 && saveBody.count == 8 + 6 + 1 + 1 + 1 + 1 + 1, "11bi: PW_SAVE carries the flags byte")
+        NewPassword.recordFill(site: "a.com", user: "u", password: "p")
+        check(NewPassword.justFilled(site: "A.com", user: "U", password: "p") && !NewPassword.justFilled(site: "a.com", user: "u", password: "p"), "11bi: a fill is recognised once")
+    }
     check(LinkLog.path(of: try ApiWire.encode(ApiRequest(method: "GET", host: "", path: "/api/pair/sas?pair_id=7", headers: [:], body: Data(), timeout: 5)).unwrap()) == "GET /api/pair/sas", "log: path without its query")
 } catch { check(false, "issue #9 tests threw \(error)") }
 

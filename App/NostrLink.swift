@@ -73,6 +73,39 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     /// asks (17 Nov: it redialled every few seconds and each drop disturbed
     /// the Accounts page's own link).
     private var otherLifeUntil = Date.distantPast
+    private var otherLifeStreak = 0               // back-off steps: 60 s, 2 min, 5 min (issue #36 bench, 17 Nov)
+    static let vaultWait = "The KEY is in VAULT mode; the Nostr client waits."
+
+    /// The KEY answered as another life (HELLO life not 0x03, status 0x04, or
+    /// ATT 0x84/0x8F on the channel): stop dialling for a while. Each dial in
+    /// that life made iOS ask to pair, so no path dials again until the wait
+    /// is over; then 60 s, 2 min, 5 min while it stays that way. Reset by a
+    /// NOSTR life (ready).
+    private func notNostrLife(_ why: String) {
+        let steps: [TimeInterval] = [60, 120, 300]
+        let wait = steps[min(otherLifeStreak, steps.count - 1)]
+        otherLifeStreak += 1
+        otherLifeUntil = Date().addingTimeInterval(wait)
+        LinkLog.shared.add("not the NOSTR Bluetooth life (\(why)): no dialling for \(Int(wait)) s")
+        lost(NostrLink.vaultWait)
+    }
+
+    /// Seconds left of the wait, or nil.
+    var otherLifeWait: Int? {
+        let s = otherLifeUntil.timeIntervalSinceNow
+        return s > 0 ? Int(s.rounded(.up)) : nil
+    }
+
+    /// Every dial goes through here: logged with its reason, and refused while
+    /// the KEY is known to be in another life.
+    private func mayDial(_ reason: String) -> Bool {
+        if let w = otherLifeWait {
+            LinkLog.shared.add("dial skipped (\(reason)): the KEY is in another life, \(w) s of the wait left")
+            return false
+        }
+        LinkLog.shared.add("dial: \(reason)")
+        return true
+    }
     private var observers: [NSObjectProtocol] = []
 
     override init() {
@@ -183,7 +216,9 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             state = .idle
         }
         creds = fresh
-        guard state == .ready, peripheral?.state == .connected, chanIn != nil else { connectIfNeeded(); return }
+        guard state == .ready, peripheral?.state == .connected, chanIn != nil else {
+            connectIfNeeded("request: " + (queue.first.map { LinkLog.what($0.cmd, $0.body) } ?? "?")); return
+        }
         var j = queue.removeFirst()
         j.ctr = Credentials.nextCounter()
         current = j
@@ -325,11 +360,17 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - Connecting
 
-    private func connectIfNeeded() {
+    private func connectIfNeeded(_ reason: String) {
         guard state != .connecting, !paused else { return }
         guard creds != nil else { return }
+        guard mayDial(reason) else {
+            // Answer the waiting requests at once (the page shows the reason)
+            // rather than dialling into a life that makes iOS ask to pair.
+            state = .failed(NostrLink.vaultWait)
+            failAll(KeyApiError.notReady(NostrLink.vaultWait))
+            return
+        }
         state = .connecting
-        LinkLog.shared.add("connecting")
         connectTimer?.cancel()
         let t = DispatchWorkItem { [weak self] in
             guard let self, self.state == .connecting else { return }
@@ -362,11 +403,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     func stayUp() {
         DispatchQueue.main.async {
             guard NostrLink.wantUp, !self.paused, self.state != .connecting, self.state != .ready else { return }
-            guard Date() >= self.otherLifeUntil else { return }
             self.creds = Credentials.load()
             guard self.creds != nil else { return }
+            guard self.mayDial("kept up for Sign for other apps") else { return }
             self.state = .connecting
-            LinkLog.shared.add("connecting (kept up for the bunker)")
             if let c = self.central, c.state == .poweredOn { self.go(c) } else if self.central == nil { self.makeCentral() }
         }
     }
@@ -428,6 +468,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         timer?.cancel(); timer = nil
         timeCtr = 0
         reconnectDelay = 0
+        otherLifeStreak = 0; otherLifeUntil = .distantPast
         connectTimer?.cancel(); connectTimer = nil
         if state != .ready { LinkLog.shared.add("ready") }
         state = .ready
@@ -469,6 +510,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                 if Credentials.load() == c { PairIdentity.resetAll(why: String(format: "refused 0x%02X on the link", st)) }
                 lost(AppChannel.statusText(st)); return
             }
+            if st == 0x04 { notNostrLife(String(format: "command %02x refused 0x04", cmd)); return }
             if helloCtr != 0, cmd == AppChannel.cHello { helloCtr = 0; sendTime(); return }
             if timeCtr != 0 { ready(); return }
             finishCurrent(.failure(KeyApiError.notReady(NostrLink.message(st)))); return
@@ -487,11 +529,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                     LinkLog.shared.add("  the KEY's pairing identity changed: everything kept for it was cleared; pair again")
                     lost("This KEY was set up again since it was paired. Pair it again in Settings > This iPhone."); return
                 }
-                if b[1] != 0x03 {
-                    otherLifeUntil = Date().addingTimeInterval(60)
-                    LinkLog.shared.add("  not the NOSTR Bluetooth life: the bunker waits 60 s before dialling again")
-                    lost(NostrLink.notNostrBT); return
-                }
+                if b[1] != 0x03 { notNostrLife(String(format: "HELLO life %02x", b[1])); return }
             } else if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body) {
                 LinkLog.shared.add("  HELLO refused as a replay: counter raised above \(f)")
                 Credentials.raiseCounter(above: f)
@@ -527,6 +565,9 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                 transmit(j)
                 return
             }
+            if b.first == 0x04, j.cmd == AppChannel.cApi || j.cmd == Bunker.cPoll || j.cmd == Bunker.cNudgeSet {
+                notNostrLife(String(format: "command %02x answered 0x04", j.cmd)); return
+            }
             if j.cmd != AppChannel.cApi { finishCurrent(.success(a)); return }
             finishCurrent(.failure(KeyApiError.notReady(NostrLink.message(b.first ?? 0xFF)))); return
         }
@@ -553,7 +594,7 @@ extension NostrLink: CBCentralManagerDelegate {
     func centralManager(_ c: CBCentralManager, willRestoreState dict: [String: Any]) {
         central = c
         guard let p = (dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral])?.first else { return }
-        LinkLog.shared.add("restored by iOS: link \(p.state == .connected ? "connected" : "pending")")
+        LinkLog.shared.add("dial: restored by iOS, link \(p.state == .connected ? "connected" : "pending")")
         creds = Credentials.load()
         peripheral = p
         p.delegate = self
@@ -568,7 +609,7 @@ extension NostrLink: CBCentralManagerDelegate {
                 if p.state == .connected { p.discoverServices([KeyLink.favService]) } else { c.connect(p, options: nil) }
                 return
             }
-            if state == .connecting { go(c) }
+            if state == .connecting { LinkLog.shared.add("dial: Bluetooth on, a connect was waiting"); go(c) }
         case .unauthorized: lost("Bluetooth permission is off for Favilla. Turn it on in Settings > Favilla.")
         case .poweredOff: lost("Bluetooth is off on this iPhone. Turn it on in Control Centre.")
         default: break
@@ -661,7 +702,7 @@ extension NostrLink: CBPeripheralDelegate {
                 }
                 return
             }
-            if e.code.rawValue == 0x84 || e.code.rawValue == 0x8F { lost(NostrLink.notNostrBT); return }
+            if e.code.rawValue == 0x84 || e.code.rawValue == 0x8F { notNostrLife(String(format: "ATT error %02x on the channel", e.code.rawValue)); return }
         }
         if let e = error {
             LinkLog.shared.add("write failed: \(e.localizedDescription)")

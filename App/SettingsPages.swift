@@ -149,7 +149,9 @@ struct RoutePage: View {
         switch nostr.state {
         case .ready: return "Connected to your KEY over Bluetooth."
         case .connecting: return "Connecting to your KEY…"
-        case .failed(let why): return why
+        case .failed(let why):
+            if why == NostrLink.vaultWait, let w = nostr.otherLifeWait { return why + " It tries the KEY again in \(w) s." }
+            return why
         case .idle: return "App paired. The link opens when the Nostr client next calls the KEY."
         }
     }

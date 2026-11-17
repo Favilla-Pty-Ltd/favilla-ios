@@ -108,6 +108,8 @@ struct SignInView: View {
                     // Some apps fill only the field the sheet was opened from.
                     Text("Opened from the username box? Some apps fill only that field: tap the password box and pick Favilla again to fill both.")
                         .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
+                    Text("A retype box left empty after NEW PASSWORD or NEW LOGIN? Tap it, pick Favilla, and press ENTER at Send again? on the KEY within a minute.")
+                        .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
                 }
             }
 

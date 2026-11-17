@@ -288,13 +288,34 @@ enum VaultImport {
 
     // MARK: The KEY's answers
 
-    struct Status: Equatable { var state: UInt8; var reason: UInt8; var saved: Int; var failed: Int; var last: UInt8 }
+    /// IMPORT_STATUS. 11bh adds `[queued][kept u16][done u16][n][n results]`:
+    /// `done` items finished in the order sent, the results those of items
+    /// done-n .. done-1. `ext` false: an 11bf KEY (7 bytes).
+    struct Status: Equatable {
+        var state: UInt8; var reason: UInt8; var saved: Int; var failed: Int; var last: UInt8
+        var ext = false
+        var queued = 0
+        var kept = 0
+        var done = 0
+        var results: [UInt8] = []
+    }
 
     static func parseStatus(_ b: Data) -> Status? {
         let v = [UInt8](b)
         guard v.count >= 7 else { return nil }
-        return Status(state: v[0], reason: v[1], saved: Int(v[2]) | Int(v[3]) << 8, failed: Int(v[4]) | Int(v[5]) << 8, last: v[6])
+        var s = Status(state: v[0], reason: v[1], saved: Int(v[2]) | Int(v[3]) << 8, failed: Int(v[4]) | Int(v[5]) << 8, last: v[6])
+        if v.count >= 13 {
+            let n = Int(v[12])
+            if v.count >= 13 + n {
+                s.ext = true
+                s.queued = Int(v[7]); s.kept = Int(v[8]) | Int(v[9]) << 8; s.done = Int(v[10]) | Int(v[11]) << 8
+                s.results = Array(v[13..<(13 + n)])
+            }
+        }
+        return s
     }
+
+    static let keptResult: UInt8 = 0x17   // already on the KEY: kept, not replaced (11bh)
 
     /// Why the window didn't open (state 5) or closed (state 4).
     static func reasonText(_ r: UInt8, closed: Bool) -> String {
@@ -315,6 +336,7 @@ enum VaultImport {
     static func itemText(_ s: UInt8) -> String {
         switch s {
         case 0x00: return "saved"
+        case 0x17: return "already on the KEY (kept)"
         case 0x04: return "the KEY's signer chip is too old for one-time codes"
         case 0x07: return "the KEY couldn't read it"
         case 0x0E: return "the KEY couldn't seal or store it"

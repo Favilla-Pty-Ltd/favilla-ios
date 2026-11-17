@@ -162,108 +162,182 @@ final class AccountsModel: ObservableObject {
         case idle
         case pin                         // the KEY asks for the passkey PIN
         case sending(done: Int, of: Int)
-        case finished(saved: Int, failed: [VaultImport.Skipped], note: String)
+        case finished(saved: Int, kept: [String], failed: [VaultImport.Skipped], note: String)
         case failed(String)
     }
     @Published var importPhase: ImportPhase = .idle
+    /// Set to stop an import (the sheet closed, the app went to the
+    /// background): the loop sends IMPORT_END at its next step.
+    private var importStop: String?
+    func stopImport(_ why: String) {
+        switch importPhase { case .pin, .sending: importStop = why; default: break }
+    }
 
-    /// Drive the KEY's import window: BEGIN, the PIN on the KEY, each item
-    /// (encrypted) and its result, END. The plan's passwords are dropped from
-    /// memory as they go.
+    /// Drive the KEY's import window: BEGIN, the PIN on the KEY, the items back
+    /// to back (11bh: up to 8 wait on the KEY, sealed under one passkey
+    /// window), results by position from IMPORT_STATUS, and IMPORT_END
+    /// whenever it stops, for any reason.
     func runImport(_ plan: VaultImport.Plan) async {
         guard busy.isEmpty else { importPhase = .failed("The page is still talking to the KEY. Try again in a moment."); return }
         busy = "Importing…"
         importPhase = .pin
+        importStop = nil
+        let hold = BackgroundHold()
+        hold.id = UIApplication.shared.beginBackgroundTask(withName: "import") { [weak self] in
+            MainActor.assumeIsolated { self?.importStop = "the app went to the background"; hold.end() }
+        }
+        let bgObs = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stopImport("the app went to the background") }
+        }
         await importSteps(plan.items)
+        NotificationCenter.default.removeObserver(bgObs)
+        hold.end()
         busy = ""
         load()
     }
 
     private func importSteps(_ items: [VaultImport.Item]) async {
+        var began = false
+        var s: KeySession?
         do {
-            let s = try await open()
+            let sess = try await open()
+            s = sess
             // 2. BEGIN, then the PIN on the KEY.
-            let b = try await s.request(AppChannel.cImportBegin, Data(), timeout: 8)
+            let b = try await sess.request(AppChannel.cImportBegin, Data(), timeout: 8)
             if b.rsp == AppChannel.rErr {
                 let st = b.body.first ?? 0xFF
                 importPhase = .failed(st == 0x04 ? "Import works in VAULT mode. On the KEY choose VAULT, enter the VAULT PIN, and leave it on its home screen."
-                                      : st == 0x07 ? "This KEY can't import from the app yet: it needs firmware 11bf." : AccountsModel.refusal(st))
+                                      : st == 0x07 ? "This KEY can't import from the app yet: it needs firmware 11bh." : AccountsModel.refusal(st))
                 return
             }
             guard b.rsp == AppChannel.rAck, let st = b.body.first else { importPhase = .failed("The KEY's answer couldn't be read."); return }
             guard st == 0x00 else { importPhase = .failed(VaultImport.beginText(st)); return }
+            began = true
             note("import: asked for the PIN on the KEY")
             var opened = false
             for _ in 0..<110 {
+                if let why = importStop { importPhase = .failed("Stopped: \(why)."); await endImport(sess); return }
                 try await Task.sleep(nanoseconds: 1_000_000_000)
-                guard let t = try await importStatus(s) else { importPhase = .failed("The KEY's answer couldn't be read."); return }
+                guard let t = try await importStatus(sess) else { continue }
                 if t.state == 1 { continue }
                 if t.state == 2 || t.state == 3 { opened = true; break }
                 importPhase = .failed(VaultImport.reasonText(t.reason, closed: t.state == 4))
                 note(String(format: "import: window not opened, state %d reason %02x", t.state, t.reason))
+                began = t.state == 4 ? false : began
+                await endImport(sess)
                 return
             }
-            guard opened else { _ = try? await s.request(AppChannel.cImportEnd, Data(), timeout: 6); importPhase = .failed("No PIN on the KEY in time."); return }
+            guard opened else { await endImport(sess); importPhase = .failed("No PIN on the KEY in time."); return }
             note("import: window open, \(items.count) items")
-            // 4. Items, one at a time.
-            var failed: [VaultImport.Skipped] = [], saved = 0, stopped = ""
-            var base = try await importStatus(s).map { $0.saved + $0.failed } ?? 0
+
+            // 4. The items, back to back. `order` is the queued items in the
+            // order sent: result k from the KEY belongs to order[k].
+            var order: [Int] = []
+            var result = [UInt8?](repeating: nil, count: items.count)
+            var refused: [VaultImport.Skipped] = []       // not queued: the KEY said why at once
+            var stopped = ""
+            var lastPoll = Date.distantPast
+            var lastProgress = Date()
+            var doneSeen = 0
+
+            func absorb(_ t: VaultImport.Status) {
+                guard t.ext else { return }
+                let first = t.done - t.results.count
+                for (i, r) in t.results.enumerated() where first + i >= 0 && first + i < order.count {
+                    result[order[first + i]] = r
+                }
+                if t.done > doneSeen { doneSeen = t.done; lastProgress = Date() }
+                importPhase = .sending(done: min(doneSeen + refused.count, items.count), of: items.count)
+            }
+            func poll() async throws -> VaultImport.Status? {
+                lastPoll = Date()
+                guard let t = try await importStatus(sess) else { return nil }
+                if !t.ext { throw KeySession.Failure("This KEY's firmware is older than 11bh. Update the KEY, then import again.") }
+                absorb(t)
+                return t
+            }
+
             importPhase = .sending(done: 0, of: items.count)
             itemLoop: for (n, it) in items.enumerated() {
-                var sent = false
-                for _ in 0..<60 {
-                    let a = try await s.request(AppChannel.cImportItem, it.body, timeout: 8)
-                    let st = a.rsp == AppChannel.rAck ? (a.body.first ?? 0xFF) : 0xFF
+                var tries = 0
+                while true {
+                    if let why = importStop { stopped = "Stopped: \(why)."; break itemLoop }
+                    if Date().timeIntervalSince(lastPoll) > 0.9, let t = try await poll(), t.state == 4 || t.state == 5 {
+                        stopped = VaultImport.reasonText(t.reason, closed: true); break itemLoop
+                    }
+                    let a = try await sess.request(AppChannel.cImportItem, it.body, timeout: 8)
                     if a.rsp == AppChannel.rErr { stopped = AccountsModel.refusal(a.body.first ?? 0xFF); break itemLoop }
-                    if st == 0x06 { try await Task.sleep(nanoseconds: 200_000_000); continue }
-                    if st == 0x00 { sent = true; break }
+                    let st = a.body.first ?? 0xFF
+                    if st == 0x00 { order.append(n); break }
+                    if st == 0x06 {
+                        tries += 1
+                        if tries > 200 { stopped = "The KEY stopped taking items."; break itemLoop }
+                        try await Task.sleep(nanoseconds: 300_000_000)
+                        continue
+                    }
                     if st == 0x14 {
-                        let t = try await importStatus(s)
-                        stopped = t.map { VaultImport.reasonText($0.reason, closed: true) } ?? VaultImport.itemText(st)
+                        let t = try await poll()
+                        stopped = t.map { VaultImport.reasonText($0.reason, closed: true) } ?? "The import window had closed."
                         break itemLoop
                     }
-                    failed.append(VaultImport.Skipped(label: it.label + (it.kind == .code ? ", code" : ""), why: VaultImport.itemText(st)))
+                    refused.append(VaultImport.Skipped(label: it.label + (it.kind == .code ? ", code" : ""), why: VaultImport.itemText(st)))
                     if st == 0x10 { stopped = "The KEY is full (200 records)."; break itemLoop }
                     break
                 }
-                if sent {
-                    // Its result: saved + failed goes up by one.
-                    var result: UInt8?
-                    for _ in 0..<60 {
-                        try await Task.sleep(nanoseconds: 250_000_000)
-                        guard let t = try await importStatus(s) else { continue }
-                        if t.saved + t.failed > base { base = t.saved + t.failed; result = t.last; break }
-                        if t.state == 4 || t.state == 5 { stopped = VaultImport.reasonText(t.reason, closed: true); break }
-                    }
-                    if let r = result {
-                        if r == 0x00 { saved += 1 } else { failed.append(VaultImport.Skipped(label: it.label + (it.kind == .code ? ", code" : ""), why: VaultImport.itemText(r))) }
-                    } else if stopped.isEmpty {
-                        failed.append(VaultImport.Skipped(label: it.label, why: "no result from the KEY in time"))
-                    }
-                    if !stopped.isEmpty { break itemLoop }
+            }
+            // Wait for the queued ones to finish (or the window to close).
+            lastProgress = Date()
+            while doneSeen < order.count {
+                if let why = importStop, stopped.isEmpty { stopped = "Stopped: \(why)." }
+                if !stopped.isEmpty && importStop != nil { break }
+                if Date().timeIntervalSince(lastProgress) > 30 { if stopped.isEmpty { stopped = "The KEY stopped answering the import." }; break }
+                try await Task.sleep(nanoseconds: 700_000_000)
+                if let t = try await poll(), (t.state == 4 || t.state == 5) {
+                    if stopped.isEmpty { stopped = VaultImport.reasonText(t.reason, closed: true) }
+                    break
                 }
-                importPhase = .sending(done: n + 1, of: items.count)
             }
-            let notSent = items.count - saved - failed.count
-            if notSent > 0, !stopped.isEmpty {
-                failed.append(VaultImport.Skipped(label: "\(notSent) more", why: "not sent: " + stopped))
-            }
-            // 5. END (0x06: the last item is still being sealed).
-            for _ in 0..<20 {
-                let e = try await s.request(AppChannel.cImportEnd, Data(), timeout: 8)
-                if e.rsp == AppChannel.rAck, e.body.first == 0x06 { try await Task.sleep(nanoseconds: 300_000_000); continue }
-                if e.rsp == AppChannel.rAck, e.body.count >= 5 {
-                    let v = [UInt8](e.body)
-                    note("import: ended \(String(format: "%02x", v[0])), KEY counts \(Int(v[1]) | Int(v[2]) << 8) saved, \(Int(v[3]) | Int(v[4]) << 8) failed")
+            // 5. END, always.
+            let counts = await endImport(sess)
+            began = false
+
+            var saved = 0, kept: [String] = [], failed = refused
+            for (k, idx) in order.enumerated() {
+                let it = items[idx], label = it.label + (it.kind == .code ? ", code" : "")
+                switch result[idx] {
+                case .some(0x00): saved += 1
+                case .some(VaultImport.keptResult): kept.append(label)
+                case .some(let r): failed.append(VaultImport.Skipped(label: label, why: VaultImport.itemText(r)))
+                case .none: if k >= doneSeen { failed.append(VaultImport.Skipped(label: label, why: "not finished: the import stopped")) } else { failed.append(VaultImport.Skipped(label: label, why: "no result seen from the KEY")) }
                 }
-                break
             }
-            note("import: \(saved) saved, \(failed.count) not")
-            importPhase = .finished(saved: saved, failed: failed, note: stopped)
+            let unsent = items.count - order.count - refused.count
+            if unsent > 0 { failed.append(VaultImport.Skipped(label: "\(unsent) not sent", why: stopped.isEmpty ? "the import stopped" : stopped)) }
+            if let c = counts, c.saved != saved { note("import: the KEY counts \(c.saved) saved, this iPhone \(saved)") }
+            note("import: \(saved) saved, \(kept.count) already on the KEY, \(failed.count) not")
+            importPhase = .finished(saved: counts?.saved ?? saved, kept: kept, failed: failed, note: stopped)
         } catch {
             note("import failed: \(error)")
+            if began, let sess = s { await endImport(sess) }
             importPhase = .failed("\(error)")
         }
+    }
+
+    /// IMPORT_END, retried while items are still being sealed; the KEY's counts.
+    @discardableResult
+    private func endImport(_ s: KeySession) async -> (saved: Int, failed: Int)? {
+        for _ in 0..<30 {
+            guard let e = try? await s.request(AppChannel.cImportEnd, Data(), timeout: 8) else { return nil }
+            if e.rsp == AppChannel.rAck, e.body.first == 0x06 { try? await Task.sleep(nanoseconds: 1_000_000_000); continue }
+            if e.rsp == AppChannel.rAck, e.body.count >= 5 {
+                let v = [UInt8](e.body)
+                let c = (saved: Int(v[1]) | Int(v[2]) << 8, failed: Int(v[3]) | Int(v[4]) << 8)
+                note(String(format: "import: IMPORT_END %02x, the KEY counts %d saved, %d failed or kept", v[0], c.saved, c.failed))
+                return c
+            }
+            return nil
+        }
+        return nil
     }
 
     private func importStatus(_ s: KeySession) async throws -> VaultImport.Status? {

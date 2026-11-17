@@ -67,6 +67,12 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     /// While KeyLink runs an operation (PAIR THE APP, a sign-in) this link steps
     /// aside: the KEY serves one request at a time, and pairing replaces K.
     private var paused = false
+    private var sessions = 0                       // KeySessions open (the Accounts page)
+    /// The KEY's HELLO said it isn't in its NOSTR Bluetooth life (a VAULT
+    /// life): don't redial for the bunker until this time, or until something
+    /// asks (17 Nov: it redialled every few seconds and each drop disturbed
+    /// the Accounts page's own link).
+    private var otherLifeUntil = Date.distantPast
     private var observers: [NSObjectProtocol] = []
 
     override init() {
@@ -74,6 +80,13 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: KeyLink.didStart, object: nil, queue: .main) { [weak self] _ in self?.pause() })
         observers.append(nc.addObserver(forName: KeyLink.didFinish, object: nil, queue: .main) { [weak self] _ in self?.resume() })
+        // A KeySession (the Accounts page, import) holds the KEY: step aside at once.
+        KeySession.willOpen = { [weak self] in self?.sessions += 1; LinkLog.shared.add("stepping aside: the Accounts page has the KEY"); self?.pause() }
+        KeySession.didClose = { [weak self] in
+            guard let self else { return }
+            self.sessions = max(0, self.sessions - 1)
+            if self.sessions == 0 { LinkLog.shared.add("the Accounts page let the KEY go"); self.resume() }
+        }
     }
 
     private func pause() {
@@ -349,6 +362,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     func stayUp() {
         DispatchQueue.main.async {
             guard NostrLink.wantUp, !self.paused, self.state != .connecting, self.state != .ready else { return }
+            guard Date() >= self.otherLifeUntil else { return }
             self.creds = Credentials.load()
             guard self.creds != nil else { return }
             self.state = .connecting
@@ -473,7 +487,11 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                     LinkLog.shared.add("  the KEY's pairing identity changed: everything kept for it was cleared; pair again")
                     lost("This KEY was set up again since it was paired. Pair it again in Settings > This iPhone."); return
                 }
-                if b[1] != 0x03 { lost(NostrLink.notNostrBT); return }
+                if b[1] != 0x03 {
+                    otherLifeUntil = Date().addingTimeInterval(60)
+                    LinkLog.shared.add("  not the NOSTR Bluetooth life: the bunker waits 60 s before dialling again")
+                    lost(NostrLink.notNostrBT); return
+                }
             } else if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body) {
                 LinkLog.shared.add("  HELLO refused as a replay: counter raised above \(f)")
                 Credentials.raiseCounter(above: f)

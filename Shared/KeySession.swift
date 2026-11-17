@@ -43,8 +43,20 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     // MARK: - API
 
+    /// Set by the app: the Nostr client's own link (NostrLink) steps aside
+    /// while a session holds the KEY, and comes back when it closes (issue
+    /// #36 bench, 17 Nov: the two links on one KEY, NostrLink dropping and
+    /// redialling in a VAULT life, cut this session's notifications three
+    /// times during one LIST). Called on the main thread.
+    static var willOpen: (() -> Void)?
+    static var didClose: (() -> Void)?
+
     /// Connect and open the channel; throws with a sentence for the notification.
     func open(timeout: TimeInterval = 8) async throws {
+        if let hook = KeySession.willOpen {
+            await MainActor.run { hook() }
+            try? await Task.sleep(nanoseconds: 300_000_000)   // let its cancel settle before this link subscribes
+        }
         try await withCheckedThrowingContinuation { (k: CheckedContinuation<Void, Error>) in
             q.async {
                 self.opened = k
@@ -67,6 +79,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     func close() {
+        if let hook = KeySession.didClose { DispatchQueue.main.async { hook() } }
         q.async {
             self.closed = true
             self.timer?.cancel()

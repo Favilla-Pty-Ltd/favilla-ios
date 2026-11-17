@@ -182,7 +182,7 @@ struct CredentialImportSheet: View {
         }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(model.busy || accounts.importPhase != .idle)
-        .onDisappear { flow = nil; accounts.close() }
+        .onDisappear { accounts.stopImport("the import sheet was closed"); flow = nil; if accounts.busy.isEmpty { accounts.close() } }
     }
 
     private var summaryPage: some View {

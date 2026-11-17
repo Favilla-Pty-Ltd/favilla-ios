@@ -32,7 +32,7 @@ struct ImportFlowView: View {
                 case .idle: chooseOrPlan
                 case .pin: pinCard
                 case .sending(let done, let of): sendingCard(done, of)
-                case .finished(let saved, let failed, let note): finishedCard(saved, failed, note)
+                case .finished(let saved, let kept, let failed, let note): finishedCard(saved, kept, failed, note)
                 case .failed(let why): failedCard(why)
                 }
             }
@@ -47,7 +47,10 @@ struct ImportFlowView: View {
             replan()
         }
         .onChange(of: model.busy) { _, b in if b.isEmpty && !listReady { listReady = true; replan() } }
-        .onDisappear { rows = []; plan = nil; if !isRunning { model.importPhase = .idle } }
+        .onDisappear {
+            rows = []; plan = nil
+            if isRunning { model.stopImport("the import sheet was closed") } else { model.importPhase = .idle }
+        }
     }
 
     private var isRunning: Bool {
@@ -127,6 +130,13 @@ struct ImportFlowView: View {
             Text("Type your passkey PIN on the KEY").font(Brand.font(20, .semibold)).foregroundStyle(Brand.ink)
             Text("The KEY shows IMPORT PIN. BACK on the KEY cancels.").font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             ProgressView().tint(Brand.brass)
+            stopButton
+        }
+    }
+
+    private var stopButton: some View {
+        Button { model.stopImport("stopped on this iPhone") } label: {
+            Text("Stop the import").font(Brand.body).foregroundStyle(Brand.danger).frame(minHeight: 44)
         }
     }
 
@@ -139,14 +149,33 @@ struct ImportFlowView: View {
             ProgressView(value: Double(done), total: Double(max(of, 1))).tint(Brand.brass)
             Text("Keep the app open and the KEY near. BACK on the KEY stops it; what's saved stays.")
                 .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            stopButton
         }
     }
 
-    @ViewBuilder private func finishedCard(_ saved: Int, _ failed: [VaultImport.Skipped], _ note: String) -> some View {
+    @ViewBuilder private func finishedCard(_ saved: Int, _ kept: [String], _ failed: [VaultImport.Skipped], _ note: String) -> some View {
         card {
-            Text("\(saved) imported" + (failed.isEmpty ? "" : ", \(failed.count) not")).font(Brand.font(20, .semibold)).foregroundStyle(Brand.ink)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(saved)").font(Brand.font(34, .bold)).monospacedDigit().foregroundStyle(Brand.ink)
+                Text("imported").font(Brand.body).foregroundStyle(Brand.grey)
+            }
             if !note.isEmpty { Text(note).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
-            if !failed.isEmpty { itemList(failed) }
+        }
+        if !kept.isEmpty {
+            card {
+                Text("\(kept.count) already on the KEY").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+                Text("The KEY kept its own entry for these: its password may be the newer one. To change one, open it on the Accounts page and Edit.")
+                    .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                itemList(kept.map { VaultImport.Skipped(label: $0, why: "kept") }, showWhy: false)
+            }
+        }
+        card {
+            if failed.isEmpty {
+                Text("None failed").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
+            } else {
+                Text("\(failed.count) failed").font(Brand.font(17, .semibold)).foregroundStyle(Brand.danger)
+                itemList(failed)
+            }
             Text("Delete the export file from Files now: it holds your passwords in plain text.")
                 .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
         }
@@ -166,12 +195,12 @@ struct ImportFlowView: View {
 
     // MARK: Pieces
 
-    private func itemList(_ list: [VaultImport.Skipped]) -> some View {
+    private func itemList(_ list: [VaultImport.Skipped], showWhy: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(list.prefix(200).enumerated()), id: \.offset) { _, s in
                 VStack(alignment: .leading, spacing: 1) {
                     Text(s.label).font(Brand.small).foregroundStyle(Brand.ink).lineLimit(1)
-                    Text(s.why).font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    if showWhy { Text(s.why).font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true) }
                 }
             }
             if list.count > 200 { Text("and \(list.count - 200) more").font(Brand.small).foregroundStyle(Brand.faint) }

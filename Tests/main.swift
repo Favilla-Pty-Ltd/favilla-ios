@@ -385,6 +385,8 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         check(apple?.source == "Apple Passwords" && apple?.rows.first?.url == "https://x.com/", "11bf: Apple Passwords CSV read")
         let st = VaultImport.parseStatus(Data([2, 0, 3, 0, 1, 0, 0x12]))
         check(st == .init(state: 2, reason: 0, saved: 3, failed: 1, last: 0x12), "11bf: IMPORT_STATUS parses")
+        let st2 = VaultImport.parseStatus(Data([2, 0, 5, 0, 2, 0, 0x17, 3, 1, 0, 7, 0, 3, 0x00, 0x17, 0x00]))
+        check(st2?.ext == true && st2?.queued == 3 && st2?.kept == 1 && st2?.done == 7 && st2?.results == [0x00, 0x17, 0x00], "11bh: IMPORT_STATUS pipelining bytes parse")
     }
     check(LinkLog.path(of: try ApiWire.encode(ApiRequest(method: "GET", host: "", path: "/api/pair/sas?pair_id=7", headers: [:], body: Data(), timeout: 5)).unwrap()) == "GET /api/pair/sas", "log: path without its query")
 } catch { check(false, "issue #9 tests threw \(error)") }

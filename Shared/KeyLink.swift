@@ -20,6 +20,7 @@
 // PASSKEY life. In "App and keyboard" it advertises (the keyboard service) for
 // 15 s after a press on its home screen. The app scans for both.
 
+import Combine
 import CoreBluetooth
 import Foundation
 
@@ -545,6 +546,7 @@ extension KeyLink {
         let st = a.body.first ?? 0xFF
         switch (mode, a.rsp) {
         case (.probe, AppChannel.rHello):
+            KeyLife.heard(helloBody: a.body, from: "FIND MY KEY")
             let b = [UInt8](a.body)
             if PairIdentity.note(helloBody: a.body) {
                 finish(.failed("This KEY was set up again since it was paired. Pair it again."), "The KEY's pairing identity changed: everything kept for it was cleared"); return
@@ -654,6 +656,7 @@ extension KeyLink: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
+        if error != nil { KeyLife.forget("the KEY dropped a link") }
         if busy, KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
         if busy { finish(.failed("Your KEY dropped the link. Try again."), "The KEY dropped the link: \(error?.localizedDescription ?? "no reason given")") }
     }
@@ -854,5 +857,55 @@ extension KeyLink: CBPeripheralDelegate {
         }
         paired()
         writeNextChan(p)
+    }
+}
+
+
+// MARK: - Which life the KEY is in (issue #37, 17 Nov 2026)
+
+/// The KEY's life from the first HELLO on a connection, whichever part of the
+/// app sent it (NostrLink, KeyLink, KeySession): 1 VAULT locked, 2 VAULT
+/// ready, 3 NOSTR Bluetooth, 4 other. A life is fixed for a power-on and a
+/// restart always drops the link, so the answer holds until the KEY drops a
+/// link (or its pair id changes). Main thread.
+final class KeyLife: ObservableObject {
+    static let shared = KeyLife()
+    @Published private(set) var life: UInt8?
+    /// The app's Bluetooth log (LinkLog), set by the app.
+    static var log: ((String) -> Void)?
+
+    var isVault: Bool { life == 1 || life == 2 }
+    var isNostr: Bool { life == 3 }
+
+    static func name(_ l: UInt8?) -> String {
+        switch l {
+        case 1: return "VAULT mode (locked)"
+        case 2: return "VAULT mode"
+        case 3: return "NOSTR Bluetooth mode"
+        case 4: return "another mode"
+        default: return "not known yet"
+        }
+    }
+
+    /// A HELLO answer's body ([status][life]...). Any thread.
+    static func heard(helloBody b: Data, from who: String) {
+        guard b.count >= 2 else { return }
+        let l = b[b.startIndex + 1]
+        DispatchQueue.main.async {
+            let me = KeyLife.shared
+            if me.life != l { log?("life: \(name(me.life)) -> \(name(l)) (HELLO on the \(who) link)") }
+            me.life = l
+        }
+    }
+
+    /// The KEY dropped a link (it may have restarted into another life), or
+    /// its pair id changed. Any thread.
+    static func forget(_ why: String) {
+        DispatchQueue.main.async {
+            let me = KeyLife.shared
+            guard me.life != nil else { return }
+            log?("life: \(name(me.life)) -> not known (\(why))")
+            me.life = nil
+        }
     }
 }

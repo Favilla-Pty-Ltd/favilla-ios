@@ -216,6 +216,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         mark("disconnected")
+        if error != nil, !closed { KeyLife.forget("the KEY dropped the Accounts link") }
         chanIn = nil
         if opened != nil { failOpen("The KEY dropped the link.") }
         waiting?.k.resume(throwing: Failure("The KEY dropped the link.")); waiting = nil

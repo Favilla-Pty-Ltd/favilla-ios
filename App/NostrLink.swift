@@ -75,6 +75,12 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var otherLifeUntil = Date.distantPast
     private var otherLifeStreak = 0               // back-off steps: 60 s, 2 min, 5 min (issue #36 bench, 17 Nov)
     static let vaultWait = "The KEY is in VAULT mode; the Nostr client waits."
+    static let vaultMode = "The KEY is in VAULT mode. The Nostr client starts when the KEY is in NOSTR Bluetooth mode."
+    /// Issue #37: in a VAULT life the link is held, idle (no writes), so a
+    /// KEY restart (which always drops it) clears the known life and the next
+    /// connection's HELLO decides again.
+    private var holdingVault = false
+    private var vaultHeardAt = Date.distantPast
 
     /// The KEY answered as another life (HELLO life not 0x03, status 0x04, or
     /// ATT 0x84/0x8F on the channel): stop dialling for a while. Each dial in
@@ -99,6 +105,17 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     /// Every dial goes through here: logged with its reason, and refused while
     /// the KEY is known to be in another life.
     private func mayDial(_ reason: String) -> Bool {
+        // Issue #37: the KEY's known life decides. VAULT: no dial by any path,
+        // unless no link is held to notice a restart and it was learnt over
+        // 5 minutes ago (then one HELLO checks again).
+        if KeyLife.shared.isVault {
+            if holdingVault || Date().timeIntervalSince(vaultHeardAt) < 300 {
+                LinkLog.shared.add("dial skipped (\(reason)): the KEY is in VAULT mode")
+                return false
+            }
+            LinkLog.shared.add("dial: \(reason), to check the KEY's mode again (VAULT was learnt over 5 min ago)")
+            return true
+        }
         if let w = otherLifeWait {
             LinkLog.shared.add("dial skipped (\(reason)): the KEY is in another life, \(w) s of the wait left")
             return false
@@ -114,6 +131,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         observers.append(nc.addObserver(forName: KeyLink.didStart, object: nil, queue: .main) { [weak self] _ in self?.pause() })
         observers.append(nc.addObserver(forName: KeyLink.didFinish, object: nil, queue: .main) { [weak self] _ in self?.resume() })
         // A KeySession (the Accounts page, import) holds the KEY: step aside at once.
+        KeyLife.log = { LinkLog.shared.add($0) }
         KeySession.willOpen = { [weak self] in self?.sessions += 1; LinkLog.shared.add("stepping aside: the Accounts page has the KEY"); self?.pause() }
         KeySession.didClose = { [weak self] in
             guard let self else { return }
@@ -124,6 +142,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     private func pause() {
         paused = true
+        if holdingVault, current == nil { return }   // an idle held link disturbs nothing; it watches for a restart
         if current != nil || peripheral != nil {
             drop()
             state = .idle
@@ -366,8 +385,9 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         guard mayDial(reason) else {
             // Answer the waiting requests at once (the page shows the reason)
             // rather than dialling into a life that makes iOS ask to pair.
-            state = .failed(NostrLink.vaultWait)
-            failAll(KeyApiError.notReady(NostrLink.vaultWait))
+            let why = KeyLife.shared.isVault ? NostrLink.vaultMode : NostrLink.vaultWait
+            state = .failed(why)
+            failAll(KeyApiError.notReady(why))
             return
         }
         state = .connecting
@@ -428,12 +448,25 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func drop() {
+        holdingVault = false
         connectTimer?.cancel(); connectTimer = nil
         central?.stopScan()
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         peripheral = nil; chanIn = nil; chanOut = nil
         reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
         writes = []; timeCtr = 0; helloCtr = 0; lastPer = 0; skipToStart = false; skipped = 0; nudgeSet = false
+    }
+
+    /// A VAULT life: keep the connection, idle, and answer everything waiting.
+    private func holdVault() {
+        holdingVault = true
+        vaultHeardAt = Date()
+        timer?.cancel(); timer = nil
+        connectTimer?.cancel(); connectTimer = nil
+        timeCtr = 0
+        LinkLog.shared.add("the KEY is in VAULT mode: holding the link idle (no requests) until it drops")
+        state = .failed(NostrLink.vaultMode)
+        failAll(KeyApiError.notReady(NostrLink.vaultMode))
     }
 
     private func lost(_ why: String) {
@@ -529,6 +562,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                     LinkLog.shared.add("  the KEY's pairing identity changed: everything kept for it was cleared; pair again")
                     lost("This KEY was set up again since it was paired. Pair it again in Settings > This iPhone."); return
                 }
+                KeyLife.heard(helloBody: a.body, from: "Nostr")
+                if b[1] == 0x01 || b[1] == 0x02 { holdVault(); return }
                 if b[1] != 0x03 { notNostrLife(String(format: "HELLO life %02x", b[1])); return }
             } else if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body) {
                 LinkLog.shared.add("  HELLO refused as a replay: counter raised above \(f)")
@@ -644,6 +679,9 @@ extension NostrLink: CBCentralManagerDelegate {
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
         LinkLog.shared.add("disconnected" + (error.map { ": \($0.localizedDescription)" } ?? ""))
+        // The KEY dropped the link: it may have restarted into another life (issue #37).
+        holdingVault = false
+        KeyLife.forget("the KEY dropped the Nostr link")
         if KeyLink.keyForgotPhone(error) { lost(KeyLink.forgetOnPhone); return }
         // Keep the queue: the next request reconnects. Only the one in flight fails.
         let wasUp = state == .ready || current != nil

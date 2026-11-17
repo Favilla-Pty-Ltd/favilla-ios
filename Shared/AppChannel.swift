@@ -614,6 +614,7 @@ enum PairIdentity {
         let old = store.data(forKey: idKey)
         if old == id { return false }
         if old == nil { store.set(id, forKey: idKey); return false }
+        KeyLife.forget("the KEY's pair id changed")
         resetAll(why: "HELLO pair id changed")
         store.set(id, forKey: idKey)
         return true

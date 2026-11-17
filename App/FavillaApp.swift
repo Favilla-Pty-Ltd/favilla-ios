@@ -73,6 +73,7 @@ struct RootView: View {
 struct KeyCard: View {
     @ObservedObject var link: KeyLink
     @Binding var appPaired: Bool
+    @ObservedObject private var life = KeyLife.shared
 
     var body: some View {
         BrandSection(title: "YOUR KEY") {
@@ -100,7 +101,7 @@ struct KeyCard: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
                         Spacer()
-                        Text("Paired").font(Brand.small).foregroundStyle(Brand.brass)
+                        Text(life.life == nil ? "Paired" : "Paired · " + KeyLife.name(life.life)).font(Brand.small).foregroundStyle(Brand.brass)
                     }
                     if let d = KeyStatus.detail(link) {
                         Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)

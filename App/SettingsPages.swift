@@ -112,6 +112,7 @@ enum SettingsDest: Hashable {
 struct RoutePage: View {
     @Binding var route: KeyRoute
     @ObservedObject private var nostr = NostrLink.shared
+    @ObservedObject private var life = KeyLife.shared
     @State private var host = UserDefaults.standard.string(forKey: WifiTransport.hostKey) ?? ""
 
     var body: some View {
@@ -146,6 +147,7 @@ struct RoutePage: View {
 
     private var btStatus: String {
         guard KeyLink.appPaired else { return "Pair the app with the KEY first (the card at the top of This iPhone)." }
+        if life.isVault { return NostrLink.vaultMode }
         switch nostr.state {
         case .ready: return "Connected to your KEY over Bluetooth."
         case .connecting: return "Connecting to your KEY…"
@@ -157,6 +159,7 @@ struct RoutePage: View {
     }
 
     private var btStatusColour: Color {
+        if life.isVault { return Brand.grey }
         if case .failed = nostr.state { return Brand.danger }
         return KeyLink.appPaired ? Brand.brass : Brand.grey
     }

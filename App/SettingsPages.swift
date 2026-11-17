@@ -37,6 +37,8 @@ struct SettingsRow: View {
                     Text(s).font(Brand.small).foregroundStyle(Brand.grey).lineLimit(2)
                 }
             }
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 8)
             Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.faint)
         }

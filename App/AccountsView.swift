@@ -710,7 +710,7 @@ struct AccountsView: View {
                 Spacer()
             }
             if !hs.isEmpty {
-                HStack(spacing: 8) {
+                FlowRow(spacing: 8) {
                     Pill("\(breached) breached", tone: breached > 0 ? .bad : .quiet)
                     Pill("\(reused) reused", tone: reused > 0 ? .warn : .quiet)
                     Pill("\(weak) weak", tone: weak > 0 ? .warn : .quiet)
@@ -813,7 +813,7 @@ private struct Pill: View {
     init(_ t: String, tone: Tone) { text = t; self.tone = tone }
     var body: some View {
         let c: Color = { switch tone { case .bad: return Brand.danger; case .warn: return Brand.brass; case .good: return Color(red: 0.55, green: 0.78, blue: 0.56); case .quiet: return Brand.grey } }()
-        Text(text).font(Brand.font(11, .semibold)).foregroundStyle(c)
+        Text(text).font(Brand.font(11, .semibold)).foregroundStyle(c).lineLimit(1).fixedSize()
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(c.opacity(0.14)).clipShape(Capsule())
     }
@@ -1157,6 +1157,31 @@ struct EntryEditor: View {
             if let why { status = why; return }
             pass = ""
             done()
+        }
+    }
+}
+
+
+/// Pills that wrap onto the next line instead of squeezing (17 Nov).
+struct FlowRow: Layout {
+    var spacing: CGFloat = 8
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > 0, x + s.width > w { y += line + spacing; x = 0; line = 0 }
+            x += s.width + spacing; line = max(line, s.height); widest = max(widest, x - spacing)
+        }
+        return CGSize(width: min(widest, w), height: y + line)
+    }
+    func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = b.minX, y = b.minY, line: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > b.minX, x + s.width > b.maxX { y += line + spacing; x = b.minX; line = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(s))
+            x += s.width + spacing; line = max(line, s.height)
         }
     }
 }

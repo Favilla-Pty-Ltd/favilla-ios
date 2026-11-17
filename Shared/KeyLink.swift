@@ -111,7 +111,7 @@ final class KeyLink: NSObject, ObservableObject {
     private var listGot: [AppChannel.ListEntry] = []
 
     /// This install is paired with a KEY's app channel.
-    static var appPaired: Bool { Credentials.isPaired }
+    static var appPaired: Bool { Demo.mode != nil || Credentials.isPaired }
 
     // MARK: - Start
 
@@ -871,8 +871,22 @@ extension KeyLink: CBPeripheralDelegate {
 final class KeyLife: ObservableObject {
     static let shared = KeyLife()
     @Published private(set) var life: UInt8?
+    /// The last life heard on any connection, kept across launches, so the app
+    /// opens in the right shape with the KEY off (the UI topology, 17 Nov).
+    @Published private(set) var lastSeen: UInt8?
+    private(set) var lastSeenAt: Date?
     /// The app's Bluetooth log (LinkLog), set by the app.
     static var log: ((String) -> Void)?
+
+    private static let lastKey = "keyLifeLast", lastAtKey = "keyLifeLastAt"
+    private init() {
+        let d = UserDefaults.standard
+        if let v = d.object(forKey: KeyLife.lastKey) as? Int, (1...4).contains(v) { lastSeen = UInt8(v) }
+        lastSeenAt = d.object(forKey: KeyLife.lastAtKey) as? Date
+    }
+
+    /// The life to shape the app by: this connection's, else the last seen.
+    var shape: UInt8? { life ?? lastSeen }
 
     var isVault: Bool { life == 1 || life == 2 }
     var isNostr: Bool { life == 3 }
@@ -894,8 +908,26 @@ final class KeyLife: ObservableObject {
         DispatchQueue.main.async {
             let me = KeyLife.shared
             if me.life != l { log?("life: \(name(me.life)) -> \(name(l)) (HELLO on the \(who) link)") }
-            me.life = l
+            me.set(l)
         }
+    }
+
+    /// A life worked out from an answer rather than HELLO: LIST answered means
+    /// a VAULT life; a VAULT command refused 0x04 means not VAULT. Any thread.
+    static func inferred(_ l: UInt8, from why: String) {
+        DispatchQueue.main.async {
+            let me = KeyLife.shared
+            if me.life == l { return }
+            log?("life: \(name(me.life)) -> \(name(l)) (\(why))")
+            me.set(l)
+        }
+    }
+
+    private func set(_ l: UInt8) {
+        life = l
+        lastSeen = l; lastSeenAt = Date()
+        UserDefaults.standard.set(Int(l), forKey: KeyLife.lastKey)
+        UserDefaults.standard.set(Date(), forKey: KeyLife.lastAtKey)
     }
 
     /// The KEY dropped a link (it may have restarted into another life), or
@@ -907,5 +939,39 @@ final class KeyLife: ObservableObject {
             log?("life: \(name(me.life)) -> not known (\(why))")
             me.life = nil
         }
+    }
+}
+
+
+// MARK: - Screenshot demo (simulator only)
+
+/// CI takes screenshots of each shape in the simulator: launched with
+/// `-FavillaDemo nostr|vault|unknown|settings-nostr|settings-vault`, the app
+/// shows that shape with sample accounts and talks to no KEY. Compiled out of
+/// device builds.
+enum Demo {
+    static var mode: String? {
+        #if targetEnvironment(simulator)
+        let a = ProcessInfo.processInfo.arguments
+        if let i = a.firstIndex(of: "-FavillaDemo"), i + 1 < a.count { return a[i + 1] }
+        #endif
+        return nil
+    }
+    static var life: UInt8? {
+        guard let m = mode else { return nil }
+        return m.contains("vault") ? 2 : m.contains("nostr") ? 3 : nil
+    }
+    static var settings: Bool { mode?.hasPrefix("settings") == true }
+
+    static let accounts: [AppChannel.ListEntry] = [
+        ("example-bank.com", "you@example.com", 0x60 | 0x02 | 0x20),
+        ("mail.example.com", "you@example.com", 0x40 | 0x10 | 0x02),
+        ("shop.example.net", "you", 0x40 | 0x01),
+        ("code.example.org", "you", 0x40 | 0x80 | 0x03),
+        ("news.example.com", "reader", 0x40 | 0x0C | 0x03),
+        ("cloud.example.io", "you@example.com", 0x03),
+    ].enumerated().map { i, t in
+        AppChannel.ListEntry(passkey: false, site: t.0, user: t.1, credentialID: nil, userHandle: nil,
+                             health: AppChannel.Health(raw: UInt8(t.2)), id: Data(repeating: UInt8(i + 1), count: 8))
     }
 }

@@ -58,6 +58,32 @@ jobs:
           APP=$(find ~/Library/Developer/Xcode/DerivedData -type d -name Favilla.app -path "*Debug-iphonesimulator*" | head -1)
           for f in pwa.html bridge.js; do test -f "$APP/$f" || { echo "::error::$f missing from the app"; exit 1; }; done
           grep -q 'data-pwa-build=' "$APP/pwa.html" && echo "pwa.html $(grep -o 'data-pwa-build="[0-9a-f]*"' "$APP/pwa.html" | head -1) and bridge.js present"
+      - name: Screenshots of each shape (simulator, sample data)
+        continue-on-error: true
+        run: |
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -type d -name Favilla.app -path "*Debug-iphonesimulator*" | head -1)
+          DT=$(xcrun simctl list devicetypes | grep -E '^iPhone 1[0-9] \(' | tail -1 | sed -E 's/.*\((.*)\)$/\1/')
+          echo "device type: $DT"
+          UDID=$(xcrun simctl create shots "$DT")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl ui "$UDID" appearance dark || true
+          xcrun simctl install "$UDID" "$APP"
+          BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+          mkdir -p shots
+          for m in unknown vault settings-vault nostr settings-nostr; do
+            xcrun simctl launch --terminate-running-process "$UDID" "$BID" -FavillaDemo "$m"
+            sleep 10
+            xcrun simctl io "$UDID" screenshot "shots/$m.png"
+          done
+          ls -la shots
+      - name: Upload the screenshots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: shots
+          path: shots
 
   bridge:
     # The push bridge for relay.favillakey.io (server/push-bridge): Linux, cheap.

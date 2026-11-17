@@ -395,6 +395,8 @@ struct PushTestPage: View {
 struct ThisPhoneView: View {
     @ObservedObject var link: KeyLink
     @Binding var route: KeyRoute
+    /// The app's shape (AppShape.swift): only what this mode can use is shown.
+    var mode: AppMode = .unknown
     @ObservedObject private var nostr = NostrLink.shared
     @ObservedObject private var bunker = BunkerService.shared
     @ObservedObject private var vault = VaultService.shared
@@ -410,61 +412,73 @@ struct ThisPhoneView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     KeyCard(link: link, appPaired: $appPaired)
 
-                    SettingsGroup(title: "NOSTR") {
-                        NavigationLink(value: SettingsDest.route) {
-                            SettingsRow(icon: route == .bluetooth ? "dot.radiowaves.left.and.right" : "wifi", title: "Route", subtitle: routeSubtitle)
-                        }
-                        RowLine()
-                        NavigationLink(value: SettingsDest.bunker) {
-                            SettingsRow(icon: "signature", title: "Sign for other apps", subtitle: bunkerSubtitle)
+                    if mode != .vault {
+                        SettingsGroup(title: "NOSTR") {
+                            NavigationLink(value: SettingsDest.route) {
+                                SettingsRow(icon: route == .bluetooth ? "dot.radiowaves.left.and.right" : "wifi", title: "Route", subtitle: routeSubtitle)
+                            }
+                            if mode == .nostr {
+                                RowLine()
+                                NavigationLink(value: SettingsDest.bunker) {
+                                    SettingsRow(icon: "signature", title: "Sign for other apps", subtitle: bunkerSubtitle)
+                                }
+                                RowLine()
+                                NavigationLink(value: SettingsDest.backup) {
+                                    SettingsRow(icon: "externaldrive.badge.timemachine", title: "Vault backup", subtitle: backupSubtitle)
+                                }
+                            }
                         }
                     }
 
-                    SettingsGroup(title: "VAULT") {
-                        NavigationLink(value: SettingsDest.accounts) {
-                            SettingsRow(icon: "person.text.rectangle", title: "Accounts", subtitle: appPaired ? "Every password on the KEY, its health, the breach check" : "Pair the app first")
-                        }
-                        RowLine()
-                        NavigationLink(value: SettingsDest.keyboard) {
-                            SettingsRow(icon: "keyboard", title: "Keyboard bar", subtitle: listOn ? "On · \(listCount) account\(listCount == 1 ? "" : "s") listed" : "Off · Favilla is one entry under the key icon")
-                        }
-                        RowLine()
-                        NavigationLink(value: SettingsDest.backup) {
-                            SettingsRow(icon: "externaldrive.badge.timemachine", title: "Backup", subtitle: backupSubtitle)
+                    if mode == .vault {
+                        SettingsGroup(title: "AUTOFILL") {
+                            Button {
+                                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                            } label: {
+                                SettingsRow(icon: "key.horizontal", title: "Turn on AutoFill", subtitle: "iOS Settings > General > AutoFill & Passwords > Favilla")
+                            }
+                            RowLine()
+                            NavigationLink(value: SettingsDest.keyboard) {
+                                SettingsRow(icon: "keyboard", title: "Keyboard bar", subtitle: listOn ? "On · \(listCount) account\(listCount == 1 ? "" : "s") listed" : "Off · Favilla is one entry under the key icon")
+                            }
                         }
                     }
 
                     SettingsGroup(title: "DIAGNOSTICS") {
-                        NavigationLink(value: SettingsDest.lastRequest) {
-                            SettingsRow(icon: "clock.arrow.circlepath", title: "Last sign-in", subtitle: "The steps of the last AutoFill request", tint: Brand.grey)
+                        if mode != .nostr {
+                            NavigationLink(value: SettingsDest.lastRequest) {
+                                SettingsRow(icon: "clock.arrow.circlepath", title: "Last sign-in", subtitle: "The steps of the last AutoFill request", tint: Brand.grey)
+                            }
+                            RowLine()
                         }
-                        RowLine()
                         NavigationLink(value: SettingsDest.bluetoothLog) {
                             SettingsRow(icon: "list.bullet.rectangle", title: "Bluetooth log", subtitle: "\(LinkLog.shared.lines.count) lines", tint: Brand.grey)
                         }
-                        RowLine()
-                        NavigationLink(value: SettingsDest.bunkerLog) {
-                            SettingsRow(icon: "text.alignleft", title: "Bunker and calls log", subtitle: "\(bunker.log.count) lines, with the client's own", tint: Brand.grey)
-                        }
-                        RowLine()
-                        NavigationLink(value: SettingsDest.pushTest) {
-                            SettingsRow(icon: "bell.badge", title: "Push test", subtitle: "Can a notification reach the KEY with Favilla closed?", tint: Brand.grey)
+                        if mode != .vault {
+                            RowLine()
+                            NavigationLink(value: SettingsDest.bunkerLog) {
+                                SettingsRow(icon: "text.alignleft", title: "Bunker and calls log", subtitle: "\(bunker.log.count) lines, with the client's own", tint: Brand.grey)
+                            }
+                            RowLine()
+                            NavigationLink(value: SettingsDest.pushTest) {
+                                SettingsRow(icon: "bell.badge", title: "Push test", subtitle: "Can a notification reach the KEY with Favilla closed?", tint: Brand.grey)
+                            }
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Button {
-                            if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "gear").font(.system(size: 13, weight: .semibold))
-                                Text("Turn on Favilla in iOS Settings > General > AutoFill & Passwords")
-                            }
-                            .font(Brand.small).foregroundStyle(Brand.brass).multilineTextAlignment(.leading)
+                    VStack(alignment: .leading, spacing: 8) {
+                        switch mode {
+                        case .nostr: Text(AppMode.vaultAdds).font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        case .vault:
+                            Text(AppMode.nostrAdds).font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                            Text("Back up the vault from NOSTR mode: it goes to your relay over the NOSTR Bluetooth link.").font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        case .unknown:
+                            Text("Turn on your KEY and choose a mode: Settings then shows what that mode can do.").font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                         }
-                        Text("Favilla \(ThisPhoneView.version)").font(Brand.small).foregroundStyle(Brand.faint)
                     }
                     .padding(.horizontal, 4)
+
+                    Text("Favilla \(ThisPhoneView.version)").font(Brand.small).foregroundStyle(Brand.faint).padding(.horizontal, 4)
                 }
                 .padding(20)
             }

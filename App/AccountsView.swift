@@ -59,6 +59,7 @@ final class AccountsModel: ObservableObject {
 
     /// LIST with health, all pages.
     func load() {
+        if Demo.mode != nil { entries = Demo.accounts; return }
         guard busy.isEmpty else { return }
         busy = "Reading the KEY's list…"
         status = ""
@@ -69,7 +70,11 @@ final class AccountsModel: ObservableObject {
                 var got: [AppChannel.ListEntry] = [], start = 0
                 while true {
                     let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start, health: true), timeout: 35)
-                    if a.rsp == AppChannel.rErr { throw KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF)) }
+                    if a.rsp == AppChannel.rErr {
+                        if a.body.first == 0x04 { KeyLife.inferred(3, from: "LIST refused 0x04: not a VAULT life") }
+                        throw KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF))
+                    }
+                    if start == 0 { KeyLife.inferred(2, from: "LIST answered: a VAULT life") }
                     guard a.rsp == AppChannel.rList else { throw KeySession.Failure("The KEY answered the list with type \(String(format: "%02x", a.rsp)).") }
                     let page: AppChannel.ListPage
                     do { page = try AppChannel.parseList(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(KeyLink.listMessage(st)) }
@@ -88,6 +93,7 @@ final class AccountsModel: ObservableObject {
             } catch {
                 status = "\(error)"
                 note("list failed: \(error)")
+                close()   // a link the KEY dropped (a restart into another mode) is opened afresh next time
             }
         }
     }
@@ -547,6 +553,13 @@ final class AccountsModel: ObservableObject {
 
 struct AccountsView: View {
     var pushed = false                 // inside Settings' stack: no Done, no stack of its own
+    /// The app's home in VAULT mode (17 Nov topology): the wordmark and a
+    /// Settings button instead of Done; it re-reads the list when the KEY
+    /// comes back, and so notices a restart into NOSTR mode.
+    var home = false
+    var onSettings: () -> Void = {}
+    @ObservedObject private var life = KeyLife.shared
+    @Environment(\.scenePhase) private var phase
     @StateObject private var m = AccountsModel()
     @State private var picked: PickedAccount?
     @State private var filter = ""
@@ -624,7 +637,13 @@ struct AccountsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Brand.bg, for: .navigationBar)
             .toolbar {
-                if !pushed { ToolbarItem(placement: .cancellationAction) { Button("Done") { m.close(); dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) } }
+                if home {
+                    ToolbarItem(placement: .principal) { Lockup(mark: 22, word: 15) }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(action: onSettings) { Image(systemName: "gearshape").font(.system(size: 17, weight: .regular)) }
+                            .foregroundStyle(Brand.brass).accessibilityLabel("Settings")
+                    }
+                } else if !pushed { ToolbarItem(placement: .cancellationAction) { Button("Done") { m.close(); dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) } }
                 if !m.entries.isEmpty && m.entries.contains(where: { $0.id != nil }) {
                     ToolbarItem(placement: .primaryAction) {
                         Button(selecting ? "Cancel" : "Select") { selecting.toggle(); selected = []; selStatus = "" }
@@ -638,6 +657,15 @@ struct AccountsView: View {
             .sheet(item: $qr) { p in SetupKeyQR(prefill: p) }
             .onAppear { if m.entries.isEmpty { m.load() } }
             .onDisappear { m.close() }
+            .onChange(of: life.life) { _, l in
+                // The KEY dropped the link (it may have restarted): read again in a
+                // moment; the answer says which mode it came back in.
+                guard home, l == nil else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if m.busy.isEmpty { m.load() } }
+            }
+            .onChange(of: phase) { _, p in
+                if home, p == .active, m.busy.isEmpty, m.entries.isEmpty || !m.status.isEmpty { m.load() }
+            }
     }
 
     private func toggle(_ key: String) {

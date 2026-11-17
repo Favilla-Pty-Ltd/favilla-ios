@@ -28,37 +28,61 @@ struct RootView: View {
     @State private var route = KeyRoute.current
     @State private var routeText = LinkSettingsView.routeText(KeyRoute.current)
     @State private var pageColour = UIColor.black
+    @State private var paired = KeyLink.appPaired
+    @ObservedObject private var life = KeyLife.shared
     @ObservedObject private var importer = CredentialImport.shared   // Apple Passwords > Export to another app (issue #16)
+    @State private var showImport = false
+
+    /// The app's shape follows the KEY's mode (AppShape.swift).
+    private var mode: AppMode {
+        if Demo.mode != nil { return AppMode.of(route: .bluetooth, paired: true, life: Demo.life) }
+        return AppMode.of(route: route, paired: paired, life: life.shape)
+    }
 
     var body: some View {
-        // The page starts below the status bar, as the home-screen PWA does (its
-        // header has no top safe-area padding) and runs to the bottom edge with no
-        // safe-area inset, so the bottom bar sits where the home-screen PWA's does. The strip behind the status bar takes
-        // the page's background, and the status bar text follows its brightness.
+        ZStack {
+            switch mode {
+            case .nostr: nostrHome.transition(.opacity)
+            case .vault: AccountsView(home: true, onSettings: { showSettings = true }).transition(.opacity)
+            case .unknown: StartHome(link: link, onSettings: { showSettings = true }).transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.35), value: mode)
+        .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route); paired = KeyLink.appPaired }) {
+            ThisPhoneView(link: link, route: $route, mode: mode)
+        }
+        // iOS opens the app with this activity when the owner picks Favilla in
+        // another password manager's export (CredentialImport.swift).
+        .onContinueUserActivity(CredentialImport.activityType) { activity in
+            importer.handle(activity)
+            if showSettings {
+                showSettings = false   // one sheet at a time: let Settings go first
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { showImport = true }
+            } else {
+                showImport = true
+            }
+        }
+        .sheet(isPresented: $showImport, onDismiss: { if !importer.busy { importer.discard() } }) {
+            CredentialImportSheet()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PairIdentity.cleared)) { _ in paired = false }
+        .onReceive(link.$outcome) { _ in paired = KeyLink.appPaired }
+        .onChange(of: mode) { old, new in Bunker.log("app: \(old.name) -> \(new.name)") }
+        .onAppear { if Demo.settings { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { showSettings = true } } }
+    }
+
+    /// The Nostr client, as before: the page starts below the status bar, as the
+    /// home-screen PWA does (its header has no top safe-area padding) and runs to
+    /// the bottom edge with no safe-area inset, so the bottom bar sits where the
+    /// home-screen PWA's does. The strip behind the status bar takes the page's
+    /// background, and the status bar text follows its brightness.
+    private var nostrHome: some View {
         NostrClientView(onOpenSettings: { showSettings = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
             .ignoresSafeArea(.container, edges: .bottom)
             .ignoresSafeArea(.keyboard)
             .background(Color(uiColor: pageColour).ignoresSafeArea())
             .preferredColorScheme(RootView.isLight(pageColour) ? .light : .dark)
-            .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route) }) {
-                ThisPhoneView(link: link, route: $route)
-            }
-            // iOS opens the app with this activity when the owner picks Favilla in
-            // another password manager's export (CredentialImport.swift).
-            .onContinueUserActivity(CredentialImport.activityType) { activity in
-                importer.handle(activity)
-                if showSettings {
-                    showSettings = false   // one sheet at a time: let Settings go first
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { showImport = true }
-                } else {
-                    showImport = true
-                }
-            }
-            .sheet(isPresented: $showImport, onDismiss: { if !importer.busy { importer.discard() } }) {
-                CredentialImportSheet()
-            }
     }
-    @State private var showImport = false
 
     static func isLight(_ c: UIColor) -> Bool {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -101,7 +125,7 @@ struct KeyCard: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
                         Spacer()
-                        Text(life.life == nil ? "Paired" : "Paired · " + KeyLife.name(life.life)).font(Brand.small).foregroundStyle(Brand.brass)
+                        Text(life.life != nil ? "Paired · " + KeyLife.name(life.life) : life.lastSeen != nil ? "Paired · last seen in " + KeyLife.name(life.lastSeen) : "Paired").font(Brand.small).foregroundStyle(Brand.brass)
                     }
                     if let d = KeyStatus.detail(link) {
                         Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)

@@ -398,7 +398,7 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         check(NewPassword.parseGen(Data([0, 3]) + Data("aB3".utf8)) == .success("aB3"), "11bi: R_GEN_PW parses")
         check(NewPassword.parseGen(Data([0x06, 0])) == .failure(.status(0x06)), "11bi: R_GEN_PW refusal")
         let saveBody = try AppChannel.pwSaveBody(id: Data(count: 8), site: "a.com", user: "u", pass: "p", note: "", flags: 0x01).get()
-        check(saveBody.last == 0x01 && saveBody.count == 8 + 6 + 1 + 1 + 1 + 1 + 1, "11bi: PW_SAVE carries the flags byte")
+        check(saveBody.last == 0x01 && saveBody.count == 8 + 6 + 2 + 2 + 1 + 1, "11bi: PW_SAVE carries the flags byte")
         NewPassword.recordFill(site: "a.com", user: "u", password: "p")
         check(NewPassword.justFilled(site: "A.com", user: "U", password: "p") && !NewPassword.justFilled(site: "a.com", user: "u", password: "p"), "11bi: a fill is recognised once")
     }

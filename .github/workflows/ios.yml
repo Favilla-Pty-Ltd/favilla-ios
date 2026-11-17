@@ -81,7 +81,7 @@ jobs:
           # small JPEGs too, between markers.
           for f in shots/*.png; do
             sips -Z 1000 -s format jpeg -s formatOptions 70 "$f" --out "${f%.png}.jpg" >/dev/null
-            echo "SHOT-BEGIN $(basename "${f%.png}")"; base64 -i "${f%.png}.jpg" | tr -d '\n'; echo; echo "SHOT-END"
+            echo "SHOT-BEGIN $(basename "${f%.png}")"; base64 -i "${f%.png}.jpg" | tr -d '\n' | fold -w 2000; echo; echo "SHOT-END"
           done
       - name: Upload the screenshots
         if: always()

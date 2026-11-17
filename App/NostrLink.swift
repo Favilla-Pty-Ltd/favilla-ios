@@ -80,6 +80,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     /// KEY restart (which always drops it) clears the known life and the next
     /// connection's HELLO decides again.
     private var holdingVault = false
+    private var skipLogAt = Date.distantPast
     private var vaultHeardAt = Date.distantPast
 
     /// The KEY answered as another life (HELLO life not 0x03, status 0x04, or
@@ -110,14 +111,14 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         // 5 minutes ago (then one HELLO checks again).
         if KeyLife.shared.isVault {
             if holdingVault || Date().timeIntervalSince(vaultHeardAt) < 300 {
-                LinkLog.shared.add("dial skipped (\(reason)): the KEY is in VAULT mode")
+                if Date().timeIntervalSince(skipLogAt) > 30 { skipLogAt = Date(); LinkLog.shared.add("dial skipped (\(reason)): the KEY is in VAULT mode (logged once every 30 s)") }
                 return false
             }
             LinkLog.shared.add("dial: \(reason), to check the KEY's mode again (VAULT was learnt over 5 min ago)")
             return true
         }
         if let w = otherLifeWait {
-            LinkLog.shared.add("dial skipped (\(reason)): the KEY is in another life, \(w) s of the wait left")
+            if Date().timeIntervalSince(skipLogAt) > 30 { skipLogAt = Date(); LinkLog.shared.add("dial skipped (\(reason)): the KEY is in another life, \(w) s of the wait left") }
             return false
         }
         LinkLog.shared.add("dial: \(reason)")
@@ -187,6 +188,14 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     /// One app-channel request on the shared link; the answer whatever its type
     /// (an API refusal becomes an error; for the bunker commands the caller reads 0xBF itself).
     func call(_ cmd: UInt8, _ body: Data) async throws -> AppChannel.Answer {
+        // 17 Nov: in VAULT mode (or the other-life wait) every call failed at
+        // once, and callers that retry on failure spun hard enough to jam the
+        // app. Now such a call is answered after 1 s, without queueing, dialling
+        // or a log line each (one summary line every 30 s).
+        if let why = await MainActor.run(body: { self.refuseNow(cmd) }) {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            throw KeyApiError.notReady(why)
+        }
         let id = UInt64.random(in: 1...UInt64.max)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (k: CheckedContinuation<AppChannel.Answer, Error>) in
@@ -286,6 +295,24 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         }
         j.done(r)
         pump()
+    }
+
+    private var refusedSince = 0
+    private var refusedLogAt = Date.distantPast
+
+    /// The answer for a call that can't reach the KEY now, or nil to go ahead.
+    /// Main thread.
+    private func refuseNow(_ cmd: UInt8) -> String? {
+        let why: String
+        if KeyLife.shared.isVault && (holdingVault || Date().timeIntervalSince(vaultHeardAt) < 300) { why = NostrLink.vaultMode }
+        else if otherLifeWait != nil { why = NostrLink.vaultWait }
+        else { return nil }
+        refusedSince += 1
+        if Date().timeIntervalSince(refusedLogAt) > 30 {
+            LinkLog.shared.add("answered here, not sent (\(why.prefix(40))...): \(refusedSince) call\(refusedSince == 1 ? "" : "s") in the last 30 s, last " + String(format: "%02x", cmd))
+            refusedSince = 0; refusedLogAt = Date()
+        }
+        return why
     }
 
     private func failAll(_ e: Error) {
@@ -521,6 +548,9 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     private func received(_ m: Data) {
         guard let c = creds else { return }
+        // Held idle in a VAULT life: the Accounts page's own answers arrive here
+        // too (one connection); they aren't ours, so no work and no log lines.
+        if holdingVault { return }
         let a: AppChannel.Answer
         let head = [UInt8](m.prefix(13))
         let mctr = head.count >= 13 ? UInt32(head[9]) | UInt32(head[10]) << 8 | UInt32(head[11]) << 16 | UInt32(head[12]) << 24 : 0

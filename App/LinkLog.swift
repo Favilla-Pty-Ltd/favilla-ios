@@ -33,17 +33,30 @@ final class LinkLog: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private var flushPending = false
+
+    private func flush() {
+        lock.lock()
+        flushPending = false
+        let l = buf
+        lock.unlock()
+        if let f = file { try? l.joined(separator: "\n").write(to: f, atomically: true, encoding: .utf8) }
+        DispatchQueue.main.async { self.lines = l }
+    }
+
     /// Add one line. Any thread.
     func add(_ s: String) {
         lock.lock()
         let line = stamp.string(from: Date()) + " " + s
         buf.append(line)
         if buf.count > LinkLog.max { buf.removeFirst(buf.count - LinkLog.max) }
-        let l = buf
-        let text = l.joined(separator: "\n")
-        if let f = file { try? text.write(to: f, atomically: true, encoding: .utf8) }
+        // 17 Nov: the whole file was rewritten and the UI copy republished on
+        // every line; a burst of lines (a request loop in VAULT mode) jammed
+        // the main thread. Now both happen at most every half second.
+        let schedule = !flushPending
+        flushPending = true
         lock.unlock()
-        DispatchQueue.main.async { self.lines = l }
+        if schedule { DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) { self.flush() } }
         #if DEBUG
         print("[BT] " + s)
         #endif

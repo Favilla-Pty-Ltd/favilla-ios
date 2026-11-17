@@ -963,15 +963,16 @@ enum Demo {
     }
     static var settings: Bool { mode?.hasPrefix("settings") == true }
 
-    static let accounts: [AppChannel.ListEntry] = [
-        ("example-bank.com", "you@example.com", 0x60 | 0x02 | 0x20),
-        ("mail.example.com", "you@example.com", 0x40 | 0x10 | 0x02),
-        ("shop.example.net", "you", 0x40 | 0x01),
-        ("code.example.org", "you", 0x40 | 0x80 | 0x03),
-        ("news.example.com", "reader", 0x40 | 0x0C | 0x03),
-        ("cloud.example.io", "you@example.com", 0x03),
-    ].enumerated().map { i, t in
-        AppChannel.ListEntry(passkey: false, site: t.0, user: t.1, credentialID: nil, userHandle: nil,
-                             health: AppChannel.Health(raw: UInt8(t.2)), id: Data(repeating: UInt8(i + 1), count: 8))
+    private static func entry(_ n: UInt8, _ site: String, _ user: String, _ raw: UInt8) -> AppChannel.ListEntry {
+        AppChannel.ListEntry(passkey: false, site: site, user: user, credentialID: nil, userHandle: nil,
+                             health: AppChannel.Health(raw: raw), id: Data(repeating: n, count: 8))
     }
+    static let accounts: [AppChannel.ListEntry] = [
+        entry(1, "example-bank.com", "you@example.com", 0x62),
+        entry(2, "mail.example.com", "you@example.com", 0x52),
+        entry(3, "shop.example.net", "you", 0x41),
+        entry(4, "code.example.org", "you", 0xC3),
+        entry(5, "news.example.com", "reader", 0x4F),
+        entry(6, "cloud.example.io", "you@example.com", 0x03),
+    ]
 }

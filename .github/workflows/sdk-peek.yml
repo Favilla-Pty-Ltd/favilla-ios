@@ -1,0 +1,18 @@
+# Prints parts of the iOS SDK headers so the app can be written against the
+# exact API (no Mac here). Run by hand.
+name: sdk-peek
+on:
+  workflow_dispatch:
+    inputs:
+      pattern:
+        description: grep pattern
+        required: true
+jobs:
+  peek:
+    runs-on: macos-latest
+    steps:
+      - run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK $SDK"; xcodebuild -version
+          H=$SDK/System/Library/Frameworks/AuthenticationServices.framework/Headers
+          grep -n -B2 -A12 -E "${{ inputs.pattern }}" $H/*.h | head -400

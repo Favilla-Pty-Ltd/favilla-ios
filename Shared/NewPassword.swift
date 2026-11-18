@@ -139,6 +139,18 @@ enum NewPassword {
         _ = key.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
         let mac = tag(key, site, user, password)
         store.set(["k": key, "m": mac, "at": Date().timeIntervalSince1970], forKey: memoKey)
+        // The site and username (not secret) for a retype box filled next.
+        store.set(["site": site, "user": user, "at": Date().timeIntervalSince1970], forKey: lastKey)
+    }
+
+    private static let lastKey = "lastFill"
+
+    /// The site and username filled from the KEY in the last minute (the KEY's
+    /// "Send again?" window), for the retype box.
+    static func lastFill() -> (site: String, user: String)? {
+        guard let m = store.dictionary(forKey: lastKey), let site = m["site"] as? String, let user = m["user"] as? String,
+              let at = m["at"] as? Double, Date().timeIntervalSince1970 - at < 60 else { return nil }
+        return (site, user)
     }
 
     /// True when this exact login was filled from the KEY in the last two minutes.

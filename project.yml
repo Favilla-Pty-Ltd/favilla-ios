@@ -89,6 +89,7 @@ targets:
               SupportsGeneratePasswordCredentials: true      # issue #38: strong passwords made by the KEY (iOS 26.2+)
               SupportsGeneratePasswordCredentialsWithUI: false
               SupportsSavePasswordCredentials: true          # issue #38: iOS's save goes to the KEY with a held ENTER
+              ProvidesTextToInsert: true                     # a retype box: AutoFill > Passwords > Favilla inserts the login just sent
     entitlements:
       path: AutoFill/FavillaAutoFill.entitlements
       properties:

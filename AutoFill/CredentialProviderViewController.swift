@@ -221,7 +221,22 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     // MARK: - Passwords
 
-    private func fillPassword(site: String, user wanted: String, isApp: Bool = false) {
+    // A retype box (17 Nov bench): iOS fills a login into the form's first
+    // password box only, so the confirm box stays empty. AutoFill > Passwords >
+    // Favilla on that box asks for text instead: the KEY sends the login it
+    // just sent ("Send again?" within 60 s) and its password goes into the box.
+    @available(iOS 18.0, *)
+    override func prepareInterfaceForUserChoosingTextToInsert() {
+        guard let last = NewPassword.lastFill() else {
+            purpose = .password
+            notice = "Fill the first password box from Favilla first. Then, within a minute, come back to this box: AutoFill, Passwords, Favilla, and press ENTER at Send again? on the KEY."
+            show()
+            return
+        }
+        fillPassword(site: last.site, user: last.user, insertText: true)
+    }
+
+    private func fillPassword(site: String, user wanted: String, isApp: Bool = false, insertText: Bool = false) {
         purpose = .password
         user = wanted
         link.site = site
@@ -239,6 +254,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 let cred = ASPasswordCredential(user: login.user, password: login.password)
                 NewPassword.recordFill(site: host, user: login.user, password: login.password)   // iOS's save of this same login is skipped (11bi)
                 self.closed = true
+                if insertText, #available(iOS 18.0, *) {
+                    self.extensionContext.completeRequest(withTextToInsert: login.password, completionHandler: nil)
+                    return
+                }
                 // An app's name isn't a website iOS can list it under: list websites only.
                 AccountList.record(.init(passkey: false, site: isApp ? "" : host, user: login.user)) {
                     self.extensionContext.completeRequest(withSelectedCredential: cred)

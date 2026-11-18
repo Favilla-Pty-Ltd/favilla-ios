@@ -565,6 +565,8 @@ struct AccountsView: View {
     @State private var filter = ""
     @State private var qr: SetupKeyQR.Prefill?
     @State private var adding = false
+    @State private var dropOld: AppChannel.ListEntry?
+    @State private var dropNote = ""
     @State private var importing = false
     @State private var selecting = false
     @State private var selected: Set<String> = []
@@ -600,6 +602,7 @@ struct AccountsView: View {
                     if !m.status.isEmpty {
                         Text(m.status).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 16)
                     }
+                    if !selecting { changesCard }
                     if m.entries.count > 8 {
                         TextField("Search", text: $filter).textInputAutocapitalization(.never).autocorrectionDisabled()
                             .font(Brand.body).foregroundStyle(Brand.ink).padding(12).background(Brand.card).clipShape(RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 16)
@@ -666,6 +669,52 @@ struct AccountsView: View {
             .onChange(of: phase) { _, p in
                 if home, p == .active, m.busy.isEmpty, m.entries.isEmpty || !m.status.isEmpty { m.load() }
             }
+    }
+
+    /// Password changes still holding their old copy (18 Nov): one tap to say
+    /// the new one works, right at the top, instead of finding the login.
+    @ViewBuilder private var changesCard: some View {
+        let waiting = m.entries.compactMap { e in m.oldCopy(of: e).map { (login: e, old: $0) } }
+        if !waiting.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(waiting.count == 1 ? "DID THE NEW PASSWORD WORK?" : "DID THE NEW PASSWORDS WORK?").font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
+                ForEach(Array(waiting.enumerated()), id: \.offset) { _, w in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(w.login.site).font(Brand.font(16, .semibold)).foregroundStyle(Brand.ink).lineLimit(1)
+                            if !w.login.user.isEmpty { Text(w.login.user).font(Brand.small).foregroundStyle(Brand.grey).lineLimit(1) }
+                        }
+                        Spacer()
+                        Button { dropOld = w.old; dropNote = "" } label: {
+                            Text("It works").font(Brand.font(13, .semibold)).foregroundStyle(Brand.bg)
+                                .padding(.horizontal, 14).frame(minHeight: 36)
+                                .background(Brand.brass).clipShape(Capsule())
+                        }
+                        .disabled(!m.busy.isEmpty || w.old.id == nil)
+                    }
+                }
+                if !m.asking.isEmpty && m.busy == "Deleting…" {
+                    Text(m.asking).font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
+                }
+                if !dropNote.isEmpty { Text(dropNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
+                Text("The KEY is keeping the old password in case the site refused the new one. Once you've signed in with the new one, tap It works and hold ENTER on the KEY. To go back to the old one, open the login.")
+                    .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .background(Brand.card)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 16)
+            .confirmationDialog("Drop the old password?", isPresented: Binding(get: { dropOld != nil }, set: { if !$0 { dropOld = nil } }), titleVisibility: .visible) {
+                Button("The new one works: delete the old copy", role: .destructive) {
+                    guard let old = dropOld else { return }
+                    dropOld = nil
+                    Task { dropNote = await m.delete([old]) ?? "" }
+                }
+                Button("Not yet", role: .cancel) { dropOld = nil }
+            } message: {
+                Text("Only once you've signed in with the new password. The KEY asks too.")
+            }
+        }
     }
 
     private func toggle(_ key: String) {

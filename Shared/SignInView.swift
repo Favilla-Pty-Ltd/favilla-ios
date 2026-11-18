@@ -24,6 +24,8 @@ struct SignInView: View {
     /// Shown instead of a request (something iOS asked for that the KEY can't do).
     var notice: String?
     var onRetry: () -> Void = {}
+    /// Passwords only: the app-run change (NEW PASSWORD FOR THIS SITE).
+    var onNewPassword: (() -> Void)? = nil
     var onClose: () -> Void
 
     private var creating: Bool { if case .passkeyCreate = purpose { return true }; return false }
@@ -108,8 +110,18 @@ struct SignInView: View {
                     // Some apps fill only the field the sheet was opened from.
                     Text("Opened from the username box? Some apps fill only that field: tap the password box and pick Favilla again to fill both.")
                         .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
-                    Text("Retype box left empty? Within a minute, tap it, pick Favilla again and press ENTER at Send again? on the KEY. The password is also copied for 60 s: tap the retype box and Paste.")
-                        .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if purpose == .password, notice == nil, !link.pairing, link.outcome?.isReply != true, let go = onNewPassword {
+                // Changing or making a password (also when the KEY has no login
+                // for the site yet): the app runs it, the KEY only asks for ENTER.
+                Button(action: go) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle").font(.system(size: 17, weight: .semibold))
+                        Text("New password for this site").font(Brand.font(15, .semibold))
+                    }
+                    .foregroundStyle(Brand.brass).frame(minHeight: 44)
                 }
             }
 

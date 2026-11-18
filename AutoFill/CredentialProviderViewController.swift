@@ -48,7 +48,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         let onRetry: () -> Void = { [weak self] in self?.retry() }
         let root: AnyView = configuring
             ? AnyView(ProbeView(link: link, onClose: onClose).preferredColorScheme(.dark))
-            : AnyView(SignInView(link: link, purpose: purpose, user: user, notice: notice, onRetry: onRetry, onClose: onClose).preferredColorScheme(.dark))
+            : AnyView(SignInView(link: link, purpose: purpose, user: user, notice: notice, onRetry: onRetry,
+                                 onNewPassword: purpose == .password && notice == nil ? { [weak self] in self?.startNewPassword() } : nil,
+                                 onClose: onClose).preferredColorScheme(.dark))
         let host = UIHostingController(rootView: root)
         host.view.backgroundColor = UIColor(red: 14 / 255, green: 13 / 255, blue: 12 / 255, alpha: 1)
         addChild(host)
@@ -220,6 +222,49 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
 
     // MARK: - Passwords
+
+    // MARK: - A new password, run by the app (18 Nov)
+
+    private var changeJob: ChangeJob?
+
+    /// From the sign-in sheet: stop the KEY's login picker and run the change
+    /// from the phone (NewPasswordFlow.swift). The KEY only asks for ENTER.
+    private func startNewPassword() {
+        let site = link.site
+        let host = (link.siteIsAppName ? KeyLink.cleanAppName(site) : KeyLink.cleanSite(site)) ?? site
+        watch = nil
+        retry = {}
+        link.cancel()
+        let job = ChangeJob(site: host)
+        changeJob = job
+        children.forEach { $0.view.removeFromSuperview(); $0.removeFromParent() }
+        let view = NewPasswordView(job: job, onCancel: { [weak self] in
+            guard let self, !self.closed else { return }
+            self.closed = true
+            job.close()
+            LastRequest.save("New password for \(host)", ["closed on the sheet"])
+            self.extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue))
+        }).preferredColorScheme(.dark)
+        let hostVC = UIHostingController(rootView: view)
+        hostVC.view.backgroundColor = UIColor(red: 14 / 255, green: 13 / 255, blue: 12 / 255, alpha: 1)
+        addChild(hostVC)
+        hostVC.view.frame = self.view.bounds
+        hostVC.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.view.addSubview(hostVC.view)
+        hostVC.didMove(toParent: self)
+        watch = job.$phase.sink { [weak self] p in
+            guard let self, case .done(let change) = p, let r = job.result, !self.closed else { return }
+            self.closed = true
+            LastRequest.save("New password for \(host)", [change ? "changed on the KEY, old one kept; filled and copied for a confirm box" : "new login saved on the KEY; filled and copied for a confirm box"])
+            NewPassword.recordFill(site: host, user: r.user, password: r.password)   // iOS's own save afterwards is skipped
+            // A moment to read where the confirm box's copy is, then hand the login to iOS.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: r.user, password: r.password))
+            }
+        }
+        // The KEY's picker takes a moment to clear after the cancel.
+        Task { try? await Task.sleep(nanoseconds: 500_000_000); await job.load() }
+    }
 
     // A retype box (17 Nov bench): iOS fills a login into the form's first
     // password box only, so the confirm box stays empty. AutoFill > Passwords >

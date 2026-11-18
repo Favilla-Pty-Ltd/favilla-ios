@@ -227,6 +227,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     // just sent ("Send again?" within 60 s) and its password goes into the box.
     @available(iOS 18.0, *)
     override func prepareInterfaceForUserChoosingTextToInsert() {
+        LastRequest.save("Text for a box (AutoFill > Passwords)", [NewPassword.lastFill() == nil ? "no login filled in the last minute" : "inserting the login just sent"])
         guard let last = NewPassword.lastFill() else {
             purpose = .password
             notice = "Fill the first password box from Favilla first. Then, within a minute, come back to this box: AutoFill, Passwords, Favilla, and press ENTER at Send again? on the KEY."
@@ -250,7 +251,16 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             do {
                 let login = try Ctap.parseFill(body)
                 self.link.note("Login from the KEY (username \(login.user.isEmpty ? "empty" : "\(login.user.count) characters")); handing it to iOS")
-                LastRequest.save("Password for \(host)", self.link.lines)
+                // The same login asked for again within a minute (a retype box,
+                // which iOS won't fill: it refills the first box): also put the
+                // password on the clipboard, this iPhone only, for 60 s.
+                let again = !insertText && NewPassword.lastFill().map { $0.site == host && $0.user.lowercased() == login.user.lowercased() } == true
+                if again {
+                    UIPasteboard.general.setItems([[UIPasteboard.typeAutomatic: login.password]],
+                                                  options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(60)])
+                    self.link.note("Sent again within a minute: also copied for the retype box (this iPhone only, cleared in 60 s)")
+                }
+                LastRequest.save("Password for \(host)" + (again ? " (again: copied for the retype box)" : ""), self.link.lines)
                 let cred = ASPasswordCredential(user: login.user, password: login.password)
                 NewPassword.recordFill(site: host, user: login.user, password: login.password)   // iOS's save of this same login is skipped (11bi)
                 self.closed = true

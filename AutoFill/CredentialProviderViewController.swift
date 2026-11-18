@@ -255,11 +255,17 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         watch = job.$phase.sink { [weak self] p in
             guard let self, case .done(let change) = p, let r = job.result, !self.closed else { return }
             self.closed = true
-            LastRequest.save("New password for \(host)", [change ? "changed on the KEY, old one kept; filled and copied for a confirm box" : "new login saved on the KEY; filled and copied for a confirm box"])
+            let fill = job.fillFirst
+            LastRequest.save("New password for \(host)", [(change ? "changed on the KEY, old one kept; " : "new login saved on the KEY; ") + (fill ? "filled and copied for a confirm box" : "copied only, to paste")])
             NewPassword.recordFill(site: host, user: r.user, password: r.password)   // iOS's own save afterwards is skipped
             // A moment to read where the confirm box's copy is, then hand the login to iOS.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: r.user, password: r.password))
+            DispatchQueue.main.asyncAfter(deadline: .now() + (fill ? 1.6 : 2.6)) {
+                if fill {
+                    self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: r.user, password: r.password))
+                } else {
+                    // Copied only: the sheet goes and the owner pastes into the boxes they choose.
+                    self.extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue))
+                }
             }
         }
         // The KEY's picker takes a moment to clear after the cancel.
@@ -272,10 +278,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     // just sent ("Send again?" within 60 s) and its password goes into the box.
     @available(iOS 18.0, *)
     override func prepareInterfaceForUserChoosingTextToInsert() {
-        LastRequest.save("Text for a box (AutoFill > Passwords)", [NewPassword.lastFill() == nil ? "no login filled in the last minute" : "inserting the login just sent"])
-        guard let last = NewPassword.lastFill() else {
+        LastRequest.save("Text for a box (AutoFill > Passwords)", [NewPassword.lastFill(within: 600) == nil ? "no login filled in the last 10 minutes" : "inserting the login just sent"])
+        guard let last = NewPassword.lastFill(within: 600) else {
             purpose = .password
-            notice = "Fill the first password box from Favilla first. Then, within a minute, come back to this box: AutoFill, Passwords, Favilla, and press ENTER at Send again? on the KEY."
+            notice = "Fill a password from Favilla first. Then, within 10 minutes, come back to this box: AutoFill, Passwords, Favilla, and press ENTER on the KEY."
             show()
             return
         }

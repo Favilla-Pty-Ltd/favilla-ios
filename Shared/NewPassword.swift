@@ -147,9 +147,9 @@ enum NewPassword {
 
     /// The site and username filled from the KEY in the last minute (the KEY's
     /// "Send again?" window), for the retype box.
-    static func lastFill() -> (site: String, user: String)? {
+    static func lastFill(within: Double = 60) -> (site: String, user: String)? {
         guard let m = store.dictionary(forKey: lastKey), let site = m["site"] as? String, let user = m["user"] as? String,
-              let at = m["at"] as? Double, Date().timeIntervalSince1970 - at < 60 else { return nil }
+              let at = m["at"] as? Double, Date().timeIntervalSince1970 - at < within else { return nil }
         return (site, user)
     }
 

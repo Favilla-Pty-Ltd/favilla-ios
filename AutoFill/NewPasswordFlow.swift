@@ -17,9 +17,18 @@ final class ChangeJob: ObservableObject {
     enum Phase: Equatable { case reading, choose, making, asking(change: Bool), done(change: Bool), failed(String) }
     @Published var phase: Phase = .reading
     @Published var matches: [AppChannel.ListEntry] = []
-    @Published var pick = 0            // an index into matches; matches.count = a new login
+    // pick (below): an index into matches; matches.count = a new login
     @Published var newUser = ""
     @Published var plain = false       // letters and digits only, for sites that refuse symbols
+    /// iOS puts a login into the form's first password box, whichever box was
+    /// tapped. Right for a sign-up; wrong for a change form whose first box is
+    /// the current password. So a change is copied only (paste into the boxes
+    /// you choose) and a new login is filled, unless the owner sets otherwise.
+    @Published var fillFirst = false { didSet { if fillFirst != oldValue { ChangeJob.store.set(fillFirst, forKey: isNew ? "fillOnNew" : "fillOnChange") } } }
+    @Published var pick = 0 { didSet { fillFirst = ChangeJob.fillDefault(new: isNew) } }
+    private static let store = UserDefaults(suiteName: "group.io.favillakey.app") ?? .standard
+    static func fillDefault(new: Bool) -> Bool { (store.object(forKey: new ? "fillOnNew" : "fillOnChange") as? Bool) ?? new }
+    static let copySeconds: TimeInterval = 120
     let site: String
     private var session: KeySession?
     private(set) var result: (user: String, password: String)?
@@ -107,9 +116,9 @@ final class ChangeJob: ObservableObject {
                 case 0x00: continue
                 case 0x01:
                     result = (user, pass)
-                    // A confirm box: iOS fills only the first password box.
+                    // For the boxes iOS won't fill: this iPhone only, cleared in two minutes.
                     UIPasteboard.general.setItems([[UIPasteboard.typeAutomatic: pass]],
-                                                  options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(60)])
+                                                  options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(ChangeJob.copySeconds)])
                     phase = .done(change: change)
                     close(); return
                 case 0x02: phase = .failed("Cancelled on the KEY. Nothing was changed."); close(); return
@@ -159,7 +168,7 @@ struct NewPasswordView: View {
         }
         return [("The KEY makes the password", stage > 0 ? 2 : (stage == 0 ? 1 : 0)),
                 (change ? "CHANGE ENTRY on the KEY: hold ENTER" : "NEW ENTRY on the KEY: hold ENTER", stage > 1 ? 2 : (stage == 1 ? 1 : 0)),
-                ("Filled in, and copied for a confirm box", stage > 2 ? 2 : 0)]
+                (job.fillFirst ? "Filled in, and copied for a confirm box" : "Copied: paste it into the boxes you choose", stage > 2 ? 2 : 0)]
     }
 
     var body: some View {
@@ -200,7 +209,9 @@ struct NewPasswordView: View {
                         .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
                 }
                 if case .done = job.phase {
-                    Text("The first password box fills now. If the form has a confirm box, tap it and choose Paste: the password is copied for 60 seconds, on this iPhone only.")
+                    Text(job.fillFirst
+                         ? "The form's first password box fills now. For a confirm box, tap it and choose Paste. The copy stays on this iPhone and clears in 2 minutes."
+                         : "Tap the new password box and choose Paste. Do the same in the confirm box. The copy stays on this iPhone and clears in 2 minutes.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -243,6 +254,12 @@ struct NewPasswordView: View {
             }
             .tint(Brand.brass)
             Text("20 characters from the KEY's generator. Turn this on for a site that refuses symbols.")
+                .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            Toggle(isOn: $job.fillFirst) {
+                Text("Fill the form's first password box").font(Brand.body).foregroundStyle(Brand.ink)
+            }
+            .tint(Brand.brass)
+            Text("iPhone always fills a form's first password box, whichever box you tapped. Off: the password is copied and you paste it into the boxes you choose.")
                 .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
         }
     }

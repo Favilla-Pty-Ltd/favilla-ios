@@ -390,9 +390,9 @@ final class AccountsModel: ObservableObject {
 
     /// PW_SAVE then PW_RESULT until the KEY is answered. nil = saved.
     /// `id` nil: a new entry.
-    func save(id: Data?, site: String, user: String, pass: String, note text: String) async -> String? {
+    func save(id: Data?, site: String, user: String, pass: String, note text: String, flags: UInt8? = nil) async -> String? {
         let body: Data
-        switch AppChannel.pwSaveBody(id: id, site: site, user: user, pass: pass, note: text) {
+        switch AppChannel.pwSaveBody(id: id, site: site, user: user, pass: pass, note: text, flags: flags) {
         case .success(let b): body = b
         case .failure(let p): return AppChannel.pwProblemText(p)
         }
@@ -1128,6 +1128,7 @@ struct EntryEditor: View {
     @State private var reveal = false
     @State private var status = ""
     @State private var working = false
+    @State private var made = false           // the password in the box was made here
 
     var body: some View {
         NavigationStack {
@@ -1153,7 +1154,18 @@ struct EntryEditor: View {
                                 .accessibilityLabel(reveal ? "Hide password" : "Show password")
                         }
                         .padding(12).background(Brand.card).clipShape(RoundedRectangle(cornerRadius: 10))
-                        if entry != nil {
+                        Button {
+                            pass = NewPassword.make(NewPassword.Rules()); made = true; reveal = true
+                        } label: {
+                            Text(made ? "Make another" : "Make a strong password").font(Brand.button).foregroundStyle(Brand.brass).frame(minHeight: 44)
+                        }
+                        .disabled(working)
+                        if made {
+                            Text(entry == nil
+                                 ? "20 characters, made on this iPhone. When the KEY saves it, it is copied for 2 minutes (this iPhone only) to paste into the site's form."
+                                 : "20 characters, made on this iPhone. When the KEY saves it, it is copied for 2 minutes (this iPhone only) to paste into the site's form, and the KEY keeps the old password until you tap It works.")
+                                .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                        } else if entry != nil {
                             Text("The KEY never sends a password back, so this box starts empty. Type a new one only to change it.")
                                 .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                         }
@@ -1201,9 +1213,13 @@ struct EntryEditor: View {
         status = ""
         let s = site.trimmingCharacters(in: .whitespaces), u = user.trimmingCharacters(in: .whitespaces)
         Task {
-            let why = await model.save(id: entry?.id, site: s, user: u, pass: pass, note: note)
+            // A password made here for an existing login: the KEY keeps the old one as "(old)".
+            let why = await model.save(id: entry?.id, site: s, user: u, pass: pass, note: note, flags: (made && entry != nil && !pass.isEmpty) ? 0x01 : nil)
             working = false
             if let why { status = why; return }
+            if made, !pass.isEmpty {
+                UIPasteboard.general.setItems([[UIPasteboard.typeAutomatic: pass]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
+            }
             pass = ""
             done()
         }

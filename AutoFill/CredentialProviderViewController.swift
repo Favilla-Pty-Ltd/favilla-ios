@@ -134,39 +134,22 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     // MARK: - New passwords (iOS 26.2, KEY 11bi, issue #38)
 
-    // A new-password field: strong passwords made by the KEY (GEN_PW), no sheet.
-    // Apple: save nothing here; the save comes after the form is sent.
+    // A new-password field: iOS's strong-password suggestion, which fills the
+    // new and the confirm box together. iOS gives no time to reach the KEY
+    // here, so the iPhone makes it (NewPassword.make); the KEY gets it with a
+    // held ENTER when the form is sent (the save request below).
     @available(iOS 26.2, *)
     override func performWithoutUserInteraction(generatePasswordsRequest request: ASGeneratePasswordsRequest) {
         let rules = NewPassword.rules(request.passwordFieldPasswordRules)
-        Task { @MainActor in
-            var out: [ASGeneratedPassword] = []
-            var why = ""
-            if let c = Credentials.load() {
-                let s = KeySession(c)
-                do {
-                    try await s.open(timeout: 6)
-                    var kinds: [(ASGeneratedPassword.Kind, UInt8)] = [(.alphanumeric, 0x02)]
-                    if rules.allowsSpecial { kinds.insert((.strong, 0x01), at: 0) }
-                    for (kind, k) in kinds {
-                        let a = try await s.request(AppChannel.cGenPw, NewPassword.genBody(rules, kind: k), timeout: 6)
-                        if a.rsp == AppChannel.rErr { why = NewPassword.genText(a.body.first ?? 0xFF); break }
-                        guard a.rsp == AppChannel.rGenPw else { why = "The KEY's answer couldn't be read."; break }
-                        switch NewPassword.parseGen(a.body) {
-                        case .success(let p): out.append(ASGeneratedPassword(kind: kind, value: p))
-                        case .failure(.status(let st)): why = NewPassword.genText(st)
-                        }
-                    }
-                } catch { why = "\(error)" }
-                s.close()
-            } else { why = "the app isn't paired" }
-            LastRequest.save("Strong password for \(request.serviceIdentifier.identifier)",
-                             [out.isEmpty ? "No password from the KEY: \(why)" : "\(out.count) password(s) from the KEY handed to iOS"])
-            if out.isEmpty {
-                self.extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.failed.rawValue))
-            } else {
-                self.extensionContext.completeGeneratePasswordRequest(results: out, completionHandler: nil)
-            }
+        var out: [ASGeneratedPassword] = []
+        if rules.allowsSpecial { out.append(ASGeneratedPassword(kind: .strong, value: NewPassword.make(rules))) }
+        out.append(ASGeneratedPassword(kind: .alphanumeric, value: NewPassword.make(rules, plain: true)))
+        out.removeAll { $0.value.isEmpty }
+        LastRequest.save("Strong password for \(request.serviceIdentifier.identifier)", ["\(out.count) password(s) made on this iPhone and handed to iOS"])
+        if out.isEmpty {
+            extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.failed.rawValue))
+        } else {
+            extensionContext.completeGeneratePasswordRequest(results: out, completionHandler: nil)
         }
     }
 

@@ -395,6 +395,11 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         check(r.minLen == 8 && r.maxLen == 16 && r.required == 0x0F && r.allowed == 0x0F && r.specials.contains("@") && !r.specials.contains(" "), "11bi: rules with a special set")
         let a = NewPassword.rules("allowed: lower, upper, digit; minlength: 12")
         check(!a.allowsSpecial && a.required & 0x08 == 0 && a.minLen == 12 && a.maxLen == 64, "11bi: letters and digits only")
+        for _ in 0..<200 {
+            let p = NewPassword.make(r), q = NewPassword.make(NewPassword.Rules(), plain: true)
+            check(p.count == 16 && p.contains(where: \.isLowercase) && p.contains(where: \.isUppercase) && p.contains(where: \.isNumber) && p.contains(where: { "-().&@?'#,/\"+".contains($0) }), "made on the iPhone: follows the site's rules")
+            check(q.count == 20 && q.allSatisfy { $0.isLetter || $0.isNumber } && zip(q, q.dropFirst()).allSatisfy { $0 != $1 }, "made on the iPhone: letters and digits, none twice in a row")
+        }
         check(NewPassword.parseGen(Data([0, 3]) + Data("aB3".utf8)) == .success("aB3"), "11bi: R_GEN_PW parses")
         check(NewPassword.parseGen(Data([0x06, 0])) == .failure(.status(0x06)), "11bi: R_GEN_PW refusal")
         let saveBody = try AppChannel.pwSaveBody(id: Data(count: 8), site: "a.com", user: "u", pass: "p", note: "", flags: 0x01).get()

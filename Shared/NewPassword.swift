@@ -94,6 +94,30 @@ enum NewPassword {
         return out.map { $0.hasPrefix("[") ? $0 : $0.lowercased() }
     }
 
+    // MARK: A strong password made on the iPhone (18 Nov)
+
+    /// iOS asks for its strong-password suggestion with no time to reach the
+    /// KEY, so this one comes from the iPhone's own secure random generator,
+    /// to the site's rules: 20 characters (or the nearest the site allows), one
+    /// of every required class, no character twice in a row.
+    static func make(_ r: Rules, plain: Bool = false) -> String {
+        var g = SystemRandomNumberGenerator()
+        let allowed = plain ? r.allowed & ~special : r.allowed
+        let sets: [(UInt8, [Character])] = [
+            (lower, Array("abcdefghijkmnopqrstuvwxyz")), (upper, Array("ABCDEFGHJKLMNPQRSTUVWXYZ")),
+            (digit, Array("23456789")), (special, Array(r.specials.isEmpty ? "-_.!@#$%&*+=?" : r.specials))]
+        let n = min(max(20, Int(r.minLen)), max(Int(r.maxLen), 8))
+        let pool = sets.filter { allowed & $0.0 != 0 }.flatMap { $0.1 }
+        guard !pool.isEmpty else { return "" }
+        while true {
+            var out: [Character] = sets.filter { r.required & allowed & $0.0 != 0 }.map { $0.1.randomElement(using: &g)! }
+            while out.count < n { out.append(pool.randomElement(using: &g)!) }
+            out = Array(out.prefix(n))
+            out.shuffle(using: &g)
+            if zip(out, out.dropFirst()).allSatisfy({ $0 != $1 }) { return String(out) }
+        }
+    }
+
     /// GEN_PW body: kind 0x01 strong, 0x02 letters and digits only.
     static func genBody(_ r: Rules, kind: UInt8) -> Data {
         var d = Data([kind, r.minLen, r.maxLen, r.required, r.allowed])

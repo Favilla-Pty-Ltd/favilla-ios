@@ -19,6 +19,7 @@ final class ChangeJob: ObservableObject {
     @Published var matches: [AppChannel.ListEntry] = []
     // pick (below): an index into matches; matches.count = a new login
     @Published var newUser = ""
+    @Published var suggestions: [String] = []   // usernames the KEY already holds, to tap
     @Published var plain = false       // letters and digits only, for sites that refuse symbols
     /// iOS puts a login into the form's first password box, whichever box was
     /// tapped. Right for a sign-up; wrong for a change form whose first box is
@@ -50,6 +51,7 @@ final class ChangeJob: ObservableObject {
             session = s
             try await s.open()
             var found: [AppChannel.ListEntry] = [], start = 0, busy = 0
+            var seen: [String: Int] = [:]
             let want = NewPassword.host(site)
             while true {
                 let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start), timeout: 35)
@@ -61,11 +63,13 @@ final class ChangeJob: ObservableObject {
                 }
                 if a.rsp == AppChannel.rErr { phase = .failed(ChangeJob.vaultOnly(a.body.first ?? 0xFF)); close(); return }
                 let page = try AppChannel.parseList(a.body)
+                for e in page.entries where !e.passkey && !e.user.isEmpty { seen[e.user, default: 0] += 1 }
                 found += page.entries.filter { !$0.passkey && $0.id != nil && !$0.site.hasSuffix(" (old)") && NewPassword.host($0.site) == want }
                 if !page.more || page.entries.isEmpty { break }
                 start += page.entries.count
             }
             matches = found
+            suggestions = UsernameField.suggest([], seen).filter { u in !found.contains { $0.user.lowercased() == u.lowercased() } }
             pick = 0
             phase = .choose
         } catch {
@@ -196,7 +200,7 @@ struct NewPasswordView: View {
             switch job.phase {
             case .reading:
                 HStack(spacing: 10) { ProgressView().tint(Brand.brass); Text("Reading this site's logins from the KEY").font(Brand.body).foregroundStyle(Brand.grey) }
-            case .choose: chooser
+            case .choose: ScrollView(showsIndicators: false) { chooser }.scrollDismissesKeyboard(.interactively)
             case .failed(let why):
                 Text(why).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             default:
@@ -240,10 +244,7 @@ struct NewPasswordView: View {
                 }
                 choice(job.matches.count, title: "A new login", sub: "For signing up to this site")
                 if job.isNew {
-                    TextField("Username or email", text: $job.newUser)
-                        .keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .font(Brand.body).foregroundStyle(Brand.ink)
-                        .padding(12).background(Brand.bg).clipShape(RoundedRectangle(cornerRadius: 10))
+                    UsernameField(text: $job.newUser, suggestions: job.suggestions)
                         .padding([.horizontal, .bottom], 14)
                 }
             }

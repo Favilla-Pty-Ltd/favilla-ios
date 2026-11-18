@@ -106,6 +106,7 @@ struct BrandButton: View {
     let title: String
     var filled = true
     let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button(action: action) {
@@ -116,6 +117,7 @@ struct BrandButton: View {
                 .background(filled ? Brand.brass : Brand.card)
                 .foregroundStyle(filled ? Brand.bg : Brand.ink)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
+                .opacity(enabled ? 1 : 0.35)   // a button that can't be pressed yet looks it
         }
     }
 }

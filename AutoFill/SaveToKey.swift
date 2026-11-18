@@ -11,10 +11,17 @@ import SwiftUI
 
 @MainActor
 final class SaveJob: ObservableObject {
-    enum Phase: Equatable { case connecting, reading, asking(change: Bool), saved(change: Bool), failed(String) }
+    enum Phase: Equatable { case connecting, reading, needUser, asking(change: Bool), saved(change: Bool), failed(String) }
     @Published var phase: Phase = .connecting
     let site: String
-    let user: String
+    /// A reset form has no username box, so iOS hands none over: the owner
+    /// gives one (needUser) before the KEY is asked.
+    @Published var user: String
+    @Published var suggestions: [String] = []
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var abandoned = false
+    func confirmUser() { waiter?.resume(); waiter = nil }
+    func abandon() { abandoned = true; confirmUser() }
     private var pass: String
     private var session: KeySession?
 
@@ -34,7 +41,8 @@ final class SaveJob: ObservableObject {
             phase = .reading
             // The login, if the KEY has it (site and username, as LIST shows them).
             var found: AppChannel.ListEntry?, start = 0
-            scan: while true {
+            var here: [AppChannel.ListEntry] = [], seen: [String: Int] = [:]
+            while true {
                 let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start), timeout: 35)
                 if a.rsp == AppChannel.rErr {
                     phase = .failed(a.body.first == 0x04 ? "Saving to the KEY needs its VAULT mode. On the KEY choose VAULT, enter the VAULT PIN, then save again from the site." : AppChannel.pwStatusText(a.body.first ?? 0xFF))
@@ -42,11 +50,25 @@ final class SaveJob: ObservableObject {
                 }
                 let page = try AppChannel.parseList(a.body)
                 for e in page.entries where !e.passkey && !e.site.hasSuffix(" (old)") {
-                    if NewPassword.host(e.site) == site && e.user.lowercased() == user.lowercased() { found = e; break scan }
+                    if NewPassword.host(e.site) == site { here.append(e) }
+                    if !e.user.isEmpty { seen[e.user, default: 0] += 1 }
                 }
                 if !page.more || page.entries.isEmpty { break }
                 start += page.entries.count
             }
+            if user.isEmpty {
+                if here.count == 1 {
+                    user = here[0].user          // the site's one login: this is its new password
+                } else {
+                    suggestions = UsernameField.suggest(here.map { $0.user }, seen)
+                    phase = .needUser
+                    await withCheckedContinuation { waiter = $0 }
+                    if abandoned { return }
+                    user = user.trimmingCharacters(in: .whitespaces)
+                    phase = .reading
+                }
+            }
+            found = here.first { $0.user.lowercased() == user.lowercased() }
             let change = found?.id != nil
             var flags: UInt8? = change ? 0x01 : nil
             for _ in 0..<2 {
@@ -98,6 +120,7 @@ struct SaveToKeyView: View {
     private var headline: String {
         switch job.phase {
         case .connecting, .reading: return "Connecting to your KEY"
+        case .needUser: return "Which username?"
         case .asking(let change): return change ? "Save the new password on your KEY" : "Save the new login on your KEY"
         case .saved: return "Saved on your KEY"
         case .failed: return "Not saved"
@@ -108,7 +131,7 @@ struct SaveToKeyView: View {
         let connected: Bool, asked: Bool, done: Bool
         switch job.phase {
         case .connecting: (connected, asked, done) = (false, false, false)
-        case .reading: (connected, asked, done) = (true, false, false)
+        case .reading, .needUser: (connected, asked, done) = (true, false, false)
         case .asking: (connected, asked, done) = (true, true, false)
         case .saved: (connected, asked, done) = (true, true, true)
         case .failed: (connected, asked, done) = (false, false, false)
@@ -125,14 +148,14 @@ struct SaveToKeyView: View {
                 Lockup(mark: 22, word: 15)
                 Spacer()
                 if case .saved = job.phase {} else {
-                    Button("Cancel", action: onCancel).font(Brand.body).foregroundStyle(Brand.grey).frame(minHeight: 44)
+                    Button("Cancel") { job.abandon(); onCancel() }.font(Brand.body).foregroundStyle(Brand.grey).frame(minHeight: 44)
                 }
             }
             Text(headline).font(Brand.headline).foregroundStyle(Brand.ink)
             VStack(alignment: .leading, spacing: 8) {
                 Text("SAVING FOR").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
                 Text(job.site).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
-                if !job.user.isEmpty { Text("as \(job.user)").font(Brand.body).foregroundStyle(Brand.grey) }
+                if !job.user.isEmpty, job.phase != .needUser { Text("as \(job.user)").font(Brand.body).foregroundStyle(Brand.grey) }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -141,6 +164,10 @@ struct SaveToKeyView: View {
 
             if case .failed(let why) = job.phase {
                 Text(why).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            } else if job.phase == .needUser {
+                UsernameField(text: $job.user, suggestions: job.suggestions)
+                Text("This form didn't give a username. The KEY saves the login under the one you put here.")
+                    .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepRow(text: s.0, state: s.1) }
@@ -153,6 +180,9 @@ struct SaveToKeyView: View {
             }
             Spacer()
             switch job.phase {
+            case .needUser:
+                BrandButton(title: "SAVE ON THE KEY", filled: true) { job.confirmUser() }
+                    .disabled(job.user.trimmingCharacters(in: .whitespaces).isEmpty)
             case .saved: BrandButton(title: "DONE", filled: true, action: onDone)
             case .failed: BrandButton(title: "CLOSE", filled: false, action: onCancel)
             default: EmptyView()
@@ -161,5 +191,45 @@ struct SaveToKeyView: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Brand.bg)
+    }
+}
+
+/// The username for a login about to be saved: a box that reads as a box, and
+/// the usernames the KEY already holds to tap instead of typing.
+struct UsernameField: View {
+    @Binding var text: String
+    var suggestions: [String]
+
+    /// This site's usernames first, then the KEY's three most used.
+    static func suggest(_ site: [String], _ seen: [String: Int]) -> [String] {
+        var out: [String] = []
+        let common = seen.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }.prefix(3).map { $0.key }
+        for u in site + common where !u.isEmpty && !out.contains(where: { $0.lowercased() == u.lowercased() }) { out.append(u) }
+        return Array(out.prefix(4))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("USERNAME OR EMAIL").font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
+            TextField("", text: $text, prompt: Text("you@example.com").foregroundColor(Brand.grey))
+                .keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .textContentType(.username)
+                .font(Brand.body).foregroundStyle(Brand.ink)
+                .padding(.horizontal, 14).frame(minHeight: 48)
+                .background(Brand.bg)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.brass.opacity(0.6), lineWidth: 1))
+            ForEach(suggestions, id: \.self) { u in
+                Button { text = u } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: text.lowercased() == u.lowercased() ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 18)).foregroundStyle(text.lowercased() == u.lowercased() ? Brand.brass : Brand.faint)
+                        Text(u).font(Brand.body).foregroundStyle(Brand.ink).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                    }
+                    .frame(minHeight: 44).contentShape(Rectangle())
+                }
+            }
+        }
     }
 }

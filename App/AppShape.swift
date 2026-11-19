@@ -107,8 +107,8 @@ struct ModeHome: View {
     private func tag(_ d: Door) -> (String, Bool)? {
         let l = KeyWhere.live(life)
         if KeyWhere.isHere(d, l) { return ("KEY IS HERE", true) }
+        if l == 1 || l == 2 || l == 3 { return ("SWITCH THE KEY", false) }   // VAULT mode has no Wi-Fi
         if d == .nostr, route == .wifi { return ("OVER WI-FI", false) }
-        if l != nil { return ("SWITCH THE KEY", false) }
         return nil
     }
 
@@ -202,6 +202,7 @@ struct ModeHome: View {
 /// few seconds and RootView opens the mode when it arrives.
 struct SwitchPage: View {
     let target: Door
+    var route: KeyRoute = .bluetooth
     @ObservedObject var link: KeyLink
     var onHome: () -> Void
     var onSettings: () -> Void
@@ -213,7 +214,9 @@ struct SwitchPage: View {
     private var steps: [String] {
         target == .vault
             ? ["Restart the KEY", "Choose VAULT", "Enter the VAULT PIN and leave it on its home screen"]
-            : ["Restart the KEY", "Choose NOSTR and enter the NOSTR PIN", "If it isn't on Bluetooth: Settings > Network > Change mode > Bluetooth"]
+            : route == .wifi
+                ? ["Restart the KEY", "Choose NOSTR and enter the NOSTR PIN"]
+                : ["Restart the KEY", "Choose NOSTR and enter the NOSTR PIN", "If it isn't on Bluetooth: Settings > Network > Change mode > Bluetooth"]
     }
     private var waiting: String {
         if let l = from { return "It says " + KeyLife.name(l) + "." }

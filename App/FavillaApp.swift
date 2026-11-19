@@ -38,7 +38,8 @@ struct RootView: View {
     /// The KEY is behind this door (or, for NOSTR, the Wi-Fi route needs no mode).
     private func ready(_ d: Door) -> Bool {
         if Demo.mode != nil { return KeyWhere.isHere(d, Demo.life) }
-        if d == .nostr { return route == .wifi || (paired && life.shape == 3) }
+        // Wi-Fi needs no mode from the KEY, unless the KEY just said VAULT (which has no Wi-Fi).
+        if d == .nostr { return route == .wifi ? !life.isVault : (paired && life.shape == 3) }
         // VAULT: also when the mode isn't known yet; Accounts asks the KEY and its answer says.
         return paired && (life.shape == nil || life.shape == 1 || life.shape == 2)
     }
@@ -55,7 +56,7 @@ struct RootView: View {
         ZStack {
             if let d = door {
                 if !ready(d) {
-                    SwitchPage(target: d, link: link, onHome: { go(nil) }, onSettings: { showSettings = true }).transition(.opacity)
+                    SwitchPage(target: d, route: route, link: link, onHome: { go(nil) }, onSettings: { showSettings = true }).transition(.opacity)
                 } else if d == .nostr {
                     nostrHome.transition(.opacity)
                 } else {

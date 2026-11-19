@@ -71,7 +71,7 @@ jobs:
           xcrun simctl install "$UDID" "$APP"
           BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
           mkdir -p shots
-          for m in unknown vault settings-vault nostr settings-nostr; do
+          for m in unknown home-vault to-nostr vault settings-vault nostr; do
             xcrun simctl launch --terminate-running-process "$UDID" "$BID" -FavillaDemo "$m"
             sleep 10
             xcrun simctl io "$UDID" screenshot "shots/$m.png"

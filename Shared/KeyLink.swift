@@ -959,7 +959,14 @@ enum Demo {
     }
     static var life: UInt8? {
         guard let m = mode else { return nil }
+        if m.hasPrefix("to-nostr") { return 2 }      // the hand-over page: KEY in the other mode
+        if m.hasPrefix("to-vault") { return 3 }
         return m.contains("vault") ? 2 : m.contains("nostr") ? 3 : nil
+    }
+    /// The door a sample run opens on: "home-…" and "unknown" stay on the home page.
+    static var doorName: String? {
+        guard let m = mode, !m.hasPrefix("home"), m != "unknown" else { return nil }
+        return m.contains("nostr") ? "nostr" : m.contains("vault") ? "vault" : nil
     }
     static var settings: Bool { mode?.hasPrefix("settings") == true }
 

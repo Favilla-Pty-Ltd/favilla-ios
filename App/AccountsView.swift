@@ -558,6 +558,8 @@ struct AccountsView: View {
     /// comes back, and so notices a restart into NOSTR mode.
     var home = false
     var onSettings: () -> Void = {}
+    var onHome: () -> Void = {}            // the wordmark goes to the mode home (19 Nov)
+    var switcher: AnyView? = nil           // NOSTR | VAULT | BITCOIN, at the top
     @ObservedObject private var life = KeyLife.shared
     @Environment(\.scenePhase) private var phase
     @StateObject private var m = AccountsModel()
@@ -598,6 +600,7 @@ struct AccountsView: View {
     private var page: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let switcher { switcher.padding(.horizontal, 16) }
                     summary
                     if !m.status.isEmpty {
                         Text(m.status).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 16)
@@ -641,7 +644,7 @@ struct AccountsView: View {
             .toolbarBackground(Brand.bg, for: .navigationBar)
             .toolbar {
                 if home {
-                    ToolbarItem(placement: .principal) { Lockup(mark: 22, word: 15) }
+                    ToolbarItem(placement: .principal) { Button(action: onHome) { Lockup(mark: 22, word: 15) }.accessibilityLabel("Home") }
                     ToolbarItem(placement: .cancellationAction) {
                         Button(action: onSettings) { Image(systemName: "gearshape").font(.system(size: 17, weight: .regular)) }
                             .foregroundStyle(Brand.brass).accessibilityLabel("Settings")

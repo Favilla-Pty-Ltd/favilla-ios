@@ -32,6 +32,18 @@ struct RootView: View {
     @ObservedObject private var life = KeyLife.shared
     @ObservedObject private var importer = CredentialImport.shared   // Apple Passwords > Export to another app (issue #16)
     @State private var showImport = false
+    /// The door the owner picked on the home page; nil is the home page.
+    @State private var door: Door? = Demo.door
+
+    /// The KEY is behind this door (or, for NOSTR, the Wi-Fi route needs no mode).
+    private func ready(_ d: Door) -> Bool {
+        if Demo.mode != nil { return KeyWhere.isHere(d, Demo.life) }
+        if d == .nostr { return route == .wifi || (paired && life.shape == 3) }
+        // VAULT: also when the mode isn't known yet; Accounts asks the KEY and its answer says.
+        return paired && (life.shape == nil || life.shape == 1 || life.shape == 2)
+    }
+    private func go(_ d: Door?) { Bunker.log("app: door \(door?.rawValue ?? "home") -> \(d?.rawValue ?? "home")"); door = d }
+    private var settingsMode: AppMode { door == .vault ? .vault : door == .nostr ? .nostr : mode }
 
     /// The app's shape follows the KEY's mode (AppShape.swift).
     private var mode: AppMode {
@@ -41,15 +53,23 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            switch mode {
-            case .nostr: nostrHome.transition(.opacity)
-            case .vault: AccountsView(home: true, onSettings: { showSettings = true }).transition(.opacity)
-            case .unknown: StartHome(link: link, onSettings: { showSettings = true }).transition(.opacity)
+            if let d = door {
+                if !ready(d) {
+                    SwitchPage(target: d, link: link, onHome: { go(nil) }, onSettings: { showSettings = true }).transition(.opacity)
+                } else if d == .nostr {
+                    nostrHome.transition(.opacity)
+                } else {
+                    AccountsView(home: true, onSettings: { showSettings = true }, onHome: { go(nil) },
+                                 switcher: AnyView(ModeSwitcher(here: .vault, go: { go($0) }))).transition(.opacity)
+                }
+            } else {
+                ModeHome(link: link, route: route, onSettings: { showSettings = true }, open: { go($0) }).transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.35), value: mode)
+        .animation(.easeInOut(duration: 0.3), value: door)
+        .animation(.easeInOut(duration: 0.3), value: door.map(ready))
         .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route); paired = KeyLink.appPaired }) {
-            ThisPhoneView(link: link, route: $route, mode: mode)
+            ThisPhoneView(link: link, route: $route, mode: settingsMode)
         }
         // iOS opens the app with this activity when the owner picks Favilla in
         // another password manager's export (CredentialImport.swift).
@@ -77,11 +97,21 @@ struct RootView: View {
     /// home-screen PWA's does. The strip behind the status bar takes the page's
     /// background, and the status bar text follows its brightness.
     private var nostrHome: some View {
-        NostrClientView(onOpenSettings: { showSettings = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
-            .ignoresSafeArea(.container, edges: .bottom)
-            .ignoresSafeArea(.keyboard)
-            .background(Color(uiColor: pageColour).ignoresSafeArea())
-            .preferredColorScheme(RootView.isLight(pageColour) ? .light : .dark)
+        VStack(spacing: 0) {
+            // Home (the mark) and the other modes, above the client (19 Nov).
+            HStack(spacing: 6) {
+                Button { go(nil) } label: { EmberMark(size: 22).frame(width: 44, height: 44) }.accessibilityLabel("Home")
+                ModeSwitcher(here: .nostr, go: { go($0) })
+            }
+            .padding(.leading, 8).padding(.trailing, 12).padding(.vertical, 6)
+            .background(Brand.bg)
+            NostrClientView(onOpenSettings: { showSettings = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
+                .ignoresSafeArea(.container, edges: .bottom)
+                .ignoresSafeArea(.keyboard)
+                .background(Color(uiColor: pageColour).ignoresSafeArea(edges: .bottom))
+        }
+        .background(Brand.bg.ignoresSafeArea())
+        .preferredColorScheme(.dark)
     }
 
     static func isLight(_ c: UIColor) -> Bool {

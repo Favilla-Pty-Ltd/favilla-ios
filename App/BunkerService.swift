@@ -52,13 +52,29 @@ final class BunkerService: ObservableObject {
             let v = n.userInfo?["vault"] as? Int ?? 0
             Task { @MainActor in
                 BunkerService.shared.nudged(waiting: w)
-                if v != 0 { VaultService.shared.asked(UInt8(v)) }
+                if v & 3 != 0 { VaultService.shared.asked(UInt8(v & 3)) }
+                // KEY 11bt: DAILY in CIPHER was opened without today's block; the KEY waits 8 s.
+                if UInt8(truncatingIfNeeded: v) & CipherDay.askBit != 0 { BunkerService.shared.cipherDay(fresh: true, why: "the KEY asked") }
             }
+        }
+        linkObserver = NotificationCenter.default.addObserver(forName: NostrLink.linked, object: nil, queue: .main) { _ in
+            Task { @MainActor in BunkerService.shared.cipherDay(fresh: false, why: "on connect") }
         }
         NostrLink.shared.stayUp()
     }
 
     private var nudgeObserver: NSObjectProtocol?
+    private var linkObserver: NSObjectProtocol?
+
+    /// CIPHER's daily block (KEY 11bt, issue #48): fetched from favillakey.io
+    /// and handed to the KEY, also when iOS woke the app in the background.
+    func cipherDay(fresh: Bool, why: String) {
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "cipher-day") {}
+        Task {
+            await CipherDay.send(via: NostrLink.shared, fresh: fresh, why: why)
+            UIApplication.shared.endBackgroundTask(bg)
+        }
+    }
     private var nudging = false
     private var askedApproval = Set<String>()
 

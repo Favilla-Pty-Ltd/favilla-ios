@@ -53,6 +53,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var helloCtr: UInt32 = 0         // HELLO, while it is out: which life the KEY is in (#9, 9 Nov)
     private var timeRetried = false
     private var nudgeSet = false             // NUDGE_SET sent on this connection (path B, KEY 11i)
+    private var dayAsked = false             // CIPHER's daily block offered on this connection (KEY 11bt)
     private var nudges = 0
     private var lastPer = 0                  // reports per write last used (#9 item 2: the MTU grows after connect)
     private var skipToStart = false          // after a failed message: drop its leftover reports until the next start (#9 item 3)
@@ -175,11 +176,13 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     /// The commands that share this link: API, and the bunker's NIP46 / POLL / INFO.
-    static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, AppChannel.cHello, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo, Bunker.cNudgeSet,
+    static let ours: Set<UInt8> = [AppChannel.cApi, AppChannel.cTime, AppChannel.cHello, Bunker.cNip46, Bunker.cPoll, Bunker.cInfo, Bunker.cNudgeSet, CipherDay.cDay,
                                    Vault.cInfo, Vault.cGet, Vault.cDone, Vault.cPut]
 
     /// Posted on the main queue for each KEY nudge (path B): userInfo "waiting" (Int).
     static let nudged = Notification.Name("NostrLink.nudged")
+    /// Posted on the main queue once per connection when the link is ready (after TIME).
+    static let linked = Notification.Name("NostrLink.linked")
     /// Posted when the KEY drops the link the client was using (off, out of
     /// range, Bluetooth off): the client wipes its plaintext DMs at once
     /// instead of after 45 s of failed polls (12 Nov).
@@ -481,7 +484,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         peripheral = nil; chanIn = nil; chanOut = nil
         reasm = AppChannel.Reassembler(limit: AppChannel.msgMaxApi)
-        writes = []; timeCtr = 0; helloCtr = 0; lastPer = 0; skipToStart = false; skipped = 0; nudgeSet = false
+        writes = []; timeCtr = 0; helloCtr = 0; lastPer = 0; skipToStart = false; skipped = 0; nudgeSet = false; dayAsked = false
     }
 
     /// A VAULT life: keep the connection, idle, and answer everything waiting.
@@ -540,6 +543,10 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
                     LinkLog.shared.add(a.rsp == AppChannel.rAck && a.body.first == 0 ? "nudges every \(Bunker.nudgeSeconds) s" : String(format: "NUDGE_SET answered %02x", a.rsp))
                 } catch { LinkLog.shared.add("NUDGE_SET: \(error)") }
             }
+        }
+        if !dayAsked {
+            dayAsked = true
+            DispatchQueue.main.async { NotificationCenter.default.post(name: NostrLink.linked, object: nil) }
         }
         pump()
     }

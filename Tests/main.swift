@@ -587,5 +587,17 @@ do {
     check(out.taken == 0 && out.error?.contains("locked") == true && !Bunker.seen("r3"), "bunker: a locked KEY is reported and the request kept for later")
 }
 
+// CIPHER's daily block (KEY 11bt, issue #48)
+do {
+    let hex = String(repeating: "ab", count: 80)
+    let b = CipherDay.body("  876960," + hex + "\n")
+    check(b == Data(("876960," + hex).utf8) && b?.count == 167, "cipher day: the text goes over unchanged, whitespace around it dropped")
+    check(CipherDay.body("") == nil && CipherDay.body(" \n") == nil && CipherDay.body(String(repeating: "x", count: 200)) == nil && CipherDay.body(String(repeating: "x", count: 199)) != nil, "cipher day: 1 to 199 bytes or nothing")
+    let ok = CipherDay.parse(Data([0x00, 0xA0, 0x61, 0x0D, 0x00]))
+    check(ok?.status == 0 && ok?.height == 876960, "cipher day: S_OK with the height, little endian")
+    check(CipherDay.parse(Data([0x07, 0, 0, 0, 0]))?.status == 0x07 && CipherDay.parse(Data([0x00, 1])) == nil, "cipher day: refused, and a short answer is no answer")
+    check(NostrLink.ours.contains(CipherDay.cDay) && CipherDay.askBit == 0x04, "cipher day: 0x50 rides the Nostr link, nudge bit2 asks")
+}
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -17,6 +17,7 @@ import WebKit
 
 struct NostrClientView: UIViewRepresentable {
     var onOpenSettings: () -> Void
+    var onOpenModes: () -> Void = {}
     /// The page's background colour (status bar strip) as it changes with the theme.
     var onPageColour: (UIColor) -> Void = { _ in }
     @Binding var routeText: String
@@ -263,6 +264,8 @@ struct NostrClientView: UIViewRepresentable {
                 tasks[id]?.cancel(); tasks[id] = nil
             } else if message.name == "favillaApp", m["open"] as? String == "settings" {
                 parent.onOpenSettings()
+            } else if message.name == "favillaApp", m["open"] as? String == "modes" {
+                parent.onOpenModes()
             } else if message.name == "favillaApp", let id = m["youtube"] as? String {
                 WebExtras.playYouTube(id, from: webView)
             } else if message.name == "favillaApp", let pk = m["identity"] as? String {

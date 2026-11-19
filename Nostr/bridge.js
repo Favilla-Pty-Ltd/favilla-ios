@@ -521,7 +521,32 @@
     if (pill) pill.remove();
   }
 
-  function onReady() { addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); noUpdateLoop(); watchImportReminder(); }
+  // ---- The mode chip (19 Nov): NOSTR, beside the client's wordmark, opens the
+  // app's menu to VAULT and Home. No banner above the client.
+  function addModeChip() {
+    if (document.getElementById('fv-mode')) return true;
+    var logo = document.getElementById('pair-status-btn');
+    if (!logo || !logo.parentNode) return false;
+    var b = document.createElement('button');
+    b.type = 'button'; b.id = 'fv-mode';
+    b.setAttribute('aria-label', 'NOSTR mode. Switch mode');
+    b.style.cssText = 'display:flex;align-items:center;min-height:44px;margin:0 auto 0 10px;padding:0 4px;background:none;border:none;cursor:pointer;font:inherit;-webkit-tap-highlight-color:transparent;';
+    b.innerHTML = '<span style="display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--fk-brass,#C9A45C);border-radius:999px;color:var(--fk-brass,#C9A45C);font-size:11px;font-weight:600;letter-spacing:2px;line-height:1;">NOSTR' +
+      '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9l7 7 7-7"/></svg></span>';
+    b.addEventListener('click', function (ev) {
+      ev.preventDefault(); ev.stopPropagation();
+      try { mh.favillaApp.postMessage({ open: 'modes' }); } catch (e) {}
+    });
+    logo.parentNode.insertBefore(b, logo.nextSibling);
+    return true;
+  }
+  function modeChipSoon() {
+    var tries = 0;
+    var t = setInterval(function () { if (addModeChip() || ++tries > 40) clearInterval(t); }, 500);
+    addModeChip();
+  }
+
+  function onReady() { modeChipSoon(); addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); noUpdateLoop(); watchImportReminder(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

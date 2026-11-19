@@ -43,6 +43,22 @@ struct RootView: View {
         // VAULT: also when the mode isn't known yet; Accounts asks the KEY and its answer says.
         return paired && (life.shape == nil || life.shape == 1 || life.shape == 2)
     }
+    /// VAULT's way to the other modes: the wordmark is a menu (no banner).
+    private var vaultMenu: some View {
+        Menu {
+            Button("NOSTR") { go(.nostr) }
+            Button("Home") { go(nil) }
+            Button("BITCOIN (later)") {}.disabled(true)
+        } label: {
+            HStack(spacing: 7) {
+                Lockup(mark: 22, word: 15)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(Brand.brass)
+            }
+            .frame(minHeight: 44).contentShape(Rectangle())
+        }
+        .accessibilityLabel("Favilla KEY, VAULT mode. Switch mode")
+    }
+    @State private var showModes = false
     private func go(_ d: Door?) { Bunker.log("app: door \(door?.rawValue ?? "home") -> \(d?.rawValue ?? "home")"); door = d }
     private var settingsMode: AppMode { door == .vault ? .vault : door == .nostr ? .nostr : mode }
 
@@ -60,8 +76,7 @@ struct RootView: View {
                 } else if d == .nostr {
                     nostrHome.transition(.opacity)
                 } else {
-                    AccountsView(home: true, onSettings: { showSettings = true }, onHome: { go(nil) },
-                                 switcher: AnyView(ModeSwitcher(here: .vault, go: { go($0) }))).transition(.opacity)
+                    AccountsView(home: true, onSettings: { showSettings = true }, modeMenu: AnyView(vaultMenu)).transition(.opacity)
                 }
             } else {
                 ModeHome(link: link, route: route, onSettings: { showSettings = true }, open: { go($0) }).transition(.opacity)
@@ -98,21 +113,18 @@ struct RootView: View {
     /// home-screen PWA's does. The strip behind the status bar takes the page's
     /// background, and the status bar text follows its brightness.
     private var nostrHome: some View {
-        VStack(spacing: 0) {
-            // Home (the mark) and the other modes, above the client (19 Nov).
-            HStack(spacing: 6) {
-                Button { go(nil) } label: { EmberMark(size: 22).frame(width: 44, height: 44) }.accessibilityLabel("Home")
-                ModeSwitcher(here: .nostr, go: { go($0) })
+        // The way to the other modes is a small NOSTR chip that bridge.js puts
+        // beside the client's own wordmark (no banner): it opens the menu below.
+        NostrClientView(onOpenSettings: { showSettings = true }, onOpenModes: { showModes = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
+            .ignoresSafeArea(.container, edges: .bottom)
+            .ignoresSafeArea(.keyboard)
+            .background(Color(uiColor: pageColour).ignoresSafeArea())
+            .preferredColorScheme(RootView.isLight(pageColour) ? .light : .dark)
+            .confirmationDialog("Go to", isPresented: $showModes, titleVisibility: .visible) {
+                Button("VAULT") { go(.vault) }
+                Button("Home") { go(nil) }
+                Button("Cancel", role: .cancel) {}
             }
-            .padding(.leading, 8).padding(.trailing, 12).padding(.vertical, 6)
-            .background(Brand.bg)
-            NostrClientView(onOpenSettings: { showSettings = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
-                .ignoresSafeArea(.container, edges: .bottom)
-                .ignoresSafeArea(.keyboard)
-                .background(Color(uiColor: pageColour).ignoresSafeArea(edges: .bottom))
-        }
-        .background(Brand.bg.ignoresSafeArea())
-        .preferredColorScheme(.dark)
     }
 
     static func isLight(_ c: UIColor) -> Bool {

@@ -32,7 +32,7 @@ enum Bunker {
     // 11i, path B: the KEY wakes the app over Bluetooth.
     static let cNudgeSet: UInt8 = 0x3E     // body [seconds 1] (0 off, at most 60) -> 0xB1 [0x00]; per connection
     static let rNudge: UInt8 = 0xBB        // unsolicited, macced, counter 0: [seq u32 LE][replies waiting 1]
-    static let nudgeSeconds: UInt8 = 5
+    static let nudgeSeconds: UInt8 = 3
 
     static let bridge = URL(string: "https://relay.favillakey.io/push")!
     private static let group = "group.io.favillakey.app"
@@ -170,6 +170,7 @@ enum Bunker {
                       poll: Bool = false, note: ((Outcome) -> Void)? = nil) async -> Outcome {
         var o = Outcome()
         var more = poll
+        var handed: Date?          // when the KEY got the oldest request it hasn't answered (for the log's timings)
         func take(_ a: AppChannel.Answer) async -> Bool {
             switch replies(a) {
             case .failure(let e): o.error = e.description; return false
@@ -181,11 +182,14 @@ enum Bunker {
                     // kind 1) go to every relay and wait for each: relay.favillakey.io is
                     // the one that keeps 1888. NIP-46 replies are done at the first OK.
                     let own = r.messages.filter { kind(of: $0) != 24133 }
+                    let keyTook = handed.map { Date().timeIntervalSince($0) }; handed = nil
+                    let t0 = Date()
                     let n = await publish(r.messages, to: relays, timeout: max(1, min(own.isEmpty ? 5 : 8, deadline.timeIntervalSinceNow + (own.isEmpty ? 0 : 6))), all: !own.isEmpty)
                     o.sent += n
                     let runs = own.filter { kind(of: $0) == 1888 }.compactMap { eventId(of: $0) }
                     if !runs.isEmpty { if n >= r.messages.count { o.shared += runs } else { o.sharedRefused = true } }
-                    log("published \(r.messages.count) repl\(r.messages.count == 1 ? "y" : "ies"), \(n) accepted")
+                    log("published \(r.messages.count) repl\(r.messages.count == 1 ? "y" : "ies"), \(n) accepted ("
+                        + (keyTook.map { String(format: "KEY %.1f s, ", $0) } ?? "") + String(format: "relays %.1f s)", Date().timeIntervalSince(t0)))
                 }
                 note?(o)
                 return true
@@ -197,6 +201,7 @@ enum Bunker {
             for (i, (id, ev)) in pending.enumerated() {
                 guard ev.count <= 32_768 else { log("request \(id.prefix(8)) too large, skipped"); markSeen([id]); continue }
                 do {
+                    if handed == nil { handed = Date() }
                     let a = try await k.request(cNip46, ev, timeout: min(12, max(6, deadline.timeIntervalSinceNow)))   // the KEY may hold it 4 s
                     if a.rsp == AppChannel.rErr, let st = a.body.first, st == sBusy {
                         // An approval on the KEY's screen, or its queue is full: this and the rest wait.
@@ -218,7 +223,7 @@ enum Bunker {
             }
             // Replies the KEY finishes later (an approval, encrypt/decrypt on its worker).
             while more, o.error == nil, deadline.timeIntervalSinceNow > 0.6 {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                try? await Task.sleep(nanoseconds: 250_000_000)
                 do { guard await take(try await k.request(cPoll, Data(), timeout: min(12, max(1, deadline.timeIntervalSinceNow)))) else { break } } catch { o.error = "\(error)"; break }
             }
             // The KEY is free again: the requests it was too busy for, once more.

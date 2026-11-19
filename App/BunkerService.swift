@@ -95,9 +95,24 @@ final class BunkerService: ObservableObject {
             }
             guard !reqs.isEmpty || waiting > 0 else { return }
             if !reqs.isEmpty { Bunker.log("nudge: \(reqs.count) request\(reqs.count == 1 ? "" : "s") from the bridge") }
-            let o = await Bunker.serve(reqs, via: NostrLink.shared, relays: i.relays, until: Date().addingTimeInterval(8), poll: waiting > 0)
+            var o = await Bunker.serve(reqs, via: NostrLink.shared, relays: i.relays, until: Date().addingTimeInterval(8), poll: waiting > 0)
             if o.taken + o.replies > 0 || o.error != nil {
                 Bunker.log("nudge: taken \(o.taken), replies \(o.replies), accepted \(o.sent)" + (o.waiting ? ", still waiting" : "") + (o.error.map { ", \($0)" } ?? ""))
+            }
+            // A Nostr app sends its requests one after another, each when the last
+            // is answered (19 Nov bench: 10 to 15 s apart). Don't wait for the next
+            // nudge: keep asking the bridge for 6 s after each answer, 20 s at most.
+            let stop = Date().addingTimeInterval(20)
+            var quietAt = Date().addingTimeInterval(6)
+            while on, !active, o.sent > 0, o.error == nil, !o.waiting, !i.pubkey.isEmpty, Date() < min(stop, quietAt) {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                let next = ((try? await Bunker.pending(pubkey: i.pubkey, link: true)) ?? []).filter { r in !queue.contains { $0.0 == r.0 } }
+                guard !next.isEmpty else { continue }
+                Bunker.log("follow-on: \(next.count) request\(next.count == 1 ? "" : "s") from the bridge")
+                reqs += next
+                o = await Bunker.serve(next, via: NostrLink.shared, relays: i.relays, until: Date().addingTimeInterval(8))
+                Bunker.log("follow-on: taken \(o.taken), replies \(o.replies), accepted \(o.sent)" + (o.waiting ? ", still waiting" : "") + (o.error.map { ", \($0)" } ?? ""))
+                quietAt = Date().addingTimeInterval(6)
             }
             // Waiting for a button press on the KEY: say so once (no push came).
             let ids = Set(reqs.map { $0.0 })

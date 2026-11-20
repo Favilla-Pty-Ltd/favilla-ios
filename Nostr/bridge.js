@@ -559,7 +559,37 @@
     addModeChip();
   }
 
-  function onReady() { modeChipSoon(); addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); noUpdateLoop(); watchImportReminder(); }
+  // ---- A line in the log for each profile page's notes fetch (21 Nov): how
+  // many notes came back, from how many relays (and how many of those were
+  // sockets the page already had open), and how long it took. The page logs
+  // nothing here, and "a profile shows no notes" can't be told apart otherwise.
+  function watchProfileFetch() {
+    var tries = 0;
+    var t = setInterval(function () {
+      var orig = window.fetchEventsAcrossRelays;
+      if (typeof orig === 'function' && !orig.__fv) {
+        var w = function (filter, relays) {
+          var p = orig.apply(this, arguments);
+          try {
+            if (filter && filter.authors && filter.authors.length === 1 && filter.kinds && filter.kinds.length === 1 && filter.kinds[0] === 1 && !filter['#e']) {
+              var t0 = Date.now(), list = (relays || []).slice(0, 6), open = 0;
+              list.forEach(function (u) { try { var x = state.sockets[u]; if (x && x.readyState === 1) open++; } catch (e) {} });
+              p.then(function (evs) {
+                console.warn('[dev] profile notes of ' + filter.authors[0].slice(0, 8) + ': ' + (evs ? evs.length : 0) + ' from ' + list.length + ' relays (' + open + ' already open) in ' +
+                  ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (filter.until ? ', older page' : '') + ' [' + list.map(function (u) { return u.replace(/^wss?:\/\//, ''); }).join(' ') + ']');
+              });
+            }
+          } catch (e) {}
+          return p;
+        };
+        w.__fv = true;
+        window.fetchEventsAcrossRelays = w;
+        clearInterval(t);
+      } else if (++tries > 40) { clearInterval(t); }
+    }, 500);
+  }
+
+  function onReady() { watchProfileFetch(); modeChipSoon(); addSettingsRow(); watchTheme(); paintBunkerNote(); reportIdentity(); noUpdateLoop(); watchImportReminder(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
   else onReady();
 })();

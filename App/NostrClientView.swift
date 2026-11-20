@@ -42,6 +42,7 @@ struct NostrClientView: UIViewRepresentable {
         uc.add(context.coordinator, name: "favillaApp")
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
+        wv.hideInputBar()
         wv.navigationDelegate = context.coordinator
         wv.uiDelegate = context.coordinator
         wv.isOpaque = false
@@ -341,6 +342,7 @@ struct NostrClientView: UIViewRepresentable {
                 c.allowsInlineMediaPlayback = true
                 c.mediaTypesRequiringUserActionForPlayback = []
                 let child = WKWebView(frame: .zero, configuration: c)
+                child.hideInputBar()
                 child.navigationDelegate = self
                 child.uiDelegate = self
                 let w = CallWindow(child)
@@ -438,4 +440,32 @@ final class BundleFiles: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ wv: WKWebView, stop task: WKURLSchemeTask) {}
+}
+
+// MARK: - No form bar above the keyboard (20 Nov 2026)
+//
+// A web view puts iOS's form bar (previous, next, done) above the keyboard for
+// every text box. Over the Nostr client it floats on top of the reply sheet
+// and the DM composer. The client has its own send and close buttons, so the
+// bar goes: the web view's content view is given a subclass whose
+// inputAccessoryView is nil.
+
+private final class NoInputBar: NSObject {
+    @objc var inputAccessoryView: UIView? { nil }
+}
+
+extension WKWebView {
+    func hideInputBar() {
+        guard let content = scrollView.subviews.first(where: { NSStringFromClass(type(of: $0)).hasPrefix("WKContent") }) else { return }
+        let base: AnyClass = type(of: content)
+        let name = NSStringFromClass(base) + "_FavillaNoBar"
+        var made: AnyClass? = NSClassFromString(name)
+        if made == nil, let sub = objc_allocateClassPair(base, name, 0),
+           let m = class_getInstanceMethod(NoInputBar.self, #selector(getter: NoInputBar.inputAccessoryView)) {
+            class_addMethod(sub, #selector(getter: UIResponder.inputAccessoryView), method_getImplementation(m), method_getTypeEncoding(m))
+            objc_registerClassPair(sub)
+            made = sub
+        }
+        if let made { object_setClass(content, made) }
+    }
 }

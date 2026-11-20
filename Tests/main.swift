@@ -587,6 +587,14 @@ do {
     check(out.taken == 0 && out.error?.contains("locked") == true && !Bunker.seen("r3"), "bunker: a locked KEY is reported and the request kept for later")
 }
 
+// The lock byte on a nudge (KEY 11bx, issue #25)
+do {
+    let locked = Bunker.decodeNudge(Data([9, 0, 0, 0, 0, 0, 0x02])), unlocked = Bunker.decodeNudge(Data([10, 0, 0, 0, 1, 4, 0x03]))
+    check(locked?.lock == 0x02 && locked!.lock! & Bunker.lockChanged != 0 && locked!.lock! & Bunker.lockUnlocked == 0, "nudge: 7 bytes, locked just now")
+    check(unlocked?.lock == 0x03 && unlocked?.waiting == 1 && unlocked?.vault == 4 && unlocked?.seq == 10, "nudge: 7 bytes, unlocked just now, the other bytes as before")
+    check(Bunker.decodeNudge(Data([1, 0, 0, 0, 0]))?.lock == nil && Bunker.decodeNudge(Data([1, 0, 0, 0, 0, 1]))?.lock == nil && Bunker.decodeNudge(Data([1, 0, 0, 0, 0, 1]))?.vault == 1, "nudge: 5 and 6 bytes read as before, no lock state")
+}
+
 // CIPHER's daily block (KEY 11bt, issue #48)
 do {
     let hex = String(repeating: "ab", count: 80)

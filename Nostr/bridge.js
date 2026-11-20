@@ -474,6 +474,19 @@
       console.log('[dev] KEY gone over Bluetooth: ' + (why || ''));
     } catch (e) {}
   };
+  // KEY 11bx (issue #25): the KEY nudged that it locked or unlocked. Run the
+  // page's link probe now; on a lock the page wipes its plaintext DMs from
+  // what /api/link answers. Once more shortly after, in case the first probe
+  // raced the KEY's own state change.
+  window.__favillaLockChanged = function (unlocked) {
+    try {
+      console.log('[dev] the KEY ' + (unlocked ? 'unlocked' : 'locked') + ' (nudge): link probe now');
+      if (typeof window.keyLinkBeat === 'function') { window.keyLinkBeat(); setTimeout(window.keyLinkBeat, 1500); }
+      // The page's own wipe exists only once its poller runs; before that, a
+      // lock the KEY itself announced clears the threads here (the safe side).
+      if (!unlocked && typeof window._dmLockDrop !== 'function') wipeDmsDirect('KEY locked (nudge, no poller yet)');
+    } catch (e) {}
+  };
   // The page's _dmLockDrop exists only once its /info poller has started
   // (after a pairing or reconnect). Before that, do the same thing by hand.
   function wipeDmsDirect(reason) {

@@ -86,6 +86,15 @@ struct NostrClientView: UIViewRepresentable {
             guard let wv, KeyRoute.current == .bluetooth, case .failed(let why) = st else { return }
             wv.evaluateJavaScript("window.__favillaKeyGone && window.__favillaKeyGone('\(why.replacingOccurrences(of: "'", with: ""))')") { _, _ in }
         }
+        // KEY 11bx (issue #25): the KEY says at once when it locks or unlocks. The
+        // page's own link probe is the judge (it wipes plaintext DMs on a lock);
+        // the nudge only makes it look now, not at its next 10 s tick.
+        context.coordinator.lockObserver = NotificationCenter.default.addObserver(forName: NostrLink.nudged, object: nil, queue: .main) { [weak wv] n in
+            guard let wv, KeyRoute.current == .bluetooth, let l = n.userInfo?["lock"] as? Int, UInt8(truncatingIfNeeded: l) & Bunker.lockChanged != 0 else { return }
+            let unlocked = UInt8(truncatingIfNeeded: l) & Bunker.lockUnlocked != 0
+            Bunker.log("client: the KEY " + (unlocked ? "unlocked" : "locked") + ", link probe now")
+            wv.evaluateJavaScript("window.__favillaLockChanged && window.__favillaLockChanged(\(unlocked))") { _, _ in }
+        }
         context.coordinator.goneObserver = NotificationCenter.default.addObserver(forName: NostrLink.keyGone, object: nil, queue: .main) { [weak wv] n in
             guard let wv, KeyRoute.current == .bluetooth else { return }
             let why = (n.userInfo?["why"] as? String ?? "KEY gone").replacingOccurrences(of: "'", with: "")
@@ -150,6 +159,7 @@ struct NostrClientView: UIViewRepresentable {
         var importObserver: NSObjectProtocol?
         var resetObserver: NSObjectProtocol?
         var goneObserver: NSObjectProtocol?
+        var lockObserver: NSObjectProtocol?
         var activeObserver: NSObjectProtocol?
         var stateSink: AnyCancellable?
 

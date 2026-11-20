@@ -587,6 +587,9 @@ do {
     check(out.taken == 0 && out.error?.contains("locked") == true && !Bunker.seen("r3"), "bunker: a locked KEY is reported and the request kept for later")
 }
 
+// Vault backup status 19 (KEY 11bd, issue #33)
+check(Vault.words(19) == "That backup is older than this KEY's last one. Nothing was imported." && Vault.words(2).contains("unlock it in NOSTR mode"), "vault: status 19 and the new meaning of status 2 have their words")
+
 // The lock byte on a nudge (KEY 11bx, issue #25)
 do {
     let locked = Bunker.decodeNudge(Data([9, 0, 0, 0, 0, 0, 0x02])), unlocked = Bunker.decodeNudge(Data([10, 0, 0, 0, 1, 4, 0x03]))

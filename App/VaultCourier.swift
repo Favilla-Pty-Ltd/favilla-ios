@@ -51,7 +51,7 @@ enum Vault {
         switch code {
         case 0: return "Done."
         case 1: return "This KEY was set up before vault backups existed. Set it up again to get backup keys."
-        case 2: return "The vault's publishing copy is missing. Open VAULT mode on the KEY once, then try again."
+        case 2: return "The vault's publishing copy is missing. Open VAULT mode on the KEY once, then unlock it in NOSTR mode and try again."
         case 3: return "The KEY's signer chip firmware is too old for vault backups."
         case 4: return "The KEY is locked. Enter the NOSTR PIN on the KEY."
         case 5: return "The KEY has no link to the phone."
@@ -68,6 +68,7 @@ enum Vault {
         case 16: return "The KEY ran out of memory."
         case 17: return "A restore from the words is pending on the KEY. Restore first."
         case 18: return "The relay's copy holds entries this KEY can't keep."
+        case 19: return "That backup is older than this KEY's last one. Nothing was imported."
         default: return "The KEY answered code \(code)."
         }
     }
@@ -203,7 +204,10 @@ enum Vault {
             relay = r
             let m = try await restore(k, info: info, log: log)
             log("KEY merged the relay's copy: result \(m.result), \(m.added) added, \(m.removed) removed")
-            guard m.result == 0 || m.result == 11 else { return .failed(words(m.result)) }
+            // 19 (KEY 11bd, issue #33): the relay's copy is older than this KEY's last
+            // backup and was not merged. Carry on: the KEY's newer copy replaces it.
+            if m.result == 19 { log("the relay's copy is older than the KEY's last backup: not merged, the KEY's copy replaces it") }
+            guard m.result == 0 || m.result == 11 || m.result == 19 else { return .failed(words(m.result)) }
         } catch {
             return .failed("\(error)")
         }

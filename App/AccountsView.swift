@@ -905,7 +905,7 @@ private struct AccountSheet: View {
                     }
                     if let h = e.health {
                         VStack(alignment: .leading, spacing: 8) {
-                            if h.breached { Line("Seen in a breach", "This password appears in a known data breach. Change it on the site, then make the new one on the KEY.", bad: true) }
+                            if h.breached { Line("Seen in a breach", "This password appears in a known data breach. Change it on the site: the first step under Fix it says how.", bad: true) }
                             if h.reused { Line("Reused", "The same password is on another account on the KEY. Each site should have its own.", bad: true) }
                             if h.strength == 1 { Line("Weak", "Short or guessable. A password made on the KEY is long and random.", bad: true) }
                             if h.strength == 3 && !h.breached && !h.reused { Line("Strong", "Long and random. Nothing to do here.", bad: false) }
@@ -964,7 +964,7 @@ private struct AccountSheet: View {
 
                     Text("FIX IT").font(Brand.label).tracking(2).foregroundStyle(Brand.brass).padding(.top, 6)
                     VStack(alignment: .leading, spacing: 0) {
-                        Step(n: 1, title: "Change the password", text: "Sign in on the site, go to its password settings, and make the new password on the KEY: NEW PASSWORD on the KEY, then fill it from the keyboard bar. The KEY saves it and scores it.")
+                        Step(n: 1, title: "Change the password", text: "Sign in on the site and open its change-password form. Tap the new password box, choose Favilla, then New password for this site. The KEY makes the password and saves it when you hold ENTER, and keeps the old one until you tap It works here.")
                         Divider().overlay(Brand.line)
                         Step(n: 2, title: "Add two-factor", text: "Turn on an authenticator app on the site. When it shows the QR code, on the KEY open VAULT > Codes > ADD BY QR and point the KEY at it. The code then comes from the KEY at each sign-in.")
                         Divider().overlay(Brand.line)

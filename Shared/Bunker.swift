@@ -129,6 +129,9 @@ enum Bunker {
         var all = store.stringArray(forKey: "bunkerLog") ?? []
         all.append(ISO8601DateFormatter().string(from: Date()) + " " + line)
         store.set(Array(all.suffix(120)), forKey: "bunkerLog")
+        #if targetEnvironment(simulator)
+        if Demo.mode != nil { NSLog("FVLOG %@", line) }   // sample runs in CI read the log from the system log
+        #endif
     }
 
     /// The 0xB9 answer, or a sentence saying why not.

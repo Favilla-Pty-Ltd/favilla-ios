@@ -73,11 +73,14 @@ jobs:
           xcrun simctl install "$UDID" "$APP"
           BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
           mkdir -p shots
-          for m in unknown home-vault to-nostr vault vault-sheet vault-add vault-import settings-vault settings-nostr nostr; do
+          for m in unknown home-vault to-nostr vault vault-sheet vault-add vault-import settings-vault settings-nostr nostr nostr-profile; do
             xcrun simctl launch --terminate-running-process "$UDID" "$BID" -FavillaDemo "$m"
-            sleep 10
+            # The profile run opens a profile at 14 s and its fetch can take 13 s more.
+            if [ "$m" = nostr-profile ]; then sleep 40; else sleep 10; fi
             xcrun simctl io "$UDID" screenshot "shots/$m.png"
           done
+          # The app's own log lines from the sample runs (profile fetches among them).
+          xcrun simctl spawn "$UDID" log show --last 3m --style compact --predicate 'eventMessage CONTAINS "FVLOG"' 2>/dev/null | sed -E 's/^.*FVLOG /FVLOG /' | tail -60 || true
           ls -la shots
           # The artifact store isn't reachable from every reader: the log carries
           # small JPEGs too, between markers.

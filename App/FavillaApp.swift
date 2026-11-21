@@ -183,6 +183,15 @@ struct KeyCard: View {
     private var pairedLine: String {
         life.life != nil ? "Paired · " + KeyLife.name(life.life) : life.lastSeen != nil ? "Paired · last seen in " + KeyLife.name(life.lastSeen) : "Paired"
     }
+    /// The compact card says the state, not what to do: the button says that.
+    private var compactTitle: String {
+        if link.busy || link.pairing || link.appCode != nil { return KeyStatus.headline(link) }
+        if case .failed? = link.outcome { return KeyStatus.headline(link) }
+        return "Paired with this iPhone"
+    }
+    private var compactLine: String {
+        life.life != nil ? "In " + KeyLife.name(life.life) : life.lastSeen != nil ? "Last seen in " + KeyLife.name(life.lastSeen) : "Not found yet"
+    }
 
     var body: some View {
         BrandSection(title: "YOUR KEY") {
@@ -190,9 +199,9 @@ struct KeyCard: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(KeyStatus.headline(link)).font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
+                            Text(compactTitle).font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
                                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                            Text(pairedLine).font(Brand.small).foregroundStyle(Brand.brass).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                            Text(compactLine).font(Brand.small).foregroundStyle(Brand.brass).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: 8)
                         Button { link.busy ? link.cancel() : link.probe() } label: {

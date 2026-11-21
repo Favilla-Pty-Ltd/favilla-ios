@@ -126,6 +126,23 @@ struct NostrClientView: UIViewRepresentable {
             Bunker.log("client: device pairing cleared and the page reloaded")
         }
         wv.load(URLRequest(url: URL(string: Self.origin + "/")!))
+        #if targetEnvironment(simulator)
+        // A sample run that opens a profile page (CI, against the real relays):
+        // the profile-notes path in bridge.js, with its lines in the log.
+        if Demo.mode == "nostr-profile" {
+            let author = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"   // a well-known public account
+            DispatchQueue.main.asyncAfter(deadline: .now() + 14) { [weak wv] in
+                wv?.evaluateJavaScript("typeof openUserProfilePage === 'function' ? (openUserProfilePage('\(author)'), 'opened') : 'no openUserProfilePage'") { r, e in
+                    Bunker.log("sample run: profile page \(r.map { "\($0)" } ?? "error \(String(describing: e))"), wrapper \(Demo.mode ?? "")")
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak wv] in
+                wv?.evaluateJavaScript("String(!!(window.fetchEventsAcrossRelays && window.fetchEventsAcrossRelays.__fv))") { r, _ in
+                    Bunker.log("sample run: profile fetch goes through bridge.js: \(r.map { "\($0)" } ?? "?")")
+                }
+            }
+        }
+        #endif
         return wv
     }
 

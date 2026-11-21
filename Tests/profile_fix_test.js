@@ -108,6 +108,16 @@ const OURS = ['wss://relay.favillakey.io', 'wss://nos.lol', 'wss://nostr.mom', '
   const fine = ProfileFix.wrap((f, list, ms, on) => { six.forEach((e) => on(e, 'wss://nos.lol')); return sleep(20).then(() => six); }, envFor(['wss://nos.lol'], []));
   check((await fine({ kinds: [1], authors: [A], limit: 40 }, OURS, 8000, null)).length === 6 && dialled.length === 0, 'partial: six notes from the open socket is an author with six notes, left alone');
 
+  // 6c. one relay never answers: the fetch ends when the others have gone quiet, not at the page's 8 s
+  dialled = []; log = []; seen = [];
+  t0 = Date.now();
+  const hang = ProfileFix.wrap((f, list, ms, on) => { forty.forEach((e) => on(e, 'wss://nos.lol')); return sleep(6000).then(() => forty); }, envFor(['wss://nos.lol'], log));
+  const o6c = await hang({ kinds: [1], authors: [A], limit: 40 }, OURS, 8000, (e) => seen.push(e.id));
+  const took = Date.now() - t0;
+  check(o6c.length === 40 && seen.length === 40 && took >= 2900 && took < 3600 && dialled.length === 0, 'a relay that never answers: 40 notes and done at about 3 s (' + took + ' ms)');
+  check(/ended when the relays went quiet/.test(log[0]), 'a relay that never answers: the log says it ended early');
+  check(ProfileFix.plan(['wss://nwc.primal.net/abc', 'wss://relay.mostr.pub'], OURS, ['wss://nwc.primal.net/abc', 'wss://relay.mostr.pub'], [])[0] === 'wss://relay.mostr.pub', 'plan: a wallet relay in an author\'s list is not asked for notes');
+
   // 7. no open socket to fall back on, and a fetch that throws
   dialled = []; log = [];
   const none = ProfileFix.wrap(() => Promise.resolve([ev('x', 1)]), envFor([], log));

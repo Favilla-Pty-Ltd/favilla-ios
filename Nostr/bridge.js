@@ -575,12 +575,15 @@
   //      relays the page reached over an already-open socket are asked again
   //      on new connections (an open socket can be dead after the app was
   //      in the background, or be at the relay's limit of subscriptions);
-  //   3. one line in the log says what came from where.
+  //   3. the fetch ends once notes have come and the relays have been quiet for
+  //      2.5 s, not after the page's full 8 s for a relay that never answers;
+  //   4. one line in the log says what came from where.
   // The page gets one merged, de-duplicated stream, as it expects.
   var ProfileFix = (function () {
-    var PROFILE_ONLY = /(^|\.)(purplepag\.es|user\.kindpag\.es|directory\.yabu\.me|profiles\.nostr1\.com|indexer\.coracle\.social)$/;
+    // Relays that hold no notes: profile directories, and wallet (NWC) relays some authors list.
+    var PROFILE_ONLY = /(^|\.)(purplepag\.es|user\.kindpag\.es|directory\.yabu\.me|profiles\.nostr1\.com|indexer\.coracle\.social)$|^nwc\./;
     var HUBS = ['wss://relay.primal.net', 'wss://nos.lol', 'wss://relay.damus.io', 'wss://nostr.mom'];
-    var CAP = 9, OF_THEIRS = 3;
+    var CAP = 9, OF_THEIRS = 3, QUIET_MS = 2500, QUIET_MIN_MS = 3000;
 
     // "wss://Relay.Example.com/%0A" -> "wss://relay.example.com"; null if it isn't a relay address.
     function norm(u) {
@@ -670,21 +673,22 @@
         openKeys.forEach(function (key) { isOpen[key] = 1; });
         var reuse = list.filter(function (u) { return isOpen[u]; });
         return new Promise(function (resolve) {
-          var seen = {}, all = [], viaNew = 0, viaOpen = 0, pending = 1, extra = false, done = false, lines = [], timer = null;
+          var seen = {}, all = [], viaNew = 0, viaOpen = 0, pending = 1, extra = false, done = false, lines = [], timer = null, quiet = null, lastAt = 0, early = false;
           function take(ev, src, isNew) {
-            if (!ev || !ev.id || seen[ev.id]) return;
-            seen[ev.id] = 1; all.push(ev);
+            if (done || !ev || !ev.id || seen[ev.id]) return;
+            seen[ev.id] = 1; all.push(ev); lastAt = Date.now();
             if (!isNew && src && isOpen[src]) viaOpen++;
             if (isNew) { viaNew++; try { if (env.hint) env.hint(ev.id, src); } catch (e) {} }
             if (onEvent) { try { onEvent(ev, src); } catch (e) {} }
           }
-          function fin() {
-            if (--pending > 0 || done) return;
-            done = true; clearTimeout(timer);
+          function fin(now) {
+            if (done) return;
+            if (now !== true && --pending > 0) return;
+            done = true; clearTimeout(timer); clearInterval(quiet);
             all.sort(function (a, b) { return (b.created_at || 0) - (a.created_at || 0); });
             try {
               env.log('[dev] profile notes of ' + author.slice(0, 8) + ': ' + all.length + (extra ? ' (' + viaNew + ' over new connections)' : '') + ' from ' + list.length + ' relays in ' +
-                ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (filter.until ? ', older page' : '') + ' [' + list.map(function (u) { return (isOpen[u] ? '*' : '') + short(u); }).join(' ') + ']');
+                ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (early ? ' (ended when the relays went quiet)' : '') + (filter.until ? ', older page' : '') + ' [' + list.map(function (u) { return (isOpen[u] ? '*' : '') + short(u); }).join(' ') + ']');
               lines.forEach(function (l) { env.log('[dev] profile, new connection ' + l); });
             } catch (e) {}
             resolve(all);
@@ -695,6 +699,17 @@
             fresh(reuse, filter, 4000, function (ev, u) { take(ev, u, true); }, function (u, s) { lines.push(short(u) + ': ' + s); }, env.WebSocket).then(fin, fin);
           }
           timer = setTimeout(function () { if (all.length === 0) again(); }, 1500);
+          // The page's fetch waits for every relay or its whole timeout (8 s), and
+          // one relay that never answers is common: "Loading" then stays up, and
+          // the next page of an endless scroll can't start. Once notes have come
+          // and nothing new for 2.5 s (3 s in at least), that is the answer.
+          quiet = setInterval(function () {
+            var now = Date.now();
+            if (done || !all.length || now - lastAt < QUIET_MS || now - t0 < QUIET_MIN_MS) return;
+            if (viaOpen === 0 && reuse.length && !extra && all.length < (filter.limit || 40)) { again(); return; }
+            if (extra && pending > 1 && now - lastAt < QUIET_MS + 1500) return;   // new connections still at work
+            early = true; fin(true);
+          }, 250);
           var p;
           try { p = orig.call(self, filter, list, timeoutMs, function (ev, src) { take(ev, src, false); }); } catch (e) { p = Promise.resolve([]); }
           Promise.resolve(p).then(function (evs) {

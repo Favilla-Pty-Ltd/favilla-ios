@@ -129,6 +129,20 @@ struct NostrClientView: UIViewRepresentable {
         #if targetEnvironment(simulator)
         // A sample run that opens a profile page (CI, against the real relays):
         // the profile-notes path in bridge.js, with its lines in the log.
+        if Demo.mode == "nostr-profiles" {
+            // Many profile pages one after another on one page load: does a later one come back empty?
+            let authors = ["3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d", "82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2",
+                           "32e1827635450ebb3c5a7d12c1f8e7b2b514439ac10a67eef3d9fd9c5c68e245", "04c915daefee38317fa734444acee390a8269fe5810b2241e5e6dd343dfbecc9",
+                           "97c70a44366a6535c145b333f973ea86dfdc2d7a99da618c40c64705ad98e322"]
+            for i in 0..<14 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 14 + Double(i) * 10) { [weak wv] in
+                    let a = authors[i % authors.count]
+                    wv?.evaluateJavaScript("(function(){ try { openUserProfilePage('\(a)'); } catch (e) { return 'threw ' + e; } var open = 0, all = 0; try { Object.keys(state.sockets).forEach(function(k){ all++; if (state.sockets[k] && state.sockets[k].readyState === 1) open++; }); } catch (e) {} return 'sockets open ' + open + ' of ' + all; })()") { r, e in
+                        Bunker.log("sample run: profile \(i + 1) of 14 (\(a.prefix(8))): \(r.map { "\($0)" } ?? "error \(String(describing: e))")")
+                    }
+                }
+            }
+        }
         if Demo.mode == "nostr-profile" {
             let author = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"   // a well-known public account
             DispatchQueue.main.asyncAfter(deadline: .now() + 14) { [weak wv] in

@@ -59,6 +59,7 @@ struct RootView: View {
         .accessibilityLabel("Favilla KEY, VAULT mode. Switch mode")
     }
     @State private var showModes = false
+    @State private var nativeChip = false       // bridge.js found no place for its chip in the page
 
     // The Nostr client keeps running under Home and VAULT once it has been
     // opened (21 Nov): going Home and back no longer loads the page again
@@ -158,9 +159,28 @@ struct RootView: View {
     private var nostrHome: some View {
         // The way to the other modes is a small NOSTR chip that bridge.js puts
         // beside the client's own wordmark (no banner): it opens the menu below.
-        NostrClientView(onOpenSettings: { showSettings = true }, onOpenModes: { showModes = true }, onPageColour: { pageColour = $0 }, routeText: $routeText)
+        NostrClientView(onOpenSettings: { showSettings = true }, onOpenModes: { showModes = true }, onChipMissing: { nativeChip = true },
+                        onPageColour: { pageColour = $0 }, routeText: $routeText)
             .ignoresSafeArea(.container, edges: .bottom)
             .ignoresSafeArea(.keyboard)
+            .overlay(alignment: .top) {
+                // Only if a newer page's header gave bridge.js no place for its chip.
+                if nativeChip {
+                    Button { showModes = true } label: {
+                        HStack(spacing: 6) {
+                            Text("NOSTR").font(Brand.font(11, .semibold)).tracking(2)
+                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundStyle(Brand.brass)
+                        .padding(.horizontal, 12).frame(minHeight: 32)
+                        .background(Brand.bg.opacity(0.9))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(Brand.brass, lineWidth: 1))
+                        .frame(minHeight: 44)
+                    }
+                    .accessibilityLabel("NOSTR mode. Switch mode")
+                }
+            }
             .background(Color(uiColor: pageColour).ignoresSafeArea())
             .preferredColorScheme(showClient ? (RootView.isLight(pageColour) ? .light : .dark) : nil)
             .confirmationDialog("Go to", isPresented: $showModes, titleVisibility: .visible) {

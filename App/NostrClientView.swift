@@ -18,6 +18,8 @@ import WebKit
 struct NostrClientView: UIViewRepresentable {
     var onOpenSettings: () -> Void
     var onOpenModes: () -> Void = {}
+    /// bridge.js couldn't put its NOSTR chip in the page's header.
+    var onChipMissing: () -> Void = {}
     /// The page's background colour (status bar strip) as it changes with the theme.
     var onPageColour: (UIColor) -> Void = { _ in }
     @Binding var routeText: String
@@ -308,6 +310,9 @@ struct NostrClientView: UIViewRepresentable {
                 parent.onOpenSettings()
             } else if message.name == "favillaApp", m["open"] as? String == "modes" {
                 parent.onOpenModes()
+            } else if message.name == "favillaApp", m["chip"] as? String == "missing" {
+                Bunker.log("client: no place for the NOSTR chip in the page's header; the app shows its own")
+                parent.onChipMissing()
             } else if message.name == "favillaApp", let id = m["youtube"] as? String {
                 WebExtras.playYouTube(id, from: webView)
             } else if message.name == "favillaApp", let pk = m["identity"] as? String {

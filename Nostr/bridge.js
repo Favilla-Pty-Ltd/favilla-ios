@@ -555,7 +555,15 @@
   }
   function modeChipSoon() {
     var tries = 0;
-    var t = setInterval(function () { if (addModeChip() || ++tries > 40) clearInterval(t); }, 500);
+    var t = setInterval(function () {
+      if (addModeChip()) { clearInterval(t); return; }
+      if (++tries > 40) {
+        // The page's header isn't what this expects (a newer page): the app
+        // shows its own chip over the client, so there is always a way Home.
+        clearInterval(t);
+        try { mh.favillaApp.postMessage({ chip: 'missing' }); } catch (e) {}
+      }
+    }, 500);
     addModeChip();
   }
 

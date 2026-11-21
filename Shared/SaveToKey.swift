@@ -172,22 +172,22 @@ struct SaveToKeyView: View {
                 }
             }
             Text(headline).font(Brand.headline).foregroundStyle(Brand.ink)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("SAVING FOR").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
-                Text(job.site).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
-                if !job.user.isEmpty, job.phase != .needUser { Text("as \(job.user)").font(Brand.body).foregroundStyle(Brand.grey) }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Brand.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            if job.phase != .needUser { siteCard }
 
             if case .failed(let why) = job.phase {
                 Text(why).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             } else if job.phase == .needUser {
-                UsernameField(text: $job.user, suggestions: job.suggestions)
-                Text("This form didn't give a username. The KEY saves the login under the one you put here.")
-                    .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                // The card scrolls with the box, so the box and the usernames to
+                // tap stay reachable above the keyboard.
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        siteCard
+                        UsernameField(text: $job.user, suggestions: job.suggestions)
+                        Text("This form didn't give a username. The KEY saves the login under the one you put here.")
+                            .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .scrollDismissesKeyboard(.interactively)
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepRow(text: s.0, state: s.1) }
@@ -211,6 +211,18 @@ struct SaveToKeyView: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Brand.bg)
+    }
+
+    private var siteCard: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("SAVING FOR").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
+                Text(job.site).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
+                if !job.user.isEmpty, job.phase != .needUser { Text("as \(job.user)").font(Brand.body).foregroundStyle(Brand.grey) }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Brand.card)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }
 

@@ -80,6 +80,14 @@ struct RootView: View {
     }
 
     var body: some View {
+        #if targetEnvironment(simulator)
+        if let sheet = DemoGallery.wanted { DemoGallery(name: sheet) } else { app }
+        #else
+        app
+        #endif
+    }
+
+    private var app: some View {
         ZStack {
             if clientAlive || showClient {
                 nostrHome

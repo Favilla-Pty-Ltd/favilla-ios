@@ -203,22 +203,18 @@ struct NewPasswordView: View {
                 }
             }
             Text(headline).font(Brand.headline).foregroundStyle(Brand.ink)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("NEW PASSWORD FOR").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
-                Text(job.site).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
-                if job.phase != .reading, job.phase != .choose, !job.user.isEmpty {
-                    Text("as \(job.user)").font(Brand.body).foregroundStyle(Brand.grey)
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Brand.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            // While choosing, the site's card scrolls with the choices, so the
+            // username box and the switches stay reachable above the keyboard.
+            if job.phase != .choose { siteCard }
 
             switch job.phase {
             case .reading:
                 HStack(spacing: 10) { ProgressView().tint(Brand.brass); Text("Reading this site's logins from the KEY").font(Brand.body).foregroundStyle(Brand.grey) }
-            case .choose: ScrollView(showsIndicators: false) { chooser }.scrollDismissesKeyboard(.interactively)
+            case .choose:
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 18) { siteCard; chooser }
+                }
+                .scrollDismissesKeyboard(.interactively)
             case .failed(let why):
                 Text(why).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             default:
@@ -249,6 +245,20 @@ struct NewPasswordView: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Brand.bg)
+    }
+
+    private var siteCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("NEW PASSWORD FOR").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
+            Text(job.site).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
+            if job.phase != .reading, job.phase != .choose, !job.user.isEmpty {
+                Text("as \(job.user)").font(Brand.body).foregroundStyle(Brand.grey)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Brand.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
     /// Which login gets the new password, or a new login for the site.

@@ -405,7 +405,10 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         let saveBody = try AppChannel.pwSaveBody(id: Data(count: 8), site: "a.com", user: "u", pass: "p", note: "", flags: 0x01).get()
         check(saveBody.last == 0x01 && saveBody.count == 8 + 6 + 2 + 2 + 1 + 1, "11bi: PW_SAVE carries the flags byte")
         NewPassword.recordFill(site: "a.com", user: "u", password: "p")
-        check(NewPassword.justFilled(site: "A.com", user: "U", password: "p") && !NewPassword.justFilled(site: "a.com", user: "u", password: "p"), "11bi: a fill is recognised once")
+        check(NewPassword.justFilled(site: "A.com", user: "U", password: "p") && NewPassword.justFilled(site: "https://www.a.com/login", user: "u", password: "p"), "11bi: a fill is recognised, also when iOS asks twice or names the site with www")
+        check(!NewPassword.justFilled(site: "a.com", user: "u", password: "other") && !NewPassword.justFilled(site: "b.com", user: "u", password: "p"), "11bi: another password or site is not")
+        check(NewPassword.name("My App", isApp: true) == "My App" && NewPassword.name("https://WWW.Shop.com/a", isApp: false) == "shop.com", "names: an app keeps its name, a site is its host")
+        check(NewPassword.same("my app", "My App", isApp: true) && NewPassword.same("www.shop.com", "shop.com", isApp: false) && !NewPassword.same("shop.com.au", "shop.com", isApp: false), "names: matched to the KEY's entries")
     }
     check(LinkLog.path(of: try ApiWire.encode(ApiRequest(method: "GET", host: "", path: "/api/pair/sas?pair_id=7", headers: [:], body: Data(), timeout: 5)).unwrap()) == "GET /api/pair/sas", "log: path without its query")
 } catch { check(false, "issue #9 tests threw \(error)") }

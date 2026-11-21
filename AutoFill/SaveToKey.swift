@@ -25,10 +25,27 @@ final class SaveJob: ObservableObject {
     private var pass: String
     private var session: KeySession?
 
-    init(site: String, user: String, pass: String) {
-        self.site = NewPassword.host(site)
+    private let isApp: Bool
+
+    init(site: String, user: String, pass: String, isApp: Bool = false) {
+        self.site = NewPassword.name(site, isApp: isApp)
+        self.isApp = isApp
         self.user = user
         self.pass = pass
+    }
+
+    /// One request; if the link went while the sheet waited on the owner (nothing
+    /// was sent), once more on a new session.
+    private func ask(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer {
+        if let s = session {
+            do { return try await s.request(cmd, body, timeout: timeout) }
+            catch { guard KeySession.neverSent(error) else { throw error }; s.close(); session = nil }
+        }
+        guard let c = Credentials.load() else { throw KeySession.Failure("Pair the app with the KEY first: open Favilla and follow Your KEY.") }
+        let s = KeySession(c)
+        session = s
+        try await s.open()
+        return try await s.request(cmd, body, timeout: timeout)
     }
 
     func run() async {
@@ -50,7 +67,7 @@ final class SaveJob: ObservableObject {
                 }
                 let page = try AppChannel.parseList(a.body)
                 for e in page.entries where !e.passkey && !e.site.hasSuffix(" (old)") {
-                    if NewPassword.host(e.site) == site { here.append(e) }
+                    if NewPassword.same(e.site, site, isApp: isApp) { here.append(e) }
                     if !e.user.isEmpty { seen[e.user, default: 0] += 1 }
                 }
                 if !page.more || page.entries.isEmpty { break }
@@ -77,7 +94,7 @@ final class SaveJob: ObservableObject {
                 case .success(let b): body = b
                 case .failure(let p): phase = .failed(AppChannel.pwProblemText(p)); return
                 }
-                let a = try await s.request(AppChannel.cPwSave, body, timeout: 10)
+                let a = try await ask(AppChannel.cPwSave, body, timeout: 10)
                 let st = a.rsp == AppChannel.rAck ? (a.body.first ?? 0xFF) : 0xFF
                 if a.rsp == AppChannel.rErr { phase = .failed(a.body.first == 0x04 ? "Saving to the KEY needs its VAULT mode." : AppChannel.pwStatusText(a.body.first ?? 0xFF)); return }
                 if st == 0x07, flags != nil { flags = nil; continue }   // a KEY before 11bi: save without keeping the old one
@@ -89,17 +106,20 @@ final class SaveJob: ObservableObject {
             let until = Date().addingTimeInterval(170)
             while Date() < until {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
-                let a = try await s.request(AppChannel.cPwResult, Data(), timeout: 6)
+                let a = try await ask(AppChannel.cPwResult, Data(), timeout: 6)
                 guard a.rsp == AppChannel.rAck, let r = AppChannel.parsePwResult(a.body) else { continue }
                 switch r.state {
                 case 0x00: continue
-                case 0x01: phase = .saved(change: change); return
+                case 0x01:
+                    // iOS can ask again for the same form: that one is skipped.
+                    NewPassword.recordFill(site: site, user: user, password: pass)
+                    phase = .saved(change: change); return
                 case 0x02: phase = .failed("Cancelled on the KEY. Nothing was saved."); return
                 case 0x03: phase = .failed("No answer on the KEY in time. Nothing was saved."); return
                 case 0x04: phase = .failed("That login changed on the KEY meanwhile. Nothing was saved."); return
                 case 0x05:
                     phase = .failed(r.reason == 0x17
-                        ? "An old copy of this login is already waiting on the KEY. Finish it first (Accounts in Favilla, or the copy's MORE on the KEY: NEW ONE WORKS), then save again."
+                        ? "An old copy of this login is already waiting on the KEY. Finish it first (open Favilla's Accounts and tap It works, or on the KEY the copy's MORE: NEW ONE WORKS), then save again."
                         : AppChannel.pwStatusText(r.reason))
                     return
                 default: phase = .failed("The KEY lost the request. Nothing was saved."); return
@@ -174,7 +194,7 @@ struct SaveToKeyView: View {
                 }
                 .padding(.horizontal, 2)
                 if case .asking(true) = job.phase {
-                    Text("Once the site has taken the new password, finish it in Favilla's Accounts: NEW ONE WORKS drops the old copy.")
+                    Text("Once you've signed in with the new password, open Favilla's Accounts and tap It works: the KEY then drops the old copy.")
                         .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
                 }
             }

@@ -171,8 +171,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             extensionContext.completeSavePasswordRequest(completionHandler: nil)
             return
         }
-        let (site, _) = Self.pick([request.serviceIdentifier])
-        let job = SaveJob(site: site, user: request.credential.user, pass: request.credential.password)
+        let (site, isApp) = Self.pick([request.serviceIdentifier])
+        let job = SaveJob(site: site, user: request.credential.user, pass: request.credential.password, isApp: isApp)
         children.forEach { $0.view.removeFromSuperview(); $0.removeFromParent() }
         let view = SaveToKeyView(job: job, onDone: { [weak self] in
             self?.closed = true
@@ -193,8 +193,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     @available(iOS 26.2, *)
     private func alreadyOnKey(_ r: ASSavePasswordRequest) -> Bool {
-        let (site, _) = Self.pick([r.serviceIdentifier])
-        return NewPassword.justFilled(site: KeyLink.cleanSite(site) ?? site, user: r.credential.user, password: r.credential.password)
+        let (site, isApp) = Self.pick([r.serviceIdentifier])
+        return NewPassword.justFilled(site: NewPassword.name(site, isApp: isApp), user: r.credential.user, password: r.credential.password)
     }
 
     // Settings > AutoFill & Passwords > Favilla: the link check (and pairing).
@@ -218,7 +218,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         watch = nil
         retry = {}
         link.cancel()
-        let job = ChangeJob(site: host)
+        let job = ChangeJob(site: host, isApp: link.siteIsAppName)
         changeJob = job
         children.forEach { $0.view.removeFromSuperview(); $0.removeFromParent() }
         let view = NewPasswordView(job: job, onCancel: { [weak self] in

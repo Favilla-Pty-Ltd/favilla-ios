@@ -14,6 +14,11 @@ import Foundation
 
 final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, @unchecked Sendable {
     struct Failure: Error, CustomStringConvertible { let description: String; init(_ s: String) { description = s } }
+    static let linkClosed = "The link to the KEY closed."
+    /// True for the failure thrown before a request went out: the link had
+    /// already gone (a sheet left waiting on the owner). Nothing reached the
+    /// KEY, so the same request can go again on a new session.
+    static func neverSent(_ e: Error) -> Bool { (e as? Failure)?.description == linkClosed }
 
     private let q = DispatchQueue(label: "io.favillakey.keysession")
     private let creds: Credentials
@@ -99,7 +104,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         try await withCheckedThrowingContinuation { (k: CheckedContinuation<AppChannel.Answer, Error>) in
             q.async {
                 guard !self.closed, let p = self.peripheral, p.state == .connected, self.chanIn != nil else {
-                    k.resume(throwing: Failure("The link to the KEY closed.")); return
+                    k.resume(throwing: Failure(KeySession.linkClosed)); return
                 }
                 guard self.waiting == nil else { k.resume(throwing: Failure("busy")); return }
                 let ctr = Credentials.nextCounter()

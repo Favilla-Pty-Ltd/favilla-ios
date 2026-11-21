@@ -153,8 +153,9 @@ enum NewPassword {
     /// iOS's save after the KEY's own NEW LOGIN or NEW PASSWORD (or any fill)
     /// would ask the owner to save what the KEY already holds. For two minutes
     /// after a fill, a keyed hash of what was filled (never the password) is
-    /// kept in the app group so that save can be skipped. Key and hash go
-    /// together after the two minutes or the first check.
+    /// kept in the app group so that save can be skipped. iOS can ask more than
+    /// once for one form (21 Nov), so the memo stays for its two minutes; key
+    /// and hash go together when it is checked after that.
     private static let store = UserDefaults(suiteName: "group.io.favillakey.app") ?? .standard
     private static let memoKey = "fillMemo"
 
@@ -179,15 +180,28 @@ enum NewPassword {
 
     /// True when this exact login was filled from the KEY in the last two minutes.
     static func justFilled(site: String, user: String, password: String) -> Bool {
-        defer { store.removeObject(forKey: memoKey) }
         guard let m = store.dictionary(forKey: memoKey), let k = m["k"] as? Data, let mac = m["m"] as? Data,
-              let at = m["at"] as? Double, Date().timeIntervalSince1970 - at < 120 else { return false }
+              let at = m["at"] as? Double, Date().timeIntervalSince1970 - at < 120 else {
+            store.removeObject(forKey: memoKey)
+            return false
+        }
         return tag(k, site, user, password) == mac
+    }
+
+    /// The name the KEY files a login under: a website's host, or an app's name
+    /// as iOS gives it (case kept, as the fill asks for it).
+    static func name(_ site: String, isApp: Bool) -> String {
+        isApp ? (KeyLink.cleanAppName(site) ?? site) : host(site)
+    }
+    /// Whether a KEY entry's site is this name (a host, or an app's name whatever its case).
+    static func same(_ entrySite: String, _ name: String, isApp: Bool) -> Bool {
+        isApp ? entrySite.lowercased() == name.lowercased() : host(entrySite) == name
     }
 
     private static func tag(_ k: Data, _ site: String, _ user: String, _ pass: String) -> Data {
         var h = HMAC<SHA256>(key: SymmetricKey(data: k))
-        for part in [site.lowercased(), user.lowercased(), pass] { h.update(data: Data(part.utf8)); h.update(data: Data([0])) }
+        // host(): "www.a.com", "A.com" and "https://a.com/x" are one site here.
+        for part in [host(site), user.lowercased(), pass] { h.update(data: Data(part.utf8)); h.update(data: Data([0])) }
         return Data(h.finalize())
     }
 

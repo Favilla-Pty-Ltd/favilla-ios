@@ -30,11 +30,30 @@ final class ChangeJob: ObservableObject {
     private static let store = UserDefaults(suiteName: "group.io.favillakey.app") ?? .standard
     static func fillDefault(new: Bool) -> Bool { (store.object(forKey: new ? "fillOnNew" : "fillOnChange") as? Bool) ?? new }
     static let copySeconds: TimeInterval = 120
+    /// The name the KEY files this login under (a host, or an app's name).
     let site: String
+    private let isApp: Bool
     private var session: KeySession?
     private(set) var result: (user: String, password: String)?
 
-    init(site: String) { self.site = site }
+    init(site: String, isApp: Bool = false) {
+        self.site = NewPassword.name(site, isApp: isApp)
+        self.isApp = isApp
+    }
+
+    /// One request; if the link went while the sheet waited on the owner (nothing
+    /// was sent), once more on a new session.
+    private func ask(_ cmd: UInt8, _ body: Data, timeout: TimeInterval) async throws -> AppChannel.Answer {
+        if let s = session {
+            do { return try await s.request(cmd, body, timeout: timeout) }
+            catch { guard KeySession.neverSent(error) else { throw error }; s.close(); session = nil }
+        }
+        guard let c = Credentials.load() else { throw KeySession.Failure("Pair the app with the KEY first: open Favilla and follow Your KEY.") }
+        let s = KeySession(c)
+        session = s
+        try await s.open()
+        return try await s.request(cmd, body, timeout: timeout)
+    }
 
     var isNew: Bool { pick >= matches.count }
     var user: String { isNew ? newUser.trimmingCharacters(in: .whitespaces) : matches[pick].user }
@@ -52,7 +71,6 @@ final class ChangeJob: ObservableObject {
             try await s.open()
             var found: [AppChannel.ListEntry] = [], start = 0, busy = 0
             var seen: [String: Int] = [:]
-            let want = NewPassword.host(site)
             while true {
                 let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start), timeout: 35)
                 if a.rsp == AppChannel.rErr, a.body.first == 0x06, busy < 10 {
@@ -64,7 +82,7 @@ final class ChangeJob: ObservableObject {
                 if a.rsp == AppChannel.rErr { phase = .failed(ChangeJob.vaultOnly(a.body.first ?? 0xFF)); close(); return }
                 let page = try AppChannel.parseList(a.body)
                 for e in page.entries where !e.passkey && !e.user.isEmpty { seen[e.user, default: 0] += 1 }
-                found += page.entries.filter { !$0.passkey && $0.id != nil && !$0.site.hasSuffix(" (old)") && NewPassword.host($0.site) == want }
+                found += page.entries.filter { !$0.passkey && $0.id != nil && !$0.site.hasSuffix(" (old)") && NewPassword.same($0.site, site, isApp: isApp) }
                 if !page.more || page.entries.isEmpty { break }
                 start += page.entries.count
             }
@@ -85,11 +103,11 @@ final class ChangeJob: ObservableObject {
         let user = self.user
         phase = .making
         do {
-            guard let s = session else { phase = .failed("The link to the KEY closed. Try again."); return }
-            // 1. The password, from the KEY's generator.
+            // 1. The password, from the KEY's generator. (The sheet may have sat
+            // on the choice for a while: a link that went is opened again.)
             var rules = NewPassword.Rules()
             if plain { rules.required = 0x07; rules.allowed = 0x07 }
-            let g = try await s.request(AppChannel.cGenPw, NewPassword.genBody(rules, kind: plain ? 0x02 : 0x01), timeout: 8)
+            let g = try await ask(AppChannel.cGenPw, NewPassword.genBody(rules, kind: plain ? 0x02 : 0x01), timeout: 8)
             if g.rsp == AppChannel.rErr {
                 phase = .failed(g.body.first == 0x07 ? "This KEY can't make passwords for the app yet: it needs firmware 11bi." : ChangeJob.vaultOnly(g.body.first ?? 0xFF)); close(); return
             }
@@ -102,11 +120,11 @@ final class ChangeJob: ObservableObject {
             // 2. Save it: CHANGE ENTRY keeping the old one as (old), or NEW ENTRY.
             let entry = change ? matches[pick] : nil
             let body: Data
-            switch AppChannel.pwSaveBody(id: entry?.id, site: entry?.site ?? NewPassword.host(site), user: user, pass: pass, note: "", flags: change ? 0x01 : nil) {
+            switch AppChannel.pwSaveBody(id: entry?.id, site: entry?.site ?? site, user: user, pass: pass, note: "", flags: change ? 0x01 : nil) {
             case .success(let b): body = b
             case .failure(let p): phase = .failed(AppChannel.pwProblemText(p)); close(); return
             }
-            let a = try await s.request(AppChannel.cPwSave, body, timeout: 10)
+            let a = try await ask(AppChannel.cPwSave, body, timeout: 10)
             if a.rsp == AppChannel.rErr { phase = .failed(ChangeJob.vaultOnly(a.body.first ?? 0xFF)); close(); return }
             guard a.rsp == AppChannel.rAck, a.body.first == 0x00 else { phase = .failed(AppChannel.pwStatusText(a.body.first ?? 0xFF)); close(); return }
             phase = .asking(change: change)
@@ -114,7 +132,7 @@ final class ChangeJob: ObservableObject {
             let until = Date().addingTimeInterval(170)
             while Date() < until {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
-                let r0 = try await s.request(AppChannel.cPwResult, Data(), timeout: 6)
+                let r0 = try await ask(AppChannel.cPwResult, Data(), timeout: 6)
                 guard r0.rsp == AppChannel.rAck, let r = AppChannel.parsePwResult(r0.body) else { continue }
                 switch r.state {
                 case 0x00: continue
@@ -129,7 +147,7 @@ final class ChangeJob: ObservableObject {
                 case 0x03: phase = .failed("No answer on the KEY in time. Nothing was changed."); close(); return
                 case 0x05:
                     phase = .failed(r.reason == 0x17
-                        ? "An earlier change to this login is still waiting. In Favilla's Accounts tap New one works for it (or put the old one back on the KEY), then try again."
+                        ? "An earlier change to this login is still waiting. Open Favilla's Accounts and tap It works for it (or put the old one back on the KEY), then try again."
                         : AppChannel.pwStatusText(r.reason))
                     close(); return
                 default: phase = .failed("The KEY lost the request. Nothing was changed."); close(); return
@@ -187,7 +205,7 @@ struct NewPasswordView: View {
             Text(headline).font(Brand.headline).foregroundStyle(Brand.ink)
             VStack(alignment: .leading, spacing: 8) {
                 Text("NEW PASSWORD FOR").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
-                Text(NewPassword.host(job.site)).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
+                Text(job.site).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
                 if job.phase != .reading, job.phase != .choose, !job.user.isEmpty {
                     Text("as \(job.user)").font(Brand.body).foregroundStyle(Brand.grey)
                 }

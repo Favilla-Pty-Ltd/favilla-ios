@@ -59,6 +59,17 @@ struct RootView: View {
         .accessibilityLabel("Favilla KEY, VAULT mode. Switch mode")
     }
     @State private var showModes = false
+
+    // The Nostr client keeps running under Home and VAULT once it has been
+    // opened (21 Nov): going Home and back no longer loads the page again
+    // (every load redials each relay and decrypts the messages afresh). It is
+    // started anew if the KEY went to VAULT mode meanwhile, and let go after
+    // ten minutes out of sight.
+    @State private var clientAlive = false
+    @State private var clientRun = 0            // a new number is a new web view
+    @State private var clientStale = false      // the KEY was seen in VAULT mode since the client started
+    @State private var clientHiddenAt: Date?
+    private var showClient: Bool { door == .nostr && ready(.nostr) }
     private func go(_ d: Door?) { Bunker.log("app: door \(door?.rawValue ?? "home") -> \(d?.rawValue ?? "home")"); door = d }
     private var settingsMode: AppMode { door == .vault ? .vault : door == .nostr ? .nostr : mode }
 
@@ -70,20 +81,44 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
+            if clientAlive || showClient {
+                nostrHome
+                    .id(clientRun)
+                    .opacity(showClient ? 1 : 0)
+                    .allowsHitTesting(showClient)
+                    .accessibilityHidden(!showClient)
+            }
             if let d = door {
                 if !ready(d) {
                     SwitchPage(target: d, route: route, link: link, onHome: { go(nil) }, onSettings: { showSettings = true }).transition(.opacity)
-                } else if d == .nostr {
-                    nostrHome.transition(.opacity)
-                } else {
+                } else if d == .vault {
                     AccountsView(home: true, onSettings: { showSettings = true }, modeMenu: AnyView(vaultMenu)).transition(.opacity)
                 }
+                // .nostr and ready: the client, above.
             } else {
                 ModeHome(link: link, route: route, onSettings: { showSettings = true }, open: { go($0) }).transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.3), value: door)
         .animation(.easeInOut(duration: 0.3), value: door.map(ready))
+        .onAppear { if showClient { clientAlive = true } }
+        .onChange(of: showClient) { _, on in
+            if on {
+                if clientStale { clientStale = false; clientRun += 1; Bunker.log("app: the Nostr client starts anew (the KEY was in VAULT mode meanwhile)") }
+                clientAlive = true
+                clientHiddenAt = nil
+            } else {
+                clientHiddenAt = Date()
+                // A text box in the page must not keep the keyboard up under another page.
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        }
+        .onChange(of: life.isVault) { _, vault in if vault, clientAlive { clientStale = true } }
+        .task(id: clientHiddenAt) {
+            guard clientHiddenAt != nil else { return }
+            try? await Task.sleep(nanoseconds: 600_000_000_000)
+            if !Task.isCancelled, !showClient, clientAlive { clientAlive = false; clientStale = false; Bunker.log("app: the Nostr client let go after ten minutes out of sight") }
+        }
         .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route); paired = KeyLink.appPaired }) {
             ThisPhoneView(link: link, route: $route, mode: settingsMode, door: door, go: { go($0) })
         }
@@ -119,7 +154,7 @@ struct RootView: View {
             .ignoresSafeArea(.container, edges: .bottom)
             .ignoresSafeArea(.keyboard)
             .background(Color(uiColor: pageColour).ignoresSafeArea())
-            .preferredColorScheme(RootView.isLight(pageColour) ? .light : .dark)
+            .preferredColorScheme(showClient ? (RootView.isLight(pageColour) ? .light : .dark) : nil)
             .confirmationDialog("Go to", isPresented: $showModes, titleVisibility: .visible) {
                 Button("VAULT") { go(.vault) }
                 Button("Home") { go(nil) }

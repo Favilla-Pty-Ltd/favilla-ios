@@ -114,7 +114,13 @@ const OURS = ['wss://relay.favillakey.io', 'wss://nos.lol', 'wss://nostr.mom', '
   const hang = ProfileFix.wrap((f, list, ms, on) => { forty.forEach((e) => on(e, 'wss://nos.lol')); return sleep(6000).then(() => forty); }, envFor(['wss://nos.lol'], log));
   const o6c = await hang({ kinds: [1], authors: [A], limit: 40 }, OURS, 8000, (e) => seen.push(e.id));
   const took = Date.now() - t0;
-  check(o6c.length === 40 && seen.length === 40 && took >= 2900 && took < 3600 && dialled.length === 0, 'a relay that never answers: 40 notes and done at about 3 s (' + took + ' ms)');
+  check(o6c.length === 40 && seen.length === 40 && took >= 2900 && took < 3600 && dialled.length === 0, 'a relay that never answers: a full page of 40 and done at about 3 s (' + took + ' ms)');
+  t0 = Date.now();
+  const twenty = forty.slice(0, 20);
+  const hang2 = ProfileFix.wrap((f, list, ms, on) => { twenty.forEach((e) => on(e, 'wss://nos.lol')); return sleep(7000).then(() => twenty); }, envFor(['wss://nos.lol'], []));
+  const o6d = await hang2({ kinds: [1], authors: [A], limit: 40 }, OURS, 8000, null);
+  const took2 = Date.now() - t0;
+  check(o6d.length === 20 && took2 >= 5400 && took2 < 6100, 'a relay that never answers: a short page waits longer for a slow relay, about 5.5 s (' + took2 + ' ms)');
   check(/ended when the relays went quiet/.test(log[0]), 'a relay that never answers: the log says it ended early');
   check(ProfileFix.plan(['wss://nwc.primal.net/abc', 'wss://relay.mostr.pub'], OURS, ['wss://nwc.primal.net/abc', 'wss://relay.mostr.pub'], [])[0] === 'wss://relay.mostr.pub', 'plan: a wallet relay in an author\'s list is not asked for notes');
 

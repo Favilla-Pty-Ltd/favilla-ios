@@ -584,14 +584,15 @@
   //      on new connections (an open socket can be dead after the app was
   //      in the background, or be at the relay's limit of subscriptions);
   //   3. the fetch ends once notes have come and the relays have been quiet for
-  //      2.5 s, not after the page's full 8 s for a relay that never answers;
+  //      2.5 s (from 3 s in for a full page, 5.5 s for a short one), not after
+  //      the page's full 8 s for a relay that never answers;
   //   4. one line in the log says what came from where.
   // The page gets one merged, de-duplicated stream, as it expects.
   var ProfileFix = (function () {
     // Relays that hold no notes: profile directories, and wallet (NWC) relays some authors list.
     var PROFILE_ONLY = /(^|\.)(purplepag\.es|user\.kindpag\.es|directory\.yabu\.me|profiles\.nostr1\.com|indexer\.coracle\.social)$|^nwc\./;
     var HUBS = ['wss://relay.primal.net', 'wss://nos.lol', 'wss://relay.damus.io', 'wss://nostr.mom'];
-    var CAP = 9, OF_THEIRS = 3, QUIET_MS = 2500, QUIET_MIN_MS = 3000;
+    var CAP = 9, OF_THEIRS = 3, QUIET_MS = 2500, QUIET_MIN_MS = 3000, QUIET_MIN_SHORT_MS = 5500;
 
     // "wss://Relay.Example.com/%0A" -> "wss://relay.example.com"; null if it isn't a relay address.
     function norm(u) {
@@ -713,7 +714,10 @@
           // and nothing new for 2.5 s (3 s in at least), that is the answer.
           quiet = setInterval(function () {
             var now = Date.now();
-            if (done || !all.length || now - lastAt < QUIET_MS || now - t0 < QUIET_MIN_MS) return;
+            // A full page can end at 3 s; a short one waits to 5.5 s, since a slow
+            // relay's notes would otherwise be missing from it for good.
+            var least = all.length >= (filter.limit || 40) ? QUIET_MIN_MS : QUIET_MIN_SHORT_MS;
+            if (done || !all.length || now - lastAt < QUIET_MS || now - t0 < least) return;
             if (viaOpen === 0 && reuse.length && !extra && all.length < (filter.limit || 40)) { again(); return; }
             if (extra && pending > 1 && now - lastAt < QUIET_MS + 1500) return;   // new connections still at work
             early = true; fin(true);

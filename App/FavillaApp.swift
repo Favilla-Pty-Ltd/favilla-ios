@@ -71,7 +71,11 @@ struct RootView: View {
     @State private var clientStale = false      // the KEY was seen in VAULT mode since the client started
     @State private var clientHiddenAt: Date?
     private var showClient: Bool { door == .nostr && ready(.nostr) }
-    private func go(_ d: Door?) { Bunker.log("app: door \(door?.rawValue ?? "home") -> \(d?.rawValue ?? "home")"); door = d }
+    private func go(_ d: Door?) {
+        Bunker.log("app: door \(door?.rawValue ?? "home") -> \(d?.rawValue ?? "home")")
+        if let d { UserDefaults.standard.set(d.rawValue, forKey: "lastDoor") }
+        door = d
+    }
     private var settingsMode: AppMode { door == .vault ? .vault : door == .nostr ? .nostr : mode }
 
     /// The app's shape follows the KEY's mode (AppShape.swift).
@@ -110,7 +114,17 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: door)
         .animation(.easeInOut(duration: 0.3), value: door.map(ready))
-        .onAppear { if showClient { clientAlive = true } }
+        .onAppear {
+            if showClient { clientAlive = true }
+            // Opened on Home, NOSTR was the last door used and the KEY is where
+            // NOSTR needs it: the client starts loading now, under the home page,
+            // so it is there when NOSTR is tapped.
+            else if door == nil, Demo.mode == nil, UserDefaults.standard.string(forKey: "lastDoor") == Door.nostr.rawValue, ready(.nostr) {
+                clientAlive = true
+                clientHiddenAt = Date()
+                Bunker.log("app: the Nostr client loads under the home page (NOSTR was the last door)")
+            }
+        }
         .onChange(of: showClient) { _, on in
             if on {
                 if clientStale { clientStale = false; clientRun += 1; Bunker.log("app: the Nostr client starts anew (the KEY was in VAULT mode meanwhile)") }

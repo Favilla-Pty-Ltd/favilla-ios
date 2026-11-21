@@ -32,6 +32,7 @@ enum CipherDay {
     @MainActor private static var cached: (Data, Date)?      // the last text fetched
     @MainActor private static var refused: Data?             // a text the KEY turned down: not sent again
     @MainActor private static var failedAt = Date.distantPast
+    @MainActor private static var loggedHeight: UInt32 = 0   // the last height written to the log
 
     /// Fetch and hand over. `fresh`: the KEY asked (it holds no current block),
     /// so a text fetched earlier is not good enough. One line in the bunker log.
@@ -59,7 +60,12 @@ enum CipherDay {
         do {
             let a = try await k.request(cDay, text, timeout: 6)
             if a.rsp == AppChannel.rAck, let p = parse(a.body) {
-                if p.status == 0x00 { refused = nil; Bunker.log("CIPHER day block (\(why)): height \(p.height) taken by the KEY") }
+                if p.status == 0x00 {
+                    refused = nil
+                    // Sent on every connect; one line per block is enough in the log (21 Nov).
+                    if fresh || p.height != loggedHeight { Bunker.log("CIPHER day block (\(why)): height \(p.height) taken by the KEY") }
+                    loggedHeight = p.height
+                }
                 else { refused = text; cached = nil; Bunker.log(String(format: "CIPHER day block (\(why)): the KEY refused it (0x%02X)", p.status)) }
             } else if a.rsp == AppChannel.rErr, a.body.first == 0x04 {
                 Bunker.log("CIPHER day block (\(why)): the KEY isn't in NOSTR Bluetooth mode")

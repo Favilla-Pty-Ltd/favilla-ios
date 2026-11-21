@@ -26,6 +26,8 @@ jobs:
           X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
           sudo xcode-select -s "$X"
           xcodebuild -version
+      - name: Test the profile-notes fix in bridge.js
+        run: node Tests/profile_fix_test.js
       - name: Test CBOR and the passkey framing
         run: |
           swiftc -O Shared/CBOR.swift Shared/Ctap.swift Shared/AppChannel.swift Shared/KeyLink.swift Shared/KeySession.swift Shared/Bunker.swift Shared/VaultImport.swift Shared/NewPassword.swift Shared/CipherDay.swift App/VaultCourier.swift App/KeyApi.swift App/NostrLink.swift App/LinkLog.swift Tests/main.swift -o ctaptests

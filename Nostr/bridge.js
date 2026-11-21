@@ -559,61 +559,173 @@
     addModeChip();
   }
 
-  // ---- A line in the log for each profile page's notes fetch (21 Nov): how
-  // many notes came back, from how many relays (and how many of those were
-  // sockets the page already had open), and how long it took. The page logs
-  // nothing here, and "a profile shows no notes" can't be told apart otherwise.
-  // A profile that came back with almost nothing: ask each of the same relays
-  // again on a new connection (5 notes) and log what each one says. Notes here
-  // but none on the page = the page's own open connections are the trouble;
-  // nothing here either = the relay's answer (its reason is logged).
-  function probeRelays(author, list) {
-    list.forEach(function (u) {
-      var name = u.replace(/^wss?:\/\//, ''), fin = false, n = 0, t0 = Date.now(), ws, timer;
-      function end(what) {
-        if (fin) return; fin = true;
-        clearTimeout(timer);
-        try { ws.close(); } catch (e) {}
-        console.warn('[dev] profile probe ' + name + ': ' + what + ', ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
-      }
-      try { ws = new WebSocket(u); } catch (e) { fin = true; console.warn('[dev] profile probe ' + name + ': not an address the phone can dial'); return; }
-      timer = setTimeout(function () { end(n + ' notes, no end of list'); }, 6000);
-      ws.onopen = function () { try { ws.send(JSON.stringify(['REQ', 'fvp', { kinds: [1], authors: [author], limit: 5 }])); } catch (e) { end('could not send'); } };
-      ws.onmessage = function (e) {
-        try {
-          var m = JSON.parse(e.data);
-          if (m[0] === 'EVENT') n++;
-          else if (m[0] === 'EOSE') end(n + ' notes');
-          else if (m[0] === 'CLOSED' || m[0] === 'NOTICE' || m[0] === 'AUTH') end(n + ' notes, ' + m[0] + ' ' + String(m[m.length - 1]).slice(0, 60));
-        } catch (x) {}
+  // <profile-fix>
+  // ---- Profile pages that show no notes (21 Nov 2026, firmware issue #50) ----
+  // The page asks at most six relays for a profile's notes, the author's own
+  // first, on whatever sockets it already has open. On the bench that gave 40
+  // notes at one time and 0 or 1 two hours later from the same relays, and
+  // nothing at all when the author's list was five odd relays. Until the page
+  // itself is changed, its fetch (fetchEventsAcrossRelays, for a kind 1 filter
+  // with one author) goes through here:
+  //   1. the relay list is cleaned (trimmed, no trailing slash, no stray line
+  //      break, each relay once), keeps at most 3 of the author's relays, drops
+  //      relays that only hold profiles, and always includes all of ours;
+  //   2. if nothing has come back in 1.5 s, or by the end there are fewer than
+  //      5 notes, or a short page with none of it from the open sockets, the
+  //      relays the page reached over an already-open socket are asked again
+  //      on new connections (an open socket can be dead after the app was
+  //      in the background, or be at the relay's limit of subscriptions);
+  //   3. one line in the log says what came from where.
+  // The page gets one merged, de-duplicated stream, as it expects.
+  var ProfileFix = (function () {
+    var PROFILE_ONLY = /(^|\.)(purplepag\.es|user\.kindpag\.es|directory\.yabu\.me|profiles\.nostr1\.com|indexer\.coracle\.social)$/;
+    var HUBS = ['wss://relay.primal.net', 'wss://nos.lol', 'wss://relay.damus.io', 'wss://nostr.mom'];
+    var CAP = 9, OF_THEIRS = 3;
+
+    // "wss://Relay.Example.com/%0A" -> "wss://relay.example.com"; null if it isn't a relay address.
+    function norm(u) {
+      try {
+        u = String(u).trim();
+        if (!/^wss:\/\//i.test(u)) return null;
+        var x = new URL(u);
+        if (!x.hostname || x.username || x.password) return null;
+        var path = x.pathname;
+        try { path = decodeURIComponent(path); } catch (e) {}
+        path = path.replace(/[\s\u0000-\u001f]+/g, '').replace(/\/+$/, '');
+        if (/[^\w\-.~\/]/.test(path)) return null;
+        return 'wss://' + x.host.toLowerCase() + path + (x.search || '');
+      } catch (e) { return null; }
+    }
+    function hostOf(n) { return n.replace(/^wss:\/\//, '').split(/[\/:?]/)[0]; }
+    function short(u) { return String(u).replace(/^wss?:\/\//, '').replace(/\/+$/, ''); }
+
+    // The relays to ask, in order: up to 3 of the author's (not ours, not
+    // profile-only), all of ours, then well-known hubs; CAP at most. A relay
+    // the page already has an open socket to is named the way that socket is
+    // filed, so the page's fetch finds and reuses it.
+    function plan(asked, ours, theirs, openKeys) {
+      var open = {}, mine = {}, seen = {}, out = [], k = 0;
+      (openKeys || []).forEach(function (key) { var n = norm(key); if (n && !open[n]) open[n] = key; });
+      (ours || []).forEach(function (u) { var n = norm(u); if (n) mine[n] = 1; });
+      function add(u) { var n = norm(u); if (!n || seen[n]) return false; seen[n] = 1; out.push(open[n] || n); return true; }
+      ((theirs && theirs.length) ? theirs : (asked || [])).forEach(function (u) {
+        var n = norm(u);
+        if (!n || mine[n] || k >= OF_THEIRS || PROFILE_ONLY.test(hostOf(n))) return;
+        if (add(u)) k++;
+      });
+      (ours || []).forEach(add);
+      HUBS.forEach(add);
+      return out.slice(0, CAP);
+    }
+
+    function isProfile(f) {
+      return !!(f && !Array.isArray(f) && f.authors && f.authors.length === 1 && f.kinds && f.kinds.length === 1 && f.kinds[0] === 1 && !f['#e'] && !f.ids);
+    }
+
+    // The same question on new connections. take(ev, url) per note; said(url, text) per relay.
+    function fresh(urls, filter, ms, take, said, WS) {
+      return new Promise(function (resolve) {
+        var left = urls.length;
+        if (!left) { resolve(); return; }
+        urls.forEach(function (u) {
+          var fin = false, n = 0, t0 = Date.now(), ws, timer, sub = 'fvp-' + Math.random().toString(36).slice(2, 8);
+          function end(what) {
+            if (fin) return; fin = true;
+            clearTimeout(timer);
+            try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(['CLOSE', sub])); } catch (e) {}
+            try { ws.close(); } catch (e) {}
+            said(u, what + ', ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
+            if (--left === 0) resolve();
+          }
+          try { ws = new WS(u); } catch (e) { end('not an address the phone can dial'); return; }
+          timer = setTimeout(function () { end(n + ' notes, no end of list'); }, ms);
+          ws.onopen = function () { try { ws.send(JSON.stringify(['REQ', sub, filter])); } catch (e) { end('could not send'); } };
+          ws.onmessage = function (e) {
+            try {
+              var m = JSON.parse(e.data);
+              if (m[0] === 'EVENT' && m[1] === sub && m[2]) { n++; take(m[2], u); }
+              else if (m[0] === 'EOSE' && m[1] === sub) end(n + ' notes');
+              else if (m[0] === 'CLOSED' && m[1] === sub) end(n + ' notes, CLOSED ' + String(m[2] || '').slice(0, 60));
+              else if (m[0] === 'NOTICE') end(n + ' notes, NOTICE ' + String(m[1] || '').slice(0, 60));
+            } catch (x) {}
+          };
+          ws.onerror = function () { end(n ? n + ' notes, then an error' : 'no connection'); };
+          ws.onclose = function () { end(n + ' notes, closed by the relay'); };
+        });
+      });
+    }
+
+    // env: ours() our relays, theirs(author) the author's write relays (may be
+    // empty), openKeys() the addresses of the page's open sockets, log(text),
+    // hint(id, url) optional, WebSocket.
+    function wrap(orig, env) {
+      var w = function (filter, relays, timeoutMs, onEvent) {
+        if (!isProfile(filter)) return orig.apply(this, arguments);
+        var self = this, author = filter.authors[0], t0 = Date.now();
+        var openKeys = [], list;
+        try { openKeys = env.openKeys() || []; } catch (e) {}
+        try { list = plan(relays, env.ours(), env.theirs(author), openKeys); } catch (e) { list = null; }
+        if (!list || !list.length) return orig.apply(this, arguments);
+        var isOpen = {};
+        openKeys.forEach(function (key) { isOpen[key] = 1; });
+        var reuse = list.filter(function (u) { return isOpen[u]; });
+        return new Promise(function (resolve) {
+          var seen = {}, all = [], viaNew = 0, viaOpen = 0, pending = 1, extra = false, done = false, lines = [], timer = null;
+          function take(ev, src, isNew) {
+            if (!ev || !ev.id || seen[ev.id]) return;
+            seen[ev.id] = 1; all.push(ev);
+            if (!isNew && src && isOpen[src]) viaOpen++;
+            if (isNew) { viaNew++; try { if (env.hint) env.hint(ev.id, src); } catch (e) {} }
+            if (onEvent) { try { onEvent(ev, src); } catch (e) {} }
+          }
+          function fin() {
+            if (--pending > 0 || done) return;
+            done = true; clearTimeout(timer);
+            all.sort(function (a, b) { return (b.created_at || 0) - (a.created_at || 0); });
+            try {
+              env.log('[dev] profile notes of ' + author.slice(0, 8) + ': ' + all.length + (extra ? ' (' + viaNew + ' over new connections)' : '') + ' from ' + list.length + ' relays in ' +
+                ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (filter.until ? ', older page' : '') + ' [' + list.map(function (u) { return (isOpen[u] ? '*' : '') + short(u); }).join(' ') + ']');
+              lines.forEach(function (l) { env.log('[dev] profile, new connection ' + l); });
+            } catch (e) {}
+            resolve(all);
+          }
+          function again() {
+            if (extra || done || !reuse.length) return;
+            extra = true; pending++;
+            fresh(reuse, filter, 4000, function (ev, u) { take(ev, u, true); }, function (u, s) { lines.push(short(u) + ': ' + s); }, env.WebSocket).then(fin, fin);
+          }
+          timer = setTimeout(function () { if (all.length === 0) again(); }, 1500);
+          var p;
+          try { p = orig.call(self, filter, list, timeoutMs, function (ev, src) { take(ev, src, false); }); } catch (e) { p = Promise.resolve([]); }
+          Promise.resolve(p).then(function (evs) {
+            (evs || []).forEach(function (ev) { take(ev, null, false); });
+            // Almost nothing, or a short page with not one note from the open
+            // sockets (so only the freshly dialled relays answered): ask again.
+            if (all.length < 5 || (viaOpen === 0 && all.length < (filter.limit || 40))) again();
+            fin();
+          }, function () { again(); fin(); });
+        });
       };
-      ws.onerror = function () { end(n ? n + ' notes, then an error' : 'no connection'); };
-      ws.onclose = function () { end(n + ' notes, closed by the relay'); };
-    });
-  }
+      w.__fv = true;
+      return w;
+    }
+    return { norm: norm, plan: plan, isProfile: isProfile, fresh: fresh, wrap: wrap };
+  })();
+  // </profile-fix>
 
   function watchProfileFetch() {
     var tries = 0;
     var t = setInterval(function () {
       var orig = window.fetchEventsAcrossRelays;
       if (typeof orig === 'function' && !orig.__fv) {
-        var w = function (filter, relays) {
-          var p = orig.apply(this, arguments);
-          try {
-            if (filter && filter.authors && filter.authors.length === 1 && filter.kinds && filter.kinds.length === 1 && filter.kinds[0] === 1 && !filter['#e']) {
-              var t0 = Date.now(), list = (relays || []).slice(0, 6), open = 0;
-              list.forEach(function (u) { try { var x = state.sockets[u]; if (x && x.readyState === 1) open++; } catch (e) {} });
-              p.then(function (evs) {
-                if ((evs ? evs.length : 0) < 5 && !filter.until) probeRelays(filter.authors[0], list);
-                console.warn('[dev] profile notes of ' + filter.authors[0].slice(0, 8) + ': ' + (evs ? evs.length : 0) + ' from ' + list.length + ' relays (' + open + ' already open) in ' +
-                  ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (filter.until ? ', older page' : '') + ' [' + list.map(function (u) { var o = false; try { var x = state.sockets[u]; o = !!(x && x.readyState === 1); } catch (e) {} return (o ? '*' : '') + u.replace(/^wss?:\/\//, ''); }).join(' ') + '] (* = already open)');
-              });
-            }
-          } catch (e) {}
-          return p;
-        };
-        w.__fv = true;
-        window.fetchEventsAcrossRelays = w;
+        window.fetchEventsAcrossRelays = ProfileFix.wrap(orig, {
+          ours: function () { return RELAYS; },
+          theirs: function (a) { var c = authorRelayCache[a]; return (c && c.write) || []; },
+          openKeys: function () { return Object.keys(state.sockets).filter(function (key) { var x = state.sockets[key]; return x && x.readyState === 1; }); },
+          hint: function (id, url) { if (typeof addRelayHint === 'function') addRelayHint(id, url); },
+          log: function (s) { console.warn(s); },
+          WebSocket: window.WebSocket
+        });
         clearInterval(t);
       } else if (++tries > 40) { clearInterval(t); }
     }, 500);

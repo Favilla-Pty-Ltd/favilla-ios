@@ -116,13 +116,25 @@ struct SignInView: View {
             if purpose == .password, notice == nil, !link.pairing, link.outcome?.isReply != true, let go = onNewPassword {
                 // Changing or making a password (also when the KEY has no login
                 // for the site yet): the app runs it, the KEY only asks for ENTER.
+                // A row that reads as a choice (21 Nov: on a reset form the plain
+                // link under the sign-in steps was easy to miss).
                 Button(action: go) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus.circle").font(.system(size: 17, weight: .semibold))
-                        Text("New password for this site").font(Brand.font(15, .semibold))
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus.circle").font(.system(size: 20, weight: .semibold)).foregroundStyle(Brand.brass)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("New password for this site").font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
+                            Text("Signing up, or changing a password? The KEY makes it and saves it.")
+                                .font(Brand.small).foregroundStyle(Brand.grey).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.grey)
                     }
-                    .foregroundStyle(Brand.brass).frame(minHeight: 44)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.brass.opacity(0.5), lineWidth: 1))
+                    .contentShape(Rectangle())
                 }
+                .padding(.top, 4)
             }
 
             Spacer()

@@ -563,6 +563,35 @@
   // many notes came back, from how many relays (and how many of those were
   // sockets the page already had open), and how long it took. The page logs
   // nothing here, and "a profile shows no notes" can't be told apart otherwise.
+  // A profile that came back with almost nothing: ask each of the same relays
+  // again on a new connection (5 notes) and log what each one says. Notes here
+  // but none on the page = the page's own open connections are the trouble;
+  // nothing here either = the relay's answer (its reason is logged).
+  function probeRelays(author, list) {
+    list.forEach(function (u) {
+      var name = u.replace(/^wss?:\/\//, ''), fin = false, n = 0, t0 = Date.now(), ws, timer;
+      function end(what) {
+        if (fin) return; fin = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch (e) {}
+        console.warn('[dev] profile probe ' + name + ': ' + what + ', ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
+      }
+      try { ws = new WebSocket(u); } catch (e) { fin = true; console.warn('[dev] profile probe ' + name + ': not an address the phone can dial'); return; }
+      timer = setTimeout(function () { end(n + ' notes, no end of list'); }, 6000);
+      ws.onopen = function () { try { ws.send(JSON.stringify(['REQ', 'fvp', { kinds: [1], authors: [author], limit: 5 }])); } catch (e) { end('could not send'); } };
+      ws.onmessage = function (e) {
+        try {
+          var m = JSON.parse(e.data);
+          if (m[0] === 'EVENT') n++;
+          else if (m[0] === 'EOSE') end(n + ' notes');
+          else if (m[0] === 'CLOSED' || m[0] === 'NOTICE' || m[0] === 'AUTH') end(n + ' notes, ' + m[0] + ' ' + String(m[m.length - 1]).slice(0, 60));
+        } catch (x) {}
+      };
+      ws.onerror = function () { end(n ? n + ' notes, then an error' : 'no connection'); };
+      ws.onclose = function () { end(n + ' notes, closed by the relay'); };
+    });
+  }
+
   function watchProfileFetch() {
     var tries = 0;
     var t = setInterval(function () {
@@ -575,8 +604,9 @@
               var t0 = Date.now(), list = (relays || []).slice(0, 6), open = 0;
               list.forEach(function (u) { try { var x = state.sockets[u]; if (x && x.readyState === 1) open++; } catch (e) {} });
               p.then(function (evs) {
+                if ((evs ? evs.length : 0) < 5 && !filter.until) probeRelays(filter.authors[0], list);
                 console.warn('[dev] profile notes of ' + filter.authors[0].slice(0, 8) + ': ' + (evs ? evs.length : 0) + ' from ' + list.length + ' relays (' + open + ' already open) in ' +
-                  ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (filter.until ? ', older page' : '') + ' [' + list.map(function (u) { return u.replace(/^wss?:\/\//, ''); }).join(' ') + ']');
+                  ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (filter.until ? ', older page' : '') + ' [' + list.map(function (u) { var o = false; try { var x = state.sockets[u]; o = !!(x && x.readyState === 1); } catch (e) {} return (o ? '*' : '') + u.replace(/^wss?:\/\//, ''); }).join(' ') + '] (* = already open)');
               });
             }
           } catch (e) {}

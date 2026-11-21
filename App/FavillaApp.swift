@@ -198,7 +198,8 @@ struct KeyCard: View {
         return "Paired with this iPhone"
     }
     private var compactLine: String {
-        life.life != nil ? "In " + KeyLife.name(life.life) : life.lastSeen != nil ? "Last seen in " + KeyLife.name(life.lastSeen) : "Not found yet"
+        if let l = KeyWhere.live(life) { return "In " + KeyLife.name(l) }
+        return life.lastSeen != nil ? "Last seen in " + KeyLife.name(life.lastSeen) : "Not found yet"
     }
 
     var body: some View {

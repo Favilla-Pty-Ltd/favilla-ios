@@ -195,7 +195,7 @@ struct SaveToKeyView: View {
                 .padding(.horizontal, 2)
                 if case .asking(true) = job.phase {
                     Text("Once you've signed in with the new password, open Favilla's Accounts and tap It works: the KEY then drops the old copy.")
-                        .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
+                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
@@ -243,7 +243,8 @@ struct UsernameField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("USERNAME OR EMAIL").font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
-            TextField("", text: $text, prompt: Text("you@example.com").foregroundColor(Brand.grey))
+            // verbatim: a literal email in a Text is made a link (and drawn blue).
+            TextField("", text: $text, prompt: Text(verbatim: "you@example.com").foregroundColor(Brand.grey))
                 .keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .textContentType(.username)
                 .font(Brand.body).foregroundStyle(Brand.ink)
@@ -251,15 +252,25 @@ struct UsernameField: View {
                 .background(Brand.bg)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.brass.opacity(0.6), lineWidth: 1))
-            ForEach(suggestions, id: \.self) { u in
-                Button { text = u } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: text.lowercased() == u.lowercased() ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 18)).foregroundStyle(text.lowercased() == u.lowercased() ? Brand.brass : Brand.faint)
-                        Text(u).font(Brand.body).foregroundStyle(Brand.ink).lineLimit(1).truncationMode(.middle)
-                        Spacer()
+            // The KEY's own usernames as chips (21 Nov: as rows with a circle
+            // they read as more logins to choose between).
+            if !suggestions.isEmpty {
+                Text("Or tap one your KEY already has").font(Brand.small).foregroundStyle(Brand.grey).padding(.top, 2)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(suggestions, id: \.self) { u in
+                            let on = text.lowercased() == u.lowercased()
+                            Button { text = u } label: {
+                                Text(verbatim: u).font(Brand.font(14, .semibold)).foregroundStyle(on ? Brand.bg : Brand.ink).lineLimit(1)
+                                    .padding(.horizontal, 14).frame(minHeight: 40)
+                                    .background(on ? Brand.brass : Color.clear)
+                                    .clipShape(Capsule())
+                                    .overlay(Capsule().stroke(on ? Color.clear : Brand.grey.opacity(0.6), lineWidth: 1))
+                            }
+                            .accessibilityLabel("Use \(u)")
+                        }
                     }
-                    .frame(minHeight: 44).contentShape(Rectangle())
+                    .padding(.vertical, 2)
                 }
             }
         }

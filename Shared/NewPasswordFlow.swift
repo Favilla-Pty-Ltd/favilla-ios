@@ -224,7 +224,7 @@ struct NewPasswordView: View {
                 .padding(.horizontal, 2)
                 if case .asking(true) = job.phase {
                     Text("The KEY keeps the old password until you tell Favilla the new one works.")
-                        .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
+                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                 }
                 if case .done = job.phase {
                     Text(job.fillFirst
@@ -290,6 +290,7 @@ struct NewPasswordView: View {
             .tint(Brand.brass)
             Text("iPhone always fills a form's first password box, whichever box you tapped. Off: the password is copied and you paste it into the boxes you choose.")
                 .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 12)
         }
     }
 

@@ -399,6 +399,11 @@ struct ThisPhoneView: View {
     @Binding var route: KeyRoute
     /// The app's shape (AppShape.swift): only what this mode can use is shown.
     var mode: AppMode = .unknown
+    /// The door the settings were opened from (nil: the home page), and the way
+    /// to another: a second route to Home and the other mode, should the
+    /// client's own NOSTR chip ever be missing.
+    var door: Door? = nil
+    var go: ((Door?) -> Void)? = nil
     @ObservedObject private var nostr = NostrLink.shared
     @ObservedObject private var bunker = BunkerService.shared
     @ObservedObject private var vault = VaultService.shared
@@ -413,6 +418,19 @@ struct ThisPhoneView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     KeyCard(link: link, appPaired: $appPaired)
+
+                    if let door, let go {
+                        let other: Door = door == .nostr ? .vault : .nostr
+                        SettingsGroup(title: "MODE") {
+                            Button { dismiss(); go(nil) } label: {
+                                SettingsRow(icon: "square.grid.2x2", title: "Home", subtitle: "Choose NOSTR or VAULT")
+                            }
+                            RowLine()
+                            Button { dismiss(); go(other) } label: {
+                                SettingsRow(icon: "arrow.left.arrow.right", title: "Go to \(other.title)", subtitle: "You're in \(door.title) now")
+                            }
+                        }
+                    }
 
                     if mode != .vault {
                         SettingsGroup(title: "NOSTR") {

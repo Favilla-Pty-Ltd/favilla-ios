@@ -660,6 +660,14 @@ struct AccountsView: View {
             .sheet(isPresented: $importing) { ImportSheet(model: m) }
             .sheet(item: $qr) { p in SetupKeyQR(prefill: p) }
             .onAppear { if m.entries.isEmpty { m.load() } }
+            .task {
+                // Sample runs in the simulator: a sheet opened for its screenshot.
+                guard let d = Demo.mode else { return }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if d == "vault-sheet", let e = m.entries.first { picked = PickedAccount(e: e) }
+                if d == "vault-add" { adding = true }
+                if d == "vault-import" { importing = true }
+            }
             .onDisappear { m.close() }
             .onChange(of: life.life) { _, l in
                 // The KEY dropped the link (it may have restarted): read again in a

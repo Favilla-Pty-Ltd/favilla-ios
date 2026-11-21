@@ -140,7 +140,7 @@ struct ModeHome: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Brand.line, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
                     }
-                    KeyCard(link: link, appPaired: $appPaired)
+                    KeyCard(link: link, appPaired: $appPaired, compact: true)
                 }
                 .padding(20)
             }

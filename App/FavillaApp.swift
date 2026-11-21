@@ -85,7 +85,7 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.3), value: door)
         .animation(.easeInOut(duration: 0.3), value: door.map(ready))
         .sheet(isPresented: $showSettings, onDismiss: { routeText = LinkSettingsView.routeText(route); paired = KeyLink.appPaired }) {
-            ThisPhoneView(link: link, route: $route, mode: settingsMode)
+            ThisPhoneView(link: link, route: $route, mode: settingsMode, door: door, go: { go($0) })
         }
         // iOS opens the app with this activity when the owner picks Favilla in
         // another password manager's export (CredentialImport.swift).
@@ -140,11 +140,40 @@ struct RootView: View {
 struct KeyCard: View {
     @ObservedObject var link: KeyLink
     @Binding var appPaired: Bool
+    /// The home page's version: the link's state and FIND MY KEY on one card.
+    /// The explanation and Forget the app's pairing stay in Settings.
+    var compact = false
     @ObservedObject private var life = KeyLife.shared
+
+    private var pairedLine: String {
+        life.life != nil ? "Paired · " + KeyLife.name(life.life) : life.lastSeen != nil ? "Paired · last seen in " + KeyLife.name(life.lastSeen) : "Paired"
+    }
 
     var body: some View {
         BrandSection(title: "YOUR KEY") {
-            if !appPaired {
+            if appPaired, compact {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(KeyStatus.headline(link)).font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
+                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                            Text(pairedLine).font(Brand.small).foregroundStyle(Brand.brass).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        Button { link.busy ? link.cancel() : link.probe() } label: {
+                            Text(link.busy ? "CANCEL" : "FIND MY KEY").font(Brand.font(12, .semibold)).tracking(1.5).foregroundStyle(Brand.ink)
+                                .padding(.horizontal, 14).frame(minHeight: 44)
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.line, lineWidth: 1))
+                        }
+                    }
+                    if let d = KeyStatus.detail(link), link.busy || link.result != nil {
+                        Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(16)
+                .background(Brand.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else if !appPaired {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Your KEY isn't paired with this iPhone.").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
                     Text("On the KEY: Settings > Network > Pair a phone, then tap Pair. If iPhone asks for a number, type the one the KEY shows.")
@@ -168,7 +197,7 @@ struct KeyCard: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(KeyStatus.headline(link)).font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
                         Spacer()
-                        Text(life.life != nil ? "Paired · " + KeyLife.name(life.life) : life.lastSeen != nil ? "Paired · last seen in " + KeyLife.name(life.lastSeen) : "Paired").font(Brand.small).foregroundStyle(Brand.brass)
+                        Text(pairedLine).font(Brand.small).foregroundStyle(Brand.brass)
                     }
                     if let d = KeyStatus.detail(link) {
                         Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
@@ -199,7 +228,7 @@ private struct BrandSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
+            Text(title).font(Brand.label).tracking(2).foregroundStyle(Brand.brass).padding(.leading, 4)
             content
         }
     }

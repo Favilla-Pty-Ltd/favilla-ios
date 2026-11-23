@@ -12,21 +12,25 @@ import SwiftUI
 struct TurningRing: View {
     var size: CGFloat = 22
     var line: CGFloat = 2
-    @State private var turned = false
     @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
-        ZStack {
-            Circle().stroke(Brand.line, lineWidth: line)
-            Circle().trim(from: 0, to: 0.3)
-                .stroke(Brand.brass, style: StrokeStyle(lineWidth: line, lineCap: .round))
-                .rotationEffect(.degrees(turned && !still ? 360 : 0))
-                .animation(still ? nil : .linear(duration: 0.9).repeatForever(autoreverses: false), value: turned)
-            if still { Circle().fill(Brand.brass).frame(width: size * 0.36, height: size * 0.36) }
+        // The angle comes from the clock, not from an animation started on appear:
+        // a repeating animation begun while the page was still being laid out took
+        // the layout change with it, and the arc flew off its ring (build 250).
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still)) { t in
+            let turn = still ? 0 : t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+            ZStack {
+                Circle().stroke(Brand.line, lineWidth: line)
+                Circle().trim(from: 0, to: 0.3)
+                    .stroke(Brand.brass, style: StrokeStyle(lineWidth: line, lineCap: .round))
+                    .rotationEffect(.degrees(turn * 360))
+                if still { Circle().fill(Brand.brass).frame(width: size * 0.36, height: size * 0.36) }
+            }
+            .padding(line / 2)
+            .frame(width: size, height: size)
         }
-        .padding(line / 2)
         .frame(width: size, height: size)
-        .onAppear { turned = true }
         .accessibilityHidden(true)
     }
 }

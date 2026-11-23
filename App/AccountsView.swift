@@ -765,8 +765,11 @@ struct AccountsView: View {
         let weak = hs.filter { $0.strength == 1 }.count, pending = hs.filter { !$0.checked }.count
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text("\(m.entries.count)").font(Brand.font(28, .semibold)).foregroundStyle(Brand.ink)
-                Text("accounts on the KEY").font(Brand.body).foregroundStyle(Brand.grey)
+                // No "0 accounts" while the first read is still coming in.
+                if !(m.reading != nil && m.entries.isEmpty) {
+                    Text("\(m.entries.count)").font(Brand.font(28, .semibold)).foregroundStyle(Brand.ink)
+                }
+                Text(m.reading != nil && m.entries.isEmpty ? "Accounts on the KEY" : "accounts on the KEY").font(Brand.body).foregroundStyle(Brand.grey)
                 Spacer()
             }
             if !hs.isEmpty {
@@ -785,7 +788,7 @@ struct AccountsView: View {
                 if r.total > 0 { WaitBar(fraction: Double(r.got) / Double(r.total)) }
             }
             HStack(spacing: 12) {
-                BrandButton(title: m.busy.isEmpty ? "CHECK BREACHES" : m.busy.uppercased(), filled: m.busy.isEmpty) { m.checkBreaches() }
+                BrandButton(title: m.busy.isEmpty || m.reading != nil ? "CHECK BREACHES" : m.busy.uppercased(), filled: m.busy.isEmpty) { m.checkBreaches() }
                     .disabled(!m.busy.isEmpty)
                 Button("Refresh") { m.load() }.font(Brand.button).foregroundStyle(Brand.brass).disabled(!m.busy.isEmpty)
             }

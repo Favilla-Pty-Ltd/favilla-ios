@@ -27,6 +27,8 @@ import UIKit
 final class AccountsModel: ObservableObject {
     @Published private(set) var entries: [AppChannel.ListEntry] = []
     @Published private(set) var busy = ""
+    /// While the list is being read: entries in hand, and the KEY's total (issue #59).
+    @Published private(set) var reading: (got: Int, total: Int)?
     @Published private(set) var status = ""
     @Published private(set) var oldFirmware = false
     @Published private(set) var listOff = false     // codes on the KEY, but the keyboard list is off: iOS can't offer them
@@ -63,8 +65,9 @@ final class AccountsModel: ObservableObject {
         guard busy.isEmpty else { return }
         busy = "Reading the KEY's list…"
         status = ""
+        reading = (0, 0)
         Task {
-            defer { busy = "" }
+            defer { busy = ""; reading = nil }
             do {
                 let s = try await open()
                 var got: [AppChannel.ListEntry] = [], start = 0
@@ -79,6 +82,7 @@ final class AccountsModel: ObservableObject {
                     let page: AppChannel.ListPage
                     do { page = try AppChannel.parseList(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(KeyLink.listMessage(st)) }
                     got += page.entries
+                    reading = (got.count, max(page.total, got.count))
                     if !page.more || page.entries.isEmpty || got.count >= 2000 { break }
                     start += page.entries.count
                 }
@@ -399,7 +403,7 @@ final class AccountsModel: ObservableObject {
         return await job(id == nil ? "Adding…" : "Saving…") { s in
             let a = try await s.request(AppChannel.cPwSave, body, timeout: 10)
             if let why = self.immediate(a, "save") { return (why, a.body.first == 0x03) }
-            self.asking = "Check your KEY: it shows \(id == nil ? "NEW ENTRY" : "CHANGE ENTRY") for \(site)\(user.isEmpty ? "" : " as \(user)"). Hold ENTER there to save it, or BACK to cancel."
+            self.asking = "It shows \(id == nil ? "NEW ENTRY" : "CHANGE ENTRY") for \(site)\(user.isEmpty ? "" : " as \(user)"). Hold ENTER there to save it, or BACK to cancel."
             self.note("save \(site): asked on the KEY")
             let r = try await self.result(s)
             self.note("save \(site): " + (r ?? "saved"))
@@ -417,8 +421,8 @@ final class AccountsModel: ObservableObject {
             let a = try await s.request(AppChannel.cPwDelete, body, timeout: 10)
             if let why = self.immediate(a, "delete") { return (why, a.body.first == 0x03) }
             self.asking = list.count == 1
-                ? "Check your KEY: it shows DELETE ENTRY for \(list[0].site)\(list[0].user.isEmpty ? "" : " as \(list[0].user)"). Hold ENTER there to delete it, or BACK to keep it."
-                : "Check your KEY: it shows DELETE ENTRIES (\(list.count)). Hold ENTER there for 2 seconds to delete them, or BACK to keep them."
+                ? "It shows DELETE ENTRY for \(list[0].site)\(list[0].user.isEmpty ? "" : " as \(list[0].user)"). Hold ENTER there to delete it, or BACK to keep it."
+                : "It shows DELETE ENTRIES (\(list.count)). Hold ENTER there for 2 seconds to delete them, or BACK to keep them."
             self.note("delete \(list.count): asked on the KEY")
             let r = try await self.result(s)
             self.note("delete \(list.count): " + (r ?? "deleted"))
@@ -702,9 +706,7 @@ struct AccountsView: View {
                         .disabled(!m.busy.isEmpty || w.old.id == nil)
                     }
                 }
-                if !m.asking.isEmpty && m.busy == "Deleting…" {
-                    Text(m.asking).font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
-                }
+                if !m.asking.isEmpty && m.busy == "Deleting…" { WaitCard(title: "Check your KEY", detail: m.asking) }
                 if !dropNote.isEmpty { Text(dropNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
                 Text("The KEY is keeping the old password in case the site refused the new one. Once you've signed in with the new one, tap It works and hold ENTER on the KEY. To go back to the old one, open the login.")
                     .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
@@ -751,7 +753,7 @@ struct AccountsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .disabled(list.isEmpty || !m.busy.isEmpty)
-            if !m.asking.isEmpty { Text(m.asking).font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true) }
+            if !m.asking.isEmpty { WaitCard(title: "Check your KEY", detail: m.asking) }
             if !selStatus.isEmpty { Text(selStatus).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
         }
         .padding(.horizontal, 16)
@@ -776,6 +778,11 @@ struct AccountsView: View {
                     let codes = hs.filter { $0.hasCode }.count
                     if codes > 0 { Pill("\(codes) with 2FA", tone: .good) }
                 }
+            }
+            // Reading the list: a turning ring and the count, not only a button label (issue #59).
+            if let r = m.reading {
+                WaitCard(title: "Reading the KEY's list", detail: r.total > 0 ? "\(r.got) of \(r.total)" : "Connecting to your KEY")
+                if r.total > 0 { WaitBar(fraction: Double(r.got) / Double(r.total)) }
             }
             HStack(spacing: 12) {
                 BrandButton(title: m.busy.isEmpty ? "CHECK BREACHES" : m.busy.uppercased(), filled: m.busy.isEmpty) { m.checkBreaches() }
@@ -997,9 +1004,7 @@ private struct AccountSheet: View {
                         }
                         .background(Brand.card)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
-                        if !model.asking.isEmpty && model.busy == "Deleting…" {
-                            Text(model.asking).font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
-                        }
+                        if !model.asking.isEmpty && model.busy == "Deleting…" { WaitCard(title: "Check your KEY", detail: model.asking) }
                         if !manageNote.isEmpty { Text(manageNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
                         Text("Every change shows on the KEY first: hold ENTER there to make it, or press BACK. Nothing changes without that.")
                             .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
@@ -1031,9 +1036,7 @@ private struct AccountSheet: View {
             }
             BrandButton(title: model.busy == "Deleting…" ? "WAITING FOR THE KEY…" : "NEW ONE WORKS", filled: false) { confirmOld = true }
                 .disabled(!model.busy.isEmpty || old.id == nil)
-            if !model.asking.isEmpty && model.busy == "Deleting…" {
-                Text(model.asking).font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
-            }
+            if !model.asking.isEmpty && model.busy == "Deleting…" { WaitCard(title: "Check your KEY", detail: model.asking) }
             if !oldNote.isEmpty { Text(oldNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
             Text("Signed in with the new one? Tap New one works and the KEY deletes the old copy (hold ENTER there).\n\nNeed the old one back? Do it on the KEY: open PASSWORDS, choose \(old.site), press DOWN for MORE, then PUT THIS ONE BACK. This iPhone never holds the old password, so it can't do that itself.")
                 .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
@@ -1184,9 +1187,7 @@ struct EntryEditor: View {
 
                     BrandButton(title: working ? "WAITING FOR THE KEY…" : (entry == nil ? "ADD TO THE KEY" : "SAVE ON THE KEY"), filled: !working) { save() }
                         .disabled(working || site.trimmingCharacters(in: .whitespaces).isEmpty || (entry == nil && pass.isEmpty))
-                    if working && !model.asking.isEmpty {
-                        Text(model.asking).font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
-                    }
+                    if working && !model.asking.isEmpty { WaitCard(title: "Check your KEY", detail: model.asking) }
                     if !status.isEmpty { Text(status).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
                     Text("The KEY shows the entry and saves it only when you hold ENTER there. BACK cancels and nothing changes.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)

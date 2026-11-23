@@ -58,6 +58,16 @@ struct SignInView: View {
         }
     }
 
+    /// What the KEY's screen shows while the sheet waits on it.
+    private var onKey: String {
+        switch purpose {
+        case .password: return "It shows the login for this site. Press ENTER there."
+        case .oneTimeCode: return "It shows the code for this site. Press ENTER there."
+        case .passkeySignIn: return "It shows the site. Press ENTER there to sign in."
+        case .passkeyCreate: return "It shows the site. Press ENTER there to make the passkey."
+        }
+    }
+
     private var steps: [(String, Int)] {   // 0 to do, 1 now, 2 done
         let connected = link.waitingOnKey || link.outcome?.isReply == true
         let done = link.outcome?.isReply == true
@@ -96,8 +106,7 @@ struct SignInView: View {
             if let n = notice {
                 Text(n).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             } else if link.pairing {
-                Text("This iPhone isn't paired with the KEY yet. If the numbers in iOS's prompt match the KEY's screen, tap Pair, then press ENTER on the KEY. PAIR A PHONE must be open on the KEY.")
-                    .font(Brand.body).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
+                WaitCard(title: "Check your KEY", detail: "This iPhone isn't paired with it yet. If the numbers in iOS's prompt match the KEY's screen, tap Pair, then press ENTER on the KEY. PAIR A PHONE must be open on the KEY.")
             } else if let why = failed {
                 Text(why).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                 LogBox(lines: link.lines, maxHeight: 160)
@@ -106,10 +115,12 @@ struct SignInView: View {
                     ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepRow(text: s.0, state: s.1) }
                 }
                 .padding(.horizontal, 2)
+                // Waiting on a press on the KEY: say so, name what it shows, and move (issue #59).
+                if link.waitingOnKey, link.outcome == nil { WaitCard(title: "Check your KEY", detail: onKey) }
                 if purpose == .password {
                     // Some apps fill only the field the sheet was opened from.
                     Text("Opened from the username box? Some apps fill only that field: tap the password box and pick Favilla again to fill both.")
-                        .font(Brand.small).foregroundStyle(Brand.faint).fixedSize(horizontal: false, vertical: true)
+                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -162,9 +173,10 @@ struct StepRow: View {
                 if state == 2 {
                     Circle().fill(Brand.brass)
                     Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Brand.bg)
+                } else if state == 1 {
+                    TurningRing(size: 22)      // the running step turns, like the KEY's (issue #59)
                 } else {
-                    Circle().strokeBorder(state == 1 ? Brand.brass : Brand.line, lineWidth: 2)
-                    if state == 1 { Circle().fill(Brand.brass).frame(width: 8, height: 8) }
+                    Circle().strokeBorder(Brand.line, lineWidth: 2)
                 }
             }
             .frame(width: 22, height: 22)

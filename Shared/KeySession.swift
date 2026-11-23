@@ -185,10 +185,14 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             }
             let store = UserDefaults(suiteName: "group.io.favillakey.app")
             if let s = store?.string(forKey: "keyPeripheralId"), let id = UUID(uuidString: s), let p = c.retrievePeripherals(withIdentifiers: [id]).first {
-                how = "saved KEY"; connect(p, c); return
+                // A pending connect to the KEY as this phone last knew it, and a
+                // search as well: a KEY that forgot its phones comes back under a
+                // new address (11dp, issue #63), and whichever answers is taken.
+                how = "saved KEY, and searching"; connect(p, c)
+            } else {
+                how = "scanning"
+                mark("scanning")
             }
-            how = "scanning"
-            mark("scanning")
             c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
         case .unauthorized: failOpen("Bluetooth isn't allowed for Favilla. iPhone Settings > Favilla > Bluetooth.")
         case .poweredOff: failOpen("Bluetooth is off on this iPhone.")
@@ -205,21 +209,31 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
-        guard peripheral == nil else { return }
+        if let old = peripheral {
+            if old.identifier == p.identifier || old.state == .connected { return }   // the pending connect completes
+            mark("found the KEY under a new identity")
+            c.cancelPeripheralConnection(old)
+            how = "found by its service"
+        }
         c.stopScan()
         connect(p, c)
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        guard p.identifier == peripheral?.identifier else { return }
+        c.stopScan()
         mark("connected")
+        UserDefaults(suiteName: "group.io.favillakey.app")?.set(p.identifier.uuidString, forKey: "keyPeripheralId")
         p.discoverServices([KeyLink.favService])
     }
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
+        guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
         failOpen("Couldn't connect to the KEY: \(error?.localizedDescription ?? "no reason")")
     }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
         mark("disconnected")
         if error != nil, !closed { KeyLife.forget("the KEY dropped the Accounts link") }
         chanIn = nil

@@ -267,7 +267,7 @@ struct KeyboardListPage: View {
                     BrandButton(title: link.busy && link.mode == .list ? "CANCEL" : "FILL THE LIST FROM MY KEY", filled: false) {
                         link.busy ? link.cancel() : link.list()
                     }
-                    Footnote(listNote ?? "The KEY asks first (Share list?): press ENTER on the KEY. Only site names and usernames come over, never passwords. The list also fills as you sign in through Favilla.")
+                    Footnote(listNote ?? "Only site names and usernames come over, never passwords. The list also fills as you sign in through Favilla.")
                 }
                 Button {
                     AccountList.setOn(false) { _ in AccountList.setOn(true) { _ in count = AccountList.entries.count } }
@@ -315,6 +315,7 @@ struct VaultPage: View {
                     Text(v.status).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if v.step != nil || v.doneOK { VaultSteps(step: v.step, backup: v.runIsBackup) }
             BrandButton(title: v.busy.isEmpty ? "BACK UP NOW" : v.busy.uppercased()) { v.run(backup: true, why: "the button") }
                 .disabled(!v.busy.isEmpty)
             HStack(spacing: 12) {
@@ -328,6 +329,49 @@ struct VaultPage: View {
             }
         }
         .onAppear { v.refresh() }
+    }
+}
+
+/// The steps of a backup or restore, the same ones the KEY's screen shows
+/// (issue #59). `step` nil = all done.
+struct VaultSteps: View {
+    let step: Vault.Step?
+    let backup: Bool
+
+    /// (index of the running row, its fraction when there is one)
+    private var at: (Int, Double?) {
+        guard let step else { return (99, nil) }
+        if backup {
+            switch step {
+            case .checking(let f): return (0, f)
+            case .merging: return (0, nil)
+            case .sealing(let f): return (1, f)
+            case .relay: return (2, nil)
+            }
+        }
+        switch step {
+        case .checking(let f): return (0, f)
+        default: return (1, nil)
+        }
+    }
+
+    private var rows: [String] {
+        backup ? ["Checking the relay", "Sealed and sent", "Relay keeps it"] : ["Fetching the backup", "Checked and merged"]
+    }
+
+    var body: some View {
+        let (now, part) = at
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { i, text in
+                    VStack(alignment: .leading, spacing: 8) {
+                        StepRow(text: i == now && part != nil ? "\(text) \(Int((part! * 100).rounded()))%" : text,
+                                state: i < now ? 2 : (i == now ? 1 : 0))
+                        if i == now, let part { WaitBar(fraction: part).padding(.leading, 34) }
+                    }
+                }
+            }
+        }
     }
 }
 

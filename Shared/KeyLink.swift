@@ -63,6 +63,10 @@ final class KeyLink: NSObject, ObservableObject {
     @Published private(set) var busy = false
     /// The KEY has the request on its screen and is waiting for the owner.
     @Published private(set) var waitingOnKey = false
+    #if targetEnvironment(simulator)
+    /// Sample sheets only (App/DemoGallery.swift): show the wait on the KEY.
+    func demoWaiting() { waitingOnKey = true }
+    #endif
     /// iOS is pairing with the KEY (6-digit comparison): the link is kept open.
     @Published private(set) var pairing = false
     /// PAIR THE APP: the code to compare with the KEY's screen ("123 456").
@@ -183,6 +187,10 @@ final class KeyLink: NSObject, ObservableObject {
         appCode = nil
         resetLinkState()
         started = Date()
+        // Issue #63: a KEY that forgot its phones comes back under a new address
+        // (11dp), so the identity remembered from before points at nothing. A
+        // pairing starts by finding the KEY afresh, by its service.
+        if m == .pairApp { store.removeObject(forKey: KeyLink.savedIdKey); afterPair = 0 }
         if !site.isEmpty, m != .probe, m != .list, m != .pairApp { add("Asked for: \(site)") }
         if m == .fill || m == .otp, KeyLink.fillBody(site: site, appName: siteIsAppName, user: fillUser) == nil {
             finish(.failed("This site's name can't be sent to the KEY."), "Site name not usable: \(site)")
@@ -243,6 +251,16 @@ final class KeyLink: NSObject, ObservableObject {
 
     private var ms: Int { Int(Date().timeIntervalSince(started) * 1000) }
 
+    private var afterPair = 0     // link checks left to try after a pairing
+
+    private func probeAfterPairing(_ delay: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.afterPair > 0, !self.busy, KeyLink.appPaired else { return }
+            self.afterPair -= 1
+            self.probe()
+        }
+    }
+
     private func finish(_ o: Outcome, _ log: String) {
         guard busy else { return }
         timeout?.cancel(); timeout = nil
@@ -258,6 +276,10 @@ final class KeyLink: NSObject, ObservableObject {
         appCode = nil
         busy = false
         NotificationCenter.default.post(name: KeyLink.didFinish, object: self)
+        // The link check after a pairing: again in 3 s if the KEY wasn't there yet.
+        if mode == .probe, afterPair > 0 {
+            if case .failed = o { probeAfterPairing(3) } else { afterPair = 0 }
+        }
     }
 
     // MARK: - Pairing on demand
@@ -426,7 +448,7 @@ extension KeyLink {
             case .otp:
                 waitingOnKey = true; add("On the KEY: pick the code there")
             case .list where listStart == 0:
-                waitingOnKey = true; add("On the KEY: press ENTER to share the list")
+                add("Reading the list (the KEY no longer asks first, 11cg)")
             case .ctap:
                 add("Request sent; waiting for the KEY")
             default: break
@@ -511,6 +533,11 @@ extension KeyLink {
             guard c.save() else { finish(.failed("The pairing couldn't be saved on this iPhone. Try again."), "Keychain save failed"); return }
             PairIdentity.pairedAgain()      // the Nostr client enrols afresh with this KEY (issue #22)
             finish(.appPaired, "The app is paired with the KEY in \(ms) ms")
+            // Issue #63: bring the link up now (one HELLO says which mode the
+            // KEY is in), not at the next launch. Twice more if the KEY is still
+            // settling after the pairing.
+            afterPair = 3
+            probeAfterPairing(1.2)
         default:
             add(String(format: "Ignored a 0x%02X during pairing", b.first ?? 0))
         }

@@ -154,10 +154,19 @@ enum Vault {
         return i
     }
 
+    /// Where a run is, for the page to show (issue #59): the same steps the KEY shows.
+    enum Step: Equatable {
+        case checking(Double)   // the relay's copy on its way into the KEY, 0 to 1
+        case merging            // the KEY checks and merges it
+        case sealing(Double)    // the KEY's signed backup on its way out, 0 to 1
+        case relay              // handed to the relay, waiting for its answer
+    }
+
     /// Steps 1 and 2: the relay's copy into the KEY. Returns the KEY's verdict.
-    static func restore(_ k: ChannelCaller, info: Info, log: (String) -> Void) async throws -> (result: UInt8, added: Int, removed: Int) {
+    static func restore(_ k: ChannelCaller, info: Info, log: (String) -> Void, step: (Step) -> Void = { _ in }) async throws -> (result: UInt8, added: Int, removed: Int) {
         guard let relay = info.relay else { throw Failure("The KEY named no vault relay.") }
         guard info.status == 0 || info.status == 11 else { throw Failure(words(info.status)) }
+        step(.checking(0))
         let copy = try await fetchBackup(relay: relay, pubkey: info.pubkey)
         let bytes = Data((copy ?? "").utf8)
         log(copy == nil ? "relay \(info.host): no backup there" : "relay \(info.host): backup of \(bytes.count) bytes")
@@ -172,7 +181,9 @@ enum Vault {
             guard a.rsp == rPut, a.body.count >= 6 else { throw Failure("The KEY's answer to the vault copy couldn't be read.") }
             last = a
             offset += n
+            step(.checking(bytes.isEmpty ? 1 : Double(offset) / Double(bytes.count)))
         } while offset < bytes.count
+        step(.merging)
         // The KEY checks and merges on its main loop: state 2 means "still working".
         var polls = 0
         while let a = last, a.body[0] == 2, polls < 60 {
@@ -196,13 +207,13 @@ enum Vault {
     /// step tried again, and whatever happens the KEY hears VAULT_DONE: [1] the
     /// relay took it, [0] refused, [2] not reached (also when the frame never
     /// arrived whole), never silence.
-    static func backup(_ k: ChannelCaller, log: (String) -> Void) async -> Outcome {
+    static func backup(_ k: ChannelCaller, log: (String) -> Void, step: (Step) -> Void = { _ in }) async -> Outcome {
         let info: Info, relay: URL
         do {
             info = try await self.info(k)
             guard let r = info.relay else { return .failed("The KEY named no vault relay.") }
             relay = r
-            let m = try await restore(k, info: info, log: log)
+            let m = try await restore(k, info: info, log: log, step: step)
             log("KEY merged the relay's copy: result \(m.result), \(m.added) added, \(m.removed) removed")
             // 19 (KEY 11bd, issue #33): the relay's copy is older than this KEY's last
             // backup and was not merged. Carry on: the KEY's newer copy replaces it.
@@ -214,6 +225,7 @@ enum Vault {
         // 3. the signed frame, in chunks; a dropped link costs a retry, not the run.
         var frame = Data(), total = -1, offset = 0, busy = 0, drops = 0
         var problem: String?
+        step(.sealing(0))
         while total < 0 || offset < total {
             let a: AppChannel.Answer
             do { a = try await k.request(cGet, Data(le32(offset)), timeout: 30) }
@@ -243,6 +255,7 @@ enum Vault {
             total = t
             frame.append(contentsOf: v[9...])
             offset = frame.count
+            step(.sealing(Double(offset) / Double(total)))
         }
         var text: String?
         if problem == nil {
@@ -252,7 +265,7 @@ enum Vault {
         }
         // 4. publish
         var ok: (ok: Bool, message: String)?
-        if let text { ok = await publish(frame: text, relay: relay) }
+        if let text { step(.relay); ok = await publish(frame: text, relay: relay) }
         // 5. report, always: [1] taken, [0] refused, [2] not reached or never sent.
         var done = Data([ok == nil ? 2 : (ok!.ok ? 1 : 0)])
         if let ok, !ok.ok { done.append(Data(ok.message.prefix(200).utf8)) }
@@ -276,10 +289,10 @@ enum Vault {
         return .backedUp(try? await self.info(k))
     }
 
-    static func restoreOnly(_ k: ChannelCaller, log: (String) -> Void) async -> Outcome {
+    static func restoreOnly(_ k: ChannelCaller, log: (String) -> Void, step: (Step) -> Void = { _ in }) async -> Outcome {
         do {
             let info = try await info(k)
-            let r = try await restore(k, info: info, log: log)
+            let r = try await restore(k, info: info, log: log, step: step)
             return .restored(added: r.added, removed: r.removed, result: r.result)
         } catch {
             return .failed("\(error)")

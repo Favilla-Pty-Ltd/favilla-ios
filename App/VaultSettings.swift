@@ -21,6 +21,12 @@ final class VaultService: ObservableObject {
     @Published private(set) var info: Vault.Info?
     @Published private(set) var busy = ""        // what's running, or empty
     @Published private(set) var status = ""
+    /// The running step, for the page (issue #59). nil when nothing runs.
+    @Published private(set) var step: Vault.Step?
+    /// The run that is showing: a backup or a restore.
+    @Published private(set) var runIsBackup = true
+    /// A good result shows for a moment, then the steps close by themselves; a failure stays.
+    @Published private(set) var doneOK = false
     @Published private(set) var log: [String] = []
     private var lastAsk: (UInt8, Date)?
 
@@ -51,6 +57,7 @@ final class VaultService: ObservableObject {
         guard Credentials.isPaired, KeyRoute.current == .bluetooth else { status = "Choose Bluetooth above and pair the app first."; return }
         busy = backup ? "Backing up…" : "Restoring…"
         status = ""
+        runIsBackup = backup; doneOK = false; step = .checking(0)
         // Issue #35: say whether iOS had the app in front; a KEY-started run
         // usually finds it in the background, woken by the nudge.
         let where_ = UIApplication.shared.applicationState == .active ? "foreground" : "background"
@@ -67,8 +74,15 @@ final class VaultService: ObservableObject {
         if where_ == "background" { note(String(format: "background time left: %.0f s", UIApplication.shared.backgroundTimeRemaining)) }
         Task {
             defer { busy = ""; bg.end() }
-            let out = backup ? await Vault.backup(NostrLink.shared, log: { [weak self] s in Task { @MainActor in self?.note(s) } })
-                             : await Vault.restoreOnly(NostrLink.shared, log: { [weak self] s in Task { @MainActor in self?.note(s) } })
+            let log: (String) -> Void = { [weak self] s in Task { @MainActor in self?.note(s) } }
+            let at: (Vault.Step) -> Void = { [weak self] s in Task { @MainActor in if self?.busy.isEmpty == false { self?.step = s } } }
+            let out = backup ? await Vault.backup(NostrLink.shared, log: log, step: at)
+                             : await Vault.restoreOnly(NostrLink.shared, log: log, step: at)
+            step = nil
+            if case .failed = out {} else {
+                doneOK = true
+                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); if self.busy.isEmpty { self.doneOK = false } }
+            }
             switch out {
             case .backedUp(let i):
                 info = i ?? info

@@ -132,6 +132,19 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: KeyLink.didStart, object: nil, queue: .main) { [weak self] _ in self?.pause() })
         observers.append(nc.addObserver(forName: KeyLink.didFinish, object: nil, queue: .main) { [weak self] _ in self?.resume() })
+        // Issue #63: PAIR THE APP has just succeeded. Anything held from before
+        // (a peripheral reference, the old pairing, a wait learnt under it) goes;
+        // KeyLink's didFinish follows and brings the link up with the new pairing.
+        observers.append(nc.addObserver(forName: PairIdentity.paired, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            LinkLog.shared.add("the app was paired: the Nostr link starts over with the new pairing")
+            self.drop()
+            self.creds = nil
+            self.holdingVault = false
+            self.otherLifeStreak = 0; self.otherLifeUntil = .distantPast
+            self.reconnectDelay = 0
+            self.state = .idle
+        })
         // A KeySession (the Accounts page, import) holds the KEY: step aside at once.
         KeyLife.log = { LinkLog.shared.add($0) }
         KeySession.willOpen = { [weak self] in self?.sessions += 1; LinkLog.shared.add("stepping aside: the Accounts page has the KEY"); self?.pause() }

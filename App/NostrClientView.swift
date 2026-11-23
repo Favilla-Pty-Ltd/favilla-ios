@@ -127,6 +127,15 @@ struct NostrClientView: UIViewRepresentable {
             wv.evaluateJavaScript(PairIdentity.clearScript + ";location.reload();") { _, _ in }
             Bunker.log("client: device pairing cleared and the page reloaded")
         }
+        // Issue #63: the app paired while this page was running (under Home, or
+        // behind the settings sheet). Its device key and session belong to the
+        // old pairing: clear them and load again, now, not at the next launch.
+        context.coordinator.pairedObserver = NotificationCenter.default.addObserver(forName: PairIdentity.paired, object: nil, queue: .main) { [weak wv] _ in
+            guard let wv else { return }
+            PairIdentity.resetDone()
+            wv.evaluateJavaScript(PairIdentity.clearScript + ";location.reload();") { _, _ in }
+            Bunker.log("client: the app was paired; device pairing cleared and the page reloaded")
+        }
         wv.load(URLRequest(url: URL(string: Self.origin + "/")!))
         #if targetEnvironment(simulator)
         // A sample run that opens a profile page (CI, against the real relays):
@@ -194,6 +203,7 @@ struct NostrClientView: UIViewRepresentable {
         var resetObserver: NSObjectProtocol?
         var goneObserver: NSObjectProtocol?
         var lockObserver: NSObjectProtocol?
+        var pairedObserver: NSObjectProtocol?
         var activeObserver: NSObjectProtocol?
         var stateSink: AnyCancellable?
 

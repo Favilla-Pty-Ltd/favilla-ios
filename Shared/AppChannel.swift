@@ -635,8 +635,16 @@ enum PairIdentity {
         NotificationCenter.default.post(name: PairIdentity.cleared, object: nil)
     }
 
-    /// After an app pairing: the client enrols afresh with this KEY.
-    static func pairedAgain() { store.set(true, forKey: resetKey) }
+    /// After an app pairing: the client enrols afresh with this KEY. A client
+    /// that is already running does so at once (issue #63: it used to keep the
+    /// old pairing's device key and session until the app was opened again),
+    /// and the Nostr link starts over with the new pairing.
+    static func pairedAgain() {
+        store.set(true, forKey: resetKey)
+        NotificationCenter.default.post(name: PairIdentity.paired, object: nil)
+    }
+    /// Posted on the main queue when PAIR THE APP has just succeeded.
+    static let paired = Notification.Name("PairIdentity.paired")
 
     /// Posted by resetAll: the Nostr client clears its device pairing and reloads; the settings page shows Not paired.
     static let cleared = Notification.Name("PairIdentity.cleared")

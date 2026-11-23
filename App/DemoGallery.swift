@@ -44,6 +44,21 @@ struct DemoGallery: View {
             case "x-newpw-done": NewPasswordView(job: change(.done(change: true), matches: 1), onCancel: {})
             case "x-save-user": SaveToKeyView(job: save(.needUser, user: ""), onDone: {}, onCancel: {})
             case "x-save-asking": SaveToKeyView(job: save(.asking(change: true), user: "you@example.com"), onDone: {}, onCancel: {})
+            case "x-wait-key":
+                SignInView(link: link, purpose: .password, onNewPassword: {}, onClose: {})
+                    .onAppear { link.site = "www.example-shop.com"; link.demoWaiting() }
+            case "x-waits":
+                // The waiting pieces of the Accounts and Backup pages (issue #59).
+                VStack(alignment: .leading, spacing: 16) {
+                    WaitCard(title: "Reading the KEY's list", detail: "48 of 131")
+                    WaitBar(fraction: 48.0 / 131)
+                    WaitCard(title: "Check your KEY", detail: "It shows DELETE ENTRY for example-shop.com as you@example.com. Hold ENTER there to delete it, or BACK to keep it.")
+                    VaultSteps(step: .sealing(0.4), backup: true)
+                    VaultSteps(step: .merging, backup: false)
+                    VaultSteps(step: nil, backup: true)
+                    Spacer()
+                }
+                .padding(20)
             default: Text("No sample sheet named \(name)").foregroundStyle(Brand.ink)
             }
         }

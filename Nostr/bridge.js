@@ -491,7 +491,20 @@
       return true;
     } catch (e) { return false; }
   }
+  // What the page holds, for the app's log (no names, no text): so a bench
+  // log says whether there was anything to wipe and whether it went.
+  function dmHeld() {
+    try {
+      var n = 0, l = document.getElementById('dm-conversation-list'), m = document.getElementById('dm-thread-messages');
+      if (typeof dmState !== 'undefined') n = Object.keys(dmState.threads || {}).length;
+      return n + ' threads in memory, key ' + (typeof dmState !== 'undefined' && dmState.cacheKey ? 'held' : 'none') +
+        ', ' + (l ? l.children.length : 0) + ' rows listed, ' + (m ? m.children.length : 0) + ' in the open thread' +
+        (typeof dmState !== 'undefined' && dmState.currentPeer ? ' (a thread is open)' : '') +
+        ', wipe by ' + (typeof window._dmLockDrop === 'function' ? 'the page' : 'the bridge') + ', page ' + document.visibilityState;
+    } catch (e) { return 'could not read: ' + (e && e.message); }
+  }
   window.__favillaLockChanged = function (unlocked, edge) {
+    var before = dmHeld();
     try {
       var was = lockedByKey;
       lockedByKey = !unlocked;
@@ -500,7 +513,8 @@
         console.log('[dev] the KEY ' + (unlocked ? 'unlocked' : 'locked') + ' (nudge): link probe now');
         if (typeof window.keyLinkBeat === 'function') { window.keyLinkBeat(); setTimeout(window.keyLinkBeat, 1500); }
       }
-    } catch (e) {}
+    } catch (e) { return 'failed: ' + (e && e.message); }
+    return unlocked ? 'held: ' + before : 'before: ' + before + ' | after: ' + dmHeld();
   };
   // The page's _dmLockDrop exists only once its /info poller has started
   // (after a pairing or reconnect). Before that, do the same thing by hand.

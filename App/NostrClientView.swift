@@ -104,7 +104,11 @@ struct NostrClientView: UIViewRepresentable {
             guard edge || turned || !unlocked else { return }
             coordinator?.lastUnlocked = unlocked
             if edge || turned { Bunker.log("client: the KEY is " + (unlocked ? "unlocked" : "locked") + (edge ? " (it said so at once)" : " (from its regular nudge)")) }
-            wv.evaluateJavaScript("window.__favillaLockChanged && window.__favillaLockChanged(\(unlocked), \(edge || turned))") { _, _ in }
+            let say = edge || turned
+            wv.evaluateJavaScript("window.__favillaLockChanged ? window.__favillaLockChanged(\(unlocked), \(say)) : 'the page has no lock hook'") { r, e in
+                // One line per change: what the page held and what was left (bench, 23 Nov).
+                if say { Bunker.log("client: lock passed to the page: " + ((r as? String) ?? e?.localizedDescription ?? "no answer")) }
+            }
         }
         context.coordinator.goneObserver = NotificationCenter.default.addObserver(forName: NostrLink.keyGone, object: nil, queue: .main) { [weak wv] n in
             guard let wv, KeyRoute.current == .bluetooth else { return }

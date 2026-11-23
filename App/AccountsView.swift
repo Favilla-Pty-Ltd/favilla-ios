@@ -291,7 +291,7 @@ final class AccountsModel: ObservableObject {
                         break itemLoop
                     }
                     refused.append(VaultImport.Skipped(label: it.label + (it.kind == .code ? ", code" : ""), why: VaultImport.itemText(st)))
-                    if st == 0x10 { stopped = "The KEY is full (200 records)."; break itemLoop }
+                    if st == 0x10 { stopped = "The KEY is full, passkeys and passwords together."; break itemLoop }
                     break
                 }
             }

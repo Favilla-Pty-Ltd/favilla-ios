@@ -69,6 +69,7 @@ enum Vault {
         case 17: return "A restore from the words is pending on the KEY. Restore first."
         case 18: return "The relay's copy holds entries this KEY can't keep."
         case 19: return "That backup is older than this KEY's last one. Nothing was imported."
+        case 20: return "Too much for one backup. Everything is still on the KEY."   // VBR_TOOBIG (KEY 11dr): not staged, nothing sent
         default: return "The KEY answered code \(code)."
         }
     }

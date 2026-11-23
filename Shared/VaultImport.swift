@@ -340,7 +340,7 @@ enum VaultImport {
         case 0x04: return "the KEY's signer chip is too old for one-time codes"
         case 0x07: return "the KEY couldn't read it"
         case 0x0E: return "the KEY couldn't seal or store it"
-        case 0x10: return "the KEY is full (200 records)"
+        case 0x10: return "the KEY is full"
         case 0x12: return "too long for the KEY"
         case 0x14: return "the import window had closed"
         default: return String(format: "the KEY answered 0x%02X", s)

@@ -346,7 +346,7 @@ enum AppChannel {
         case 0x04: return "Your KEY is in NOSTR mode. Editing accounts needs its VAULT side: on the KEY choose VAULT, enter the VAULT PIN, and leave it on its home screen."
         case 0x05: return "Your KEY is locked. Enter the VAULT PIN on the KEY, then try again."
         case 0x06: return "The KEY is already asking about another entry. Answer it on the KEY first."
-        case 0x10: return "The KEY is full: 200 records, passkeys and passwords together."
+        case 0x10: return "The KEY is full, passkeys and passwords together."
         case 0x11: return "The KEY has used its record opens for this sitting. Lock and unlock the KEY, then try again."
         case 0x12: return "Too long for the KEY: site, username, password and note come to 415 bytes at most together."
         case 0x0E: return "The KEY couldn't write the entry. Try again."

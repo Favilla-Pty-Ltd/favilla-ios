@@ -80,7 +80,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             Credentials.raiseCounter(above: floor)
             a = try await once(cmd, body, timeout)
         }
-        return a
+        return AppChannel.unsealAck(a, for: cmd, creds)   // 11ay: ASSESS_ONE's 0xB1 is encrypted (issue #66)
     }
 
     func close() {

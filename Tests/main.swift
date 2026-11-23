@@ -570,6 +570,20 @@ do {
     if let a = try? AppChannel.open(hex("c001020304050607080f000000bf3c14dc19c3a26044a55adfb243e966c5b5884e7b6a10"), chCreds), let hp = try? AppChannel.parseHealth(a.body) {
         check(hp.pending == 2 && hp.prefixes == ["5BAA6"], "health: 0xC0 decodes (2 pending, prefix 5BAA6)")
     } else { check(false, "health: the 0xC0 vector opens") }
+
+    // 11ay (firmware issue #66): ASSESS_ONE's 0xB1 answer is encrypted with 0xB1
+    // in the answer byte's place; other 0xB1 answers stay plain.
+    do {
+        let plain = Data([0x00, 0x02, 0x5B, 0xAA, 0x60])
+        let sealed = AppChannel.Answer(rsp: AppChannel.rAck, ctr: 21, body: AppChannel.keystream(plain, rsp: AppChannel.rAck, ctr: 21, chCreds))
+        check(sealed.body != plain, "assess one: the body crosses encrypted")
+        let open = AppChannel.unsealAck(sealed, for: AppChannel.cAssessOne, chCreds)
+        check(AppChannel.parseAssessOne(open.body) == AppChannel.AssessOne(status: 0, state: 2, prefix: "5BAA6"), "assess one: 0xB1 decrypts to state 2, prefix 5BAA6")
+        check(AppChannel.unsealAck(sealed, for: AppChannel.cPwSave, chCreds).body == sealed.body, "assess one: another command's 0xB1 is left as it is")
+        let refusal = AppChannel.Answer(rsp: AppChannel.rErr, ctr: 21, body: Data([0x02]))
+        check(AppChannel.unsealAck(refusal, for: AppChannel.cAssessOne, chCreds) == refusal, "assess one: the KEY's plain refusal is left as it is")
+        check(AppChannel.parseAssessOne(Data([0, 2, 0x5B])) == nil, "assess one: a short body is not read")
+    }
     let bucket = AppChannel.healthBody(prefix: "5BAA6", suffixes: ["1E4C9B93F3F0682250B6CF8331B7EE68FD8"])
     check(bucket.map(hx) == "5baa6001001e4c9b93f3f0682250b6cf8331b7ee68fd80", "health: one suffix packs as in the vector")
     // 11bc (issue #32): a part with more to follow sets bit 15 of n.

@@ -56,7 +56,7 @@ enum AppChannel {
     static let cPwSave: UInt8 = 0x47     // ENCRYPTED request body [id 8][sLen][site][uLen][user][pLen][pass][nLen][note] -> rAck [status]
     static let cPwDelete: UInt8 = 0x48   // [n][id 8 x n], n 1..20 -> rAck [status]
     static let cPwResult: UInt8 = 0x49   // none -> rAck [state][id 8][reason]
-    static let cAssessOne: UInt8 = 0x4A  // [id 8] -> rAck [status][queued]; then HEALTH with no body (both lives)
+    static let cAssessOne: UInt8 = 0x4A  // [id 8] -> rAck, ENCRYPTED (11ay): [status][state][prefix 3] (both lives)
     /// Requests whose body crosses encrypted, with the command byte in the
     /// answer byte's place in the keystream (11ax: PW_SAVE only).
     // 11bf (issue #36): import in VAULT mode (VaultImport.swift).
@@ -211,6 +211,28 @@ enum AppChannel {
             body = keystream(body, rsp: b[0], ctr: ctr, creds)
         }
         return Answer(rsp: b[0], ctr: ctr, body: body)
+    }
+
+    /// Requests whose 0xB1 answer comes back encrypted (11ay: ASSESS_ONE only;
+    /// every other 0xB1 is plain, so `open` cannot tell by the answer byte).
+    static let encryptedAcks: Set<UInt8> = [cAssessOne]
+
+    /// The 0xB1 answer to one of `encryptedAcks`, decrypted: 0xB1 stands in the
+    /// answer byte's place in the keystream, as for HEALTH (firmware issue #66).
+    /// Anything else (another command, the KEY's plain 0xBF refusal) is returned as it is.
+    static func unsealAck(_ a: Answer, for cmd: UInt8, _ creds: Credentials) -> Answer {
+        guard encryptedAcks.contains(cmd), a.rsp == rAck else { return a }
+        return Answer(rsp: a.rsp, ctr: a.ctr, body: keystream(a.body, rsp: rAck, ctr: a.ctr, creds))
+    }
+
+    /// ASSESS_ONE's answer, decrypted: [status][state][prefix 3]. state 0 refused
+    /// (see status), 1 the KEY is opening the entry (ask again), 2 the prefix is
+    /// ready (five hex digits, as HEALTH packs it), 3 the verdict is already known.
+    struct AssessOne: Equatable { var status: UInt8; var state: UInt8; var prefix: String }
+    static func parseAssessOne(_ body: Data) -> AssessOne? {
+        let b = [UInt8](body)
+        guard b.count == 5 else { return nil }
+        return AssessOne(status: b[0], state: b[1], prefix: String(b[2..<5].map { String(format: "%02X", $0) }.joined().dropLast()))
     }
 
     static func constantTimeEqual(_ a: Data, _ b: Data) -> Bool {

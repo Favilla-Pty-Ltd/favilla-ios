@@ -477,13 +477,44 @@ final class AccountsModel: ObservableObject {
                 let st = a.body.first ?? 0xFF
                 return (st == 0x07 ? "This KEY can't check one entry yet: it needs firmware 11ax." : AppChannel.pwStatusText(st), false)
             }
-            guard a.rsp == AppChannel.rAck, a.body.count >= 2 else { return ("The KEY's answer couldn't be read.", false) }
-            if a.body[0] != 0x00 { return (AppChannel.pwStatusText(a.body[0]), false) }
-            self.note("assess one \(e.site): queued \(a.body[1])")
-            try await Task.sleep(nanoseconds: 600_000_000)
-            let (buckets, _) = try await self.healthRounds(s)
-            self.note("check one \(e.site): \(buckets) bucket\(buckets == 1 ? "" : "s")")
-            return (nil, true)
+            // 11ay (issue #66): the answer is encrypted (KeySession.request opens
+            // it) and carries the entry's own prefix, so one bucket is fetched
+            // and sent; no full HEALTH round.
+            var ans = a
+            for attempt in 0..<12 {
+                if attempt > 0 {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                    ans = try await s.request(AppChannel.cAssessOne, id, timeout: 8)
+                    if ans.rsp == AppChannel.rErr { return (AppChannel.pwStatusText(ans.body.first ?? 0xFF), false) }
+                }
+                guard ans.rsp == AppChannel.rAck, var one = AppChannel.parseAssessOne(ans.body) else { return ("The KEY's answer couldn't be read.", false) }
+                defer { one.prefix = "" }
+                switch one.state {
+                case 0:
+                    self.note("check one \(e.site): refused, status \(one.status)")
+                    return (one.status == 0x04 ? "The KEY's vault isn't open. On the KEY choose VAULT and enter the VAULT PIN, then try again." : AppChannel.pwStatusText(one.status), false)
+                case 1:
+                    if attempt == 0 { self.note("check one \(e.site): the KEY is opening the entry") }
+                    continue
+                case 2:
+                    let suffixes = try await AccountsModel.hibp(one.prefix)
+                    var sent = 0, parts = 0
+                    repeat {
+                        let end = min(sent + AppChannel.healthPart, suffixes.count)
+                        guard let body = AppChannel.healthBody(prefix: one.prefix, suffixes: Array(suffixes[sent..<end]), more: end < suffixes.count) else { return ("A breach bucket couldn't be packed.", false) }
+                        _ = try await self.health(s, body: body)
+                        sent = end; parts += 1
+                    } while sent < suffixes.count
+                    self.note("check one \(e.site): one bucket, \(suffixes.count) hashes to the KEY in \(parts) part\(parts == 1 ? "" : "s")")
+                    return (nil, true)
+                case 3:
+                    self.note("check one \(e.site): the KEY already has the verdict")
+                    return (nil, true)
+                default:
+                    return ("The KEY's answer couldn't be read.", false)
+                }
+            }
+            return ("The KEY is still opening this entry. Try again in a few seconds.", false)
         }
         if let why { return why }
         // The list is being read again: wait for it, then report this entry.

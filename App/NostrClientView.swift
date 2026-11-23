@@ -92,11 +92,19 @@ struct NostrClientView: UIViewRepresentable {
         // KEY 11bx (issue #25): the KEY says at once when it locks or unlocks. The
         // page's own link probe is the judge (it wipes plaintext DMs on a lock);
         // the nudge only makes it look now, not at its next 10 s tick.
-        context.coordinator.lockObserver = NotificationCenter.default.addObserver(forName: NostrLink.nudged, object: nil, queue: .main) { [weak wv] n in
-            guard let wv, KeyRoute.current == .bluetooth, let l = n.userInfo?["lock"] as? Int, UInt8(truncatingIfNeeded: l) & Bunker.lockChanged != 0 else { return }
+        context.coordinator.lockObserver = NotificationCenter.default.addObserver(forName: NostrLink.nudged, object: nil, queue: .main) { [weak wv, weak coordinator = context.coordinator] n in
+            guard let wv, KeyRoute.current == .bluetooth, let l = n.userInfo?["lock"] as? Int else { return }
+            // 23 Nov: the state in every nudge counts, not only the one marked
+            // "changed" (that one can be missed: link down, page reloading). A
+            // locked KEY is passed on with every nudge (3 s), so the page wipes
+            // whatever is in memory; an unlock once, when the state turns.
+            let edge = UInt8(truncatingIfNeeded: l) & Bunker.lockChanged != 0
             let unlocked = UInt8(truncatingIfNeeded: l) & Bunker.lockUnlocked != 0
-            Bunker.log("client: the KEY " + (unlocked ? "unlocked" : "locked") + ", link probe now")
-            wv.evaluateJavaScript("window.__favillaLockChanged && window.__favillaLockChanged(\(unlocked))") { _, _ in }
+            let turned = coordinator?.lastUnlocked != unlocked
+            guard edge || turned || !unlocked else { return }
+            coordinator?.lastUnlocked = unlocked
+            if edge || turned { Bunker.log("client: the KEY is " + (unlocked ? "unlocked" : "locked") + (edge ? " (it said so at once)" : " (from its regular nudge)")) }
+            wv.evaluateJavaScript("window.__favillaLockChanged && window.__favillaLockChanged(\(unlocked), \(edge || turned))") { _, _ in }
         }
         context.coordinator.goneObserver = NotificationCenter.default.addObserver(forName: NostrLink.keyGone, object: nil, queue: .main) { [weak wv] n in
             guard let wv, KeyRoute.current == .bluetooth else { return }
@@ -203,6 +211,8 @@ struct NostrClientView: UIViewRepresentable {
         var resetObserver: NSObjectProtocol?
         var goneObserver: NSObjectProtocol?
         var lockObserver: NSObjectProtocol?
+        /// The lock state last passed to the page (from the KEY's nudges).
+        var lastUnlocked: Bool?
         var pairedObserver: NSObjectProtocol?
         var activeObserver: NSObjectProtocol?
         var stateSink: AnyCancellable?

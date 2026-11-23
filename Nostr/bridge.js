@@ -474,17 +474,32 @@
       console.log('[dev] KEY gone over Bluetooth: ' + (why || ''));
     } catch (e) {}
   };
-  // KEY 11bx (issue #25): the KEY nudged that it locked or unlocked. Run the
-  // page's link probe now; on a lock the page wipes its plaintext DMs from
-  // what /api/link answers. Once more shortly after, in case the first probe
-  // raced the KEY's own state change.
-  window.__favillaLockChanged = function (unlocked) {
+  // KEY 11bx (issue #25): the KEY says in its nudge whether it is locked.
+  // 23 Nov: a lock the KEY itself announced wipes the plaintext DMs here and
+  // now. Before, this only ran the page's link probe and left the wipe to it,
+  // and the page wipes only when that probe sees "unlocked, then locked" with
+  // the link up: a probe that failed while the KEY was locking, or one made
+  // while the page was out of sight, left the threads on screen for a long
+  // time or for good. The app repeats the call every 3 s while the KEY stays
+  // locked, so anything a late decrypt puts back goes too.
+  var lockedByKey = false;
+  function dropDms(reason) {
     try {
-      console.log('[dev] the KEY ' + (unlocked ? 'unlocked' : 'locked') + ' (nudge): link probe now');
-      if (typeof window.keyLinkBeat === 'function') { window.keyLinkBeat(); setTimeout(window.keyLinkBeat, 1500); }
-      // The page's own wipe exists only once its poller runs; before that, a
-      // lock the KEY itself announced clears the threads here (the safe side).
-      if (!unlocked && typeof window._dmLockDrop !== 'function') wipeDmsDirect('KEY locked (nudge, no poller yet)');
+      if (typeof dmState === 'undefined') return false;
+      if (!dmState.cacheKey && !Object.keys(dmState.threads || {}).length) return false;
+      if (typeof window._dmLockDrop === 'function') window._dmLockDrop(reason); else wipeDmsDirect(reason);
+      return true;
+    } catch (e) { return false; }
+  }
+  window.__favillaLockChanged = function (unlocked, edge) {
+    try {
+      var was = lockedByKey;
+      lockedByKey = !unlocked;
+      if (!unlocked) { if (dropDms('KEY locked (its nudge)')) console.log('[dev] the KEY is locked (nudge): plaintext DMs dropped'); }
+      if (edge || was !== lockedByKey) {
+        console.log('[dev] the KEY ' + (unlocked ? 'unlocked' : 'locked') + ' (nudge): link probe now');
+        if (typeof window.keyLinkBeat === 'function') { window.keyLinkBeat(); setTimeout(window.keyLinkBeat, 1500); }
+      }
     } catch (e) {}
   };
   // The page's _dmLockDrop exists only once its /info poller has started
@@ -506,13 +521,14 @@
   // if the heartbeat's last verdict was "not reachable" (two misses, so not a
   // blip) and plaintext threads are in memory, wipe them. Nothing is lost:
   // the relays hold the messages and they come back when the KEY does.
+  // 23 Nov: also when the KEY said it is locked, or the page's own probe says
+  // "reachable, locked", and whether or not the page is in sight.
   setInterval(function () {
     try {
-      if (document.visibilityState !== 'visible') return;
-      if (window.keyLinkUp !== false) return;
-      if (typeof dmState === 'undefined' || !Object.keys(dmState.threads || {}).length) return;
-      if (typeof window._dmLockDrop === 'function') window._dmLockDrop('KEY not reachable (standing check)');
-      else wipeDmsDirect('KEY not reachable (standing check)');
+      var why = lockedByKey ? 'KEY locked (standing check)'
+        : window.keyLinkUp === false ? 'KEY not reachable (standing check)'
+        : (window.keyLinkUp === true && window.keyLinkUnlocked === false) ? 'KEY locked, says the probe (standing check)' : '';
+      if (why) dropDms(why);
     } catch (e) {}
   }, 4000);
   // Back to the foreground: probe at once rather than at the next 10 s tick.

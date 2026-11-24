@@ -1,5 +1,5 @@
 Copied from Favilla-Pty-Ltd/favilla-key-firmware src/pwa.html
-commit df0a4f9b3ad18715f069b7afda415bf2a0d15a8c
-pwa build f6c85c2d8151
+commit ed31ea175d88c867ee274c2e21487ba23fea5452
+pwa build ca86da3ea6a7
 copied 2026-11-24
 Refresh with scripts/sync_pwa.sh

@@ -346,7 +346,8 @@ struct NostrClientView: UIViewRepresentable {
                 // A ring may be up from before this page loaded (the app was closed).
                 if CallRing.shared.current != nil, let wv = webView { Task { @MainActor in await Coordinator.feedCallWraps(wv) } }
             } else if message.name == "favillaApp", let line = m["log"] as? String {
-                Bunker.log("pwa: " + line)
+                // Secure-chat lines have their own log (Diagnostics > Secure chat log).
+                if line.contains("[mmx]") { Bunker.chatLog(line) } else { Bunker.log("pwa: " + line) }
             } else if message.name == "favillaApp", let name = m["callIncoming"] as? String {
                 CallRing.shared.pwaIncoming(name: String(name.prefix(60)), video: m["video"] as? Bool ?? false)
             } else if message.name == "favillaApp", let phase = m["callPhase"] as? String {

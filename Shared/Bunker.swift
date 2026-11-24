@@ -134,6 +134,14 @@ enum Bunker {
         #endif
     }
 
+    /// The client page's secure-chat lines ([mmx]), kept apart so the bunker's
+    /// own lines don't push them out: the last 120 (bench, 24 Nov).
+    static func chatLog(_ line: String) {
+        var all = store.stringArray(forKey: "chatLog") ?? []
+        all.append(ISO8601DateFormatter().string(from: Date()) + " " + line)
+        store.set(Array(all.suffix(120)), forKey: "chatLog")
+    }
+
     /// The 0xB9 answer, or a sentence saying why not.
     static func replies(_ a: AppChannel.Answer) -> Result<Replies, KeySession.Failure> {
         if a.rsp == rNip46, let r = decodeReplies(a.body) { return .success(r) }

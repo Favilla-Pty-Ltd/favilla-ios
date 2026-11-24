@@ -107,7 +107,7 @@ struct Footnote: View {
 // MARK: - Pages
 
 enum SettingsDest: Hashable {
-    case route, bunker, accounts, keyboard, backup, lastRequest, bluetoothLog, bunkerLog, pushTest
+    case route, bunker, accounts, keyboard, backup, lastRequest, bluetoothLog, bunkerLog, chatLog, pushTest
 }
 
 /// NOSTR > Route: how this iPhone reaches the KEY for the Nostr client.
@@ -428,6 +428,37 @@ struct BunkerLogPage: View {
     }
 }
 
+/// DIAGNOSTICS > Secure chat log: the page's own [mmx] lines, newest first.
+struct ChatLogPage: View {
+    @State private var lines: [String] = []
+    @State private var copied = false
+    private func load() { lines = (Bunker.store.stringArray(forKey: "chatLog") ?? []).reversed() }
+
+    var body: some View {
+        SettingsPage(title: "Secure chat") {
+            SettingsCard {
+                HStack(spacing: 12) {
+                    Text("Log (\(lines.count))").font(Brand.button).foregroundStyle(Brand.ink)
+                    Spacer()
+                    Button("Refresh") { load() }.font(Brand.button).foregroundStyle(Brand.brass)
+                    Button(copied ? "Copied" : "Copy") {
+                        UIPasteboard.general.string = lines.joined(separator: "\n")
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                    }.font(Brand.button).foregroundStyle(Brand.brass)
+                }
+                Text(lines.isEmpty ? "Nothing yet. Open NOSTR and a secure chat, then come back." : lines.joined(separator: "\n"))
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(Brand.ink)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Brand.bg).clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            Footnote("What the client page says about secure chat as it runs (newest first, 120 kept). No message text; it can hold the first characters of public keys.")
+        }
+        .onAppear { load() }
+    }
+}
+
 /// DIAGNOSTICS > Push test.
 struct PushTestPage: View {
     var body: some View {
@@ -524,6 +555,10 @@ struct ThisPhoneView: View {
                                 SettingsRow(icon: "text.alignleft", title: "Bunker and calls log", subtitle: "\(bunker.log.count) lines, with the client's own", tint: Brand.grey)
                             }
                             RowLine()
+                            NavigationLink(value: SettingsDest.chatLog) {
+                                SettingsRow(icon: "lock.doc", title: "Secure chat log", subtitle: "The client's own secure-chat lines, last 120", tint: Brand.grey)
+                            }
+                            RowLine()
                             NavigationLink(value: SettingsDest.pushTest) {
                                 SettingsRow(icon: "bell.badge", title: "Push test", subtitle: "Can a notification reach the KEY with Favilla closed?", tint: Brand.grey)
                             }
@@ -557,6 +592,7 @@ struct ThisPhoneView: View {
                 case .lastRequest: LastRequestPage()
                 case .bluetoothLog: BluetoothLogPage()
                 case .bunkerLog: BunkerLogPage()
+                case .chatLog: ChatLogPage()
                 case .pushTest: PushTestPage()
                 }
             }

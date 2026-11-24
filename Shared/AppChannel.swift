@@ -290,6 +290,42 @@ enum AppChannel {
     /// bucket over `healthPart` lines goes as parts, bit 15 of n (`more`) set on
     /// all but the last; the KEY records the verdict when the last arrives.
     static let healthPart = 1000
+    /// A real Have I Been Pwned range holds hundreds of lines. Fewer than this
+    /// means the fetch failed; the KEY (11eb) refuses such a bucket with 0x07,
+    /// and the app never sends one (firmware issue #73).
+    static let healthMin = 100
+    static let hibpUnreached = "Couldn't reach Have I Been Pwned, nothing was checked."
+
+    /// The lines of a Have I Been Pwned range answer, "SUFFIX:count": the
+    /// 35-hex-digit suffixes seen at least once (padding lines have count 0).
+    /// The answer's lines end in CR LF, which Swift reads as ONE Character:
+    /// splitting on "\n" or "\r" alone found no line ends, so the whole body
+    /// was one unreadable line and every bucket came back empty (issue #73).
+    static func parseHibp(_ text: String) -> (suffixes: [String], lines: Int) {
+        let lines = text.split(whereSeparator: \.isNewline)
+        let kept: [String] = lines.compactMap { line in
+            let parts = line.split(separator: ":")
+            guard parts.count == 2, let n = Int(parts[1].trimmingCharacters(in: .whitespaces)), n > 0 else { return nil }
+            let sfx = String(parts[0]).trimmingCharacters(in: .whitespaces).uppercased()
+            return sfx.count == 35 && sfx.allSatisfy(\.isHexDigit) ? sfx : nil
+        }
+        return (kept, lines.count)
+    }
+
+    /// The HEALTH bodies for one whole bucket, in parts of `healthPart`. nil
+    /// for a bucket under `healthMin` suffixes (or one that will not pack):
+    /// nothing is sent for a fetch that failed, so the KEY never records
+    /// "clean" from an empty list.
+    static func healthParts(prefix: String, suffixes: [String]) -> [Data]? {
+        guard suffixes.count >= healthMin else { return nil }
+        var out: [Data] = [], sent = 0
+        while sent < suffixes.count {
+            let end = min(sent + healthPart, suffixes.count)
+            guard let body = healthBody(prefix: prefix, suffixes: Array(suffixes[sent..<end]), more: end < suffixes.count) else { return nil }
+            out.append(body); sent = end
+        }
+        return out
+    }
     static func healthBody(prefix: String, suffixes: [String], more: Bool = false) -> Data? {
         guard prefix.count == 5, let p = packHex(prefix + "0"), suffixes.count <= healthPart else { return nil }
         var d = Data(p)

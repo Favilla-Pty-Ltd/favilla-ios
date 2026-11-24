@@ -150,17 +150,12 @@ final class AccountsModel: ObservableObject {
             lastPending = page.pending
             for prefix in page.prefixes {
                 let suffixes = try await hibp(prefix)
-                buckets += 1
                 // 11bc (issue #32): parts of up to 1,000, bit 15 on all but the last.
-                var sent = 0, parts = 0
-                repeat {
-                    let end = min(sent + AppChannel.healthPart, suffixes.count)
-                    let slice = Array(suffixes[sent..<end])
-                    guard let body = AppChannel.healthBody(prefix: prefix, suffixes: slice, more: end < suffixes.count) else { throw KeySession.Failure("A breach bucket couldn't be packed.") }
-                    _ = try await health(s, body: body)
-                    sent = end; parts += 1
-                } while sent < suffixes.count
-                note("bucket \(prefix): \(suffixes.count) hashes to the KEY in \(parts) part\(parts == 1 ? "" : "s")")
+                // Issue #73: a bucket that could not be fetched is never sent.
+                guard let parts = AppChannel.healthParts(prefix: prefix, suffixes: suffixes) else { throw KeySession.Failure(AppChannel.hibpUnreached) }
+                for body in parts { _ = try await health(s, body: body) }
+                buckets += 1
+                note("bucket \(prefix): \(suffixes.count) hashes to the KEY in \(parts.count) part\(parts.count == 1 ? "" : "s")")
             }
         }
         return (buckets, lastPending)
@@ -498,14 +493,10 @@ final class AccountsModel: ObservableObject {
                     continue
                 case 2:
                     let suffixes = try await AccountsModel.hibp(one.prefix)
-                    var sent = 0, parts = 0
-                    repeat {
-                        let end = min(sent + AppChannel.healthPart, suffixes.count)
-                        guard let body = AppChannel.healthBody(prefix: one.prefix, suffixes: Array(suffixes[sent..<end]), more: end < suffixes.count) else { return ("A breach bucket couldn't be packed.", false) }
-                        _ = try await self.health(s, body: body)
-                        sent = end; parts += 1
-                    } while sent < suffixes.count
-                    self.note("check one \(e.site): one bucket, \(suffixes.count) hashes to the KEY in \(parts) part\(parts == 1 ? "" : "s")")
+                    // Issue #73: a bucket that could not be fetched is never sent.
+                    guard let parts = AppChannel.healthParts(prefix: one.prefix, suffixes: suffixes) else { return (AppChannel.hibpUnreached, false) }
+                    for body in parts { _ = try await self.health(s, body: body) }
+                    self.note("check one \(e.site): one bucket, \(suffixes.count) hashes to the KEY in \(parts.count) part\(parts.count == 1 ? "" : "s")")
                     return (nil, true)
                 case 3:
                     self.note("check one \(e.site): the KEY already has the verdict")
@@ -526,6 +517,8 @@ final class AccountsModel: ObservableObject {
 
     private func health(_ s: KeySession, body: Data) async throws -> AppChannel.HealthPage {
         let a = try await s.request(AppChannel.cHealth, body, timeout: 20)
+        // 11eb (issue #73): 0x07 to a bucket means the KEY took no verdict from it. Not a pass.
+        if a.rsp == AppChannel.rErr, a.body.first == 0x07, !body.isEmpty { throw KeySession.Failure("The KEY didn't accept the breach list, nothing was checked.") }
         if a.rsp == AppChannel.rErr { throw KeySession.Failure(AccountsModel.refusal(a.body.first ?? 0xFF)) }
         guard a.rsp == AppChannel.rHealth else { throw KeySession.Failure("This KEY doesn't have the breach check yet (firmware 11s).") }
         do { return try AppChannel.parseHealth(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(AccountsModel.refusal(st)) }
@@ -536,16 +529,17 @@ final class AccountsModel: ObservableObject {
         var q = URLRequest(url: URL(string: "https://api.pwnedpasswords.com/range/\(prefix)")!, timeoutInterval: 15)
         q.setValue("true", forHTTPHeaderField: "Add-Padding")
         q.setValue("Favilla iOS", forHTTPHeaderField: "User-Agent")
-        let (d, r) = try await URLSession.shared.data(for: q)
-        guard (r as? HTTPURLResponse)?.statusCode == 200, let text = String(data: d, encoding: .utf8) else {
-            throw KeySession.Failure("Have I Been Pwned didn't answer (bucket \(prefix)).")
+        let d: Data, r: URLResponse
+        do { (d, r) = try await URLSession.shared.data(for: q) } catch {
+            LinkLog.shared.add("breach range: no answer (\(error.localizedDescription))")
+            throw KeySession.Failure(AppChannel.hibpUnreached)
         }
-        return text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { line in
-            let parts = line.split(separator: ":")
-            guard parts.count == 2, let n = Int(parts[1].trimmingCharacters(in: .whitespaces)), n > 0 else { return nil }
-            let sfx = String(parts[0]).uppercased()
-            return sfx.count == 35 ? sfx : nil
-        }
+        let status = (r as? HTTPURLResponse)?.statusCode ?? 0
+        let got = AppChannel.parseHibp(String(data: d, encoding: .utf8) ?? "")
+        // The range itself is not logged: it would name the password's bucket.
+        LinkLog.shared.add("breach range: HTTP \(status), \(d.count) bytes, \(got.lines) lines, \(got.suffixes.count) kept")
+        guard status == 200, got.suffixes.count >= AppChannel.healthMin else { throw KeySession.Failure(AppChannel.hibpUnreached) }
+        return got.suffixes
     }
     private func hibp(_ prefix: String) async throws -> [String] { try await AccountsModel.hibp(prefix) }
 

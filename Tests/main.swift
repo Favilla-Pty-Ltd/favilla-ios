@@ -571,6 +571,26 @@ do {
         check(hp.pending == 2 && hp.prefixes == ["5BAA6"], "health: 0xC0 decodes (2 pending, prefix 5BAA6)")
     } else { check(false, "health: the 0xC0 vector opens") }
 
+    // Firmware issue #73: Have I Been Pwned ends its lines with CR LF, which is
+    // one Character in Swift; the old split found no lines and every bucket was
+    // empty. And a bucket under 100 suffixes is never packed for the KEY.
+    do {
+        let sfx = { (i: Int) in String(format: "%035X", i) }
+        let crlf = (1...150).map { sfx($0) + ":" + String($0) }.joined(separator: "\r\n")
+        let got = AppChannel.parseHibp(crlf)
+        check(got.lines == 150 && got.suffixes.count == 150, "hibp: CR LF lines are read (150 of 150)")
+        check(got.suffixes.first == sfx(1) && got.suffixes.last == sfx(150), "hibp: suffixes come through whole")
+        check(AppChannel.parseHibp(crlf.replacingOccurrences(of: "\r\n", with: "\n")).suffixes.count == 150, "hibp: LF lines are read too")
+        check(AppChannel.parseHibp(sfx(1) + ":0\r\n" + sfx(2) + ":3\r\nnot a line\r\n").suffixes == [sfx(2)], "hibp: padding (count 0) and junk lines are dropped")
+        check(AppChannel.parseHibp("").suffixes.isEmpty, "hibp: an empty body gives nothing")
+        check(AppChannel.healthParts(prefix: "5BAA6", suffixes: []) == nil, "health: an empty bucket is not packed")
+        check(AppChannel.healthParts(prefix: "5BAA6", suffixes: Array(got.suffixes.prefix(99))) == nil, "health: 99 suffixes are not packed")
+        check(AppChannel.healthParts(prefix: "5BAA6", suffixes: Array(got.suffixes.prefix(100)))?.count == 1, "health: 100 suffixes go as one part")
+        let big = (1...1200).map(sfx)
+        let parts = AppChannel.healthParts(prefix: "5BAA6", suffixes: big)
+        check(parts?.count == 2 && parts?[0][3] == 0xE8 && parts?[0][4] == 0x83 && parts?[1][3] == 200 && parts?[1][4] == 0, "health: 1,200 go as 1,000 with the more bit, then 200")
+    }
+
     // 11ay (firmware issue #66): ASSESS_ONE's 0xB1 answer is encrypted with 0xB1
     // in the answer byte's place; other 0xB1 answers stay plain.
     do {

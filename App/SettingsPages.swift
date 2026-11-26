@@ -411,7 +411,7 @@ struct BluetoothLogPage: View {
             }
             .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 520)
             .background(Brand.card).clipShape(RoundedRectangle(cornerRadius: 14))
-            Footnote("What the Nostr client's Bluetooth link did: connects, requests, notifications, answers and why any failed (\(log.lines.count) lines kept). No keys or message contents.")
+            Footnote("What the app's Bluetooth links did: pairing and FIND MY KEY (lines starting key:), and the Nostr client's link: connects, requests, notifications, answers and why any failed (\(log.lines.count) lines kept). No keys or message contents.")
         }
     }
 }

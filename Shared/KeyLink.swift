@@ -345,9 +345,14 @@ final class KeyLink: NSObject, ObservableObject {
         c.connect(p, options: nil)
     }
 
+    /// Where the app also keeps these lines (its Bluetooth log). Until 27 Nov
+    /// the steps of a pairing or FIND MY KEY in the app were shown nowhere.
+    static var logSink: ((String) -> Void)?
+
     private func add(_ s: String) {
         let ms = Int(Date().timeIntervalSince(started) * 1000)
         lines.append(String(format: "%5d ms  %@", ms, s))
+        KeyLink.logSink?(s)
     }
 
     private var ms: Int { Int(Date().timeIntervalSince(started) * 1000) }

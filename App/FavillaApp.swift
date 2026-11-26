@@ -13,6 +13,12 @@ struct FavillaApp: App {
     @StateObject private var link = KeyLink()
     @Environment(\.scenePhase) private var phase
 
+    init() {
+        // Pairing, FIND MY KEY and the hand-over checks write their steps to the
+        // Bluetooth log too (Settings > Diagnostics), next to the Nostr link's.
+        KeyLink.logSink = { LinkLog.shared.add("key: " + $0) }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(link: link)

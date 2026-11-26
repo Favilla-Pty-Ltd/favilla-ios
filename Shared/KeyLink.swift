@@ -474,7 +474,10 @@ final class KeyLink: NSObject, ObservableObject {
         if !pairing {
             pairing = true
             add("Not paired yet: iOS is asking to pair. Compare the code with the KEY's screen, tap Pair, then press ENTER on the KEY.")
-            armTimeout(60, KeyLink.notConfirmed)
+            // Issue #83: the KEY's PAIR A PHONE window is 90 s. The app must
+            // not hang up on a confirmation the KEY would still take, so it
+            // waits a little longer than the KEY and lets the KEY end it.
+            armTimeout(100, KeyLink.notConfirmed)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, self.busy, self.pairing, self.peripheral != nil else { return }
@@ -565,11 +568,23 @@ final class KeyLink: NSObject, ObservableObject {
     static let pairTheApp = "Your KEY now answers only the paired Favilla app. On the KEY open PAIR A PHONE, then in the Favilla app open Settings > This iPhone and tap PAIR THE APP."
     static let needsChannel = "This needs the Favilla app paired with your KEY. On the KEY open PAIR A PHONE, then in the Favilla app open Settings > This iPhone and tap PAIR THE APP."
     /// The KEY forgot this phone (reflashed, or Forget phones) but iOS kept its keys.
+    /// iOS says the KEY has dropped this iPhone's Bluetooth bond (CBError 14).
+    /// The app's own pairing is useless with it: say what to do on the KEY and
+    /// put the pairing button on the card. Nothing is cleared until it is tapped.
+    private func keyForgot() {
+        let wasPairing = mode == .pairApp
+        finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information, CBError 14)")
+        if !wasPairing, Credentials.isPaired { maybeReset = true }
+    }
+
     static func keyForgotPhone(_ e: Error?) -> Bool {
         guard let n = e as NSError? else { return false }
         return n.domain == CBErrorDomain && n.code == CBError.peerRemovedPairingInformation.rawValue
     }
-    static let forgetOnPhone = "Your KEY no longer has this iPhone's pairing, but the iPhone still does. On the KEY set Settings > Bluetooth to App and keyboard and press a button. On the iPhone open Settings > Bluetooth, tap (i) next to Favilla KEY and tap Forget This Device. On the KEY set Bluetooth back to App only, open PAIR A PHONE, then tap PAIR THE APP in the Favilla app."
+    // Issue #83 (27 Nov): Forget all phones gives the KEY a new Bluetooth
+    // address, so the iPhone's stale entry for the old one stops mattering.
+    // The old text sent the owner through iPhone Settings first.
+    static let forgetOnPhone = "Your KEY no longer has this iPhone's pairing. On the KEY: Settings > Forget all phones, then PAIR A PHONE. Then tap PAIR here."
     static let oldFirmware = "Your KEY needs firmware 9g or later for this. If it has it, restart the KEY."
     static let unreadable = "The KEY's reply didn't make sense. Try again."
 
@@ -931,7 +946,7 @@ extension KeyLink: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
-        if KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
+        if KeyLink.keyForgotPhone(error) { keyForgot(); return }
         if busy, bonded { retryOrReject("Could not connect, \(KeyLink.code(error))"); return }
         finish(.failed("Couldn't connect to your KEY. Try again."), "Could not connect, \(KeyLink.code(error)): \(error?.localizedDescription ?? "unknown")")
     }
@@ -939,7 +954,7 @@ extension KeyLink: CBCentralManagerDelegate {
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
         if error != nil { KeyLife.forget("the KEY dropped a link") }
-        if busy, KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
+        if busy, KeyLink.keyForgotPhone(error) { keyForgot(); return }
         // Issue #80: a paired iPhone's link that went before it was secure is tried again.
         if busy, bonded, !secured { retryOrReject("The link dropped before it was secure, \(KeyLink.code(error))"); return }
         if busy { finish(.failed("Your KEY dropped the link. Try again."), "The KEY dropped the link, \(KeyLink.code(error)): \(error?.localizedDescription ?? "no reason given")") }

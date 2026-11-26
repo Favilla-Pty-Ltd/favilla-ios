@@ -221,6 +221,7 @@ struct KeyCard: View {
     /// The explanation and Forget the app's pairing stay in Settings.
     var compact = false
     @ObservedObject private var life = KeyLife.shared
+    @State private var forgot = false
 
     private var pairedLine: String {
         life.life != nil ? "Paired · " + KeyLife.name(life.life) : life.lastSeen != nil ? "Paired · last seen in " + KeyLife.name(life.lastSeen) : "Paired"
@@ -251,6 +252,20 @@ struct KeyCard: View {
             }
         }
         .padding(.top, 4)
+    }
+
+    /// Clears everything this iPhone keeps for a KEY. In Settings always: when
+    /// the app shows Not paired there can still be a KEY remembered (issue #83).
+    private var forget: some View {
+        Button {
+            link.cancel()
+            link.forgetApp(); appPaired = false
+            forgot = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { forgot = false }
+        } label: {
+            Text(forgot ? "Forgotten" : "Forget the app's pairing").font(Brand.body).foregroundStyle(Brand.danger).frame(minHeight: 44)
+        }
+        .disabled(forgot)
     }
 
     var body: some View {
@@ -293,6 +308,8 @@ struct KeyCard: View {
                     BrandButton(title: link.busy ? "CANCEL" : "PAIR", filled: !link.busy) {
                         link.busy ? link.cancel() : link.pairApp()
                     }
+                    // Issue #83: reachable in Settings whatever state the pairing is in.
+                    if !compact { forget }
                 }
                 .padding(16)
                 .background(Brand.card)
@@ -313,11 +330,7 @@ struct KeyCard: View {
                     if link.maybeReset { pairAgain }
                     Text("Passwords, passkeys, one-time codes and the account list go over the app's own locked channel. Other apps on this iPhone can't ask the KEY for anything.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        link.forgetApp(); appPaired = false
-                    } label: {
-                        Text("Forget the app's pairing").font(Brand.body).foregroundStyle(Brand.danger).frame(minHeight: 44)
-                    }
+                    forget
                 }
                 .padding(16)
                 .background(Brand.card)

@@ -180,20 +180,29 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         switch c.state {
         case .poweredOn:
             mark("Bluetooth on")
-            if let p = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService]).first {
+            // Issue #81: this session only exists with a pairing, so it stays
+            // with the KEY that has proved it holds that pairing (KeyTrust).
+            // Another KEY is looked at only once that one has been silent for
+            // KeyTrust.wait, and is remembered only if its answers pass the MAC.
+            began = Date()
+            let linked = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService])
+            if let p = linked.first(where: { verdict($0.identifier) == .mine }) ?? linked.first(where: { verdict($0.identifier) == .tryIt }) {
                 how = "already connected to iOS"; connect(p, c); return
             }
-            let store = UserDefaults(suiteName: "group.io.favillakey.app")
-            if let s = store?.string(forKey: "keyPeripheralId"), let id = UUID(uuidString: s), let p = c.retrievePeripherals(withIdentifiers: [id]).first {
-                // A pending connect to the KEY as this phone last knew it, and a
-                // search as well: a KEY that forgot its phones comes back under a
-                // new address (11dp, issue #63), and whichever answers is taken.
-                how = "saved KEY, and searching"; connect(p, c)
+            if let id = KeyTrust.id ?? KeyTrust.guess, let p = c.retrievePeripherals(withIdentifiers: [id]).first {
+                how = KeyTrust.id != nil ? "the paired KEY" : "the KEY used last, and searching"; connect(p, c)
             } else {
                 how = "scanning"
                 mark("scanning")
             }
             c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
+            if KeyTrust.id != nil {
+                q.asyncAfter(deadline: .now() + KeyTrust.wait + 0.2) { [weak self] in
+                    guard let self, !self.closed, self.peripheral?.state != .connected, let c = self.central, c.state == .poweredOn else { return }
+                    c.stopScan()
+                    c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
+                }
+            }
         case .unauthorized: failOpen("Bluetooth isn't allowed for Favilla. iPhone Settings > Favilla > Bluetooth.")
         case .poweredOff: failOpen("Bluetooth is off on this iPhone.")
         case .unsupported: failOpen("Bluetooth unsupported.")
@@ -209,21 +218,34 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
-        if let old = peripheral {
-            if old.identifier == p.identifier || old.state == .connected { return }   // the pending connect completes
-            mark("found the KEY under a new identity")
-            c.cancelPeripheralConnection(old)
-            how = "found by its service"
+        switch verdict(p.identifier) {
+        case .never: return
+        case .wait:
+            if !toldOther { toldOther = true; mark("another KEY is nearby: staying with the paired one") }
+            return
+        case .mine, .tryIt:
+            if let old = peripheral {
+                if old.identifier == p.identifier || old.state == .connected { return }   // the pending connect completes
+                mark(KeyTrust.id == old.identifier ? "the paired KEY has been silent: trying another, to be checked before it is kept" : "found the KEY under a new identity")
+                c.cancelPeripheralConnection(old)
+                how = "found by its service"
+            }
+            c.stopScan()
+            connect(p, c)
         }
-        c.stopScan()
-        connect(p, c)
+    }
+
+    private var began = Date()
+    private var toldOther = false
+    private func verdict(_ id: UUID) -> KeyTrust.Verdict {
+        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: true, waited: Date().timeIntervalSince(began), rejected: [])
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
         guard p.identifier == peripheral?.identifier else { return }
         c.stopScan()
         mark("connected")
-        UserDefaults(suiteName: "group.io.favillakey.app")?.set(p.identifier.uuidString, forKey: "keyPeripheralId")
+        // Nothing is saved here (issue #81): see received(), where a MAC that passes proves the KEY.
         p.discoverServices([KeyLink.favService])
     }
 
@@ -311,6 +333,8 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private func received(_ m: Data) {
         do {
             let a = try AppChannel.open(m, creds)
+            // Only this iPhone's KEY holds the key that MAC needs (issue #81).
+            if let p = peripheral, KeyTrust.trust(p.identifier) { mark("this KEY holds the pairing: remembered") }
             if timeCtr != 0, a.ctr == timeCtr {
                 if a.rsp == AppChannel.rErr, let f = KeySession.replayFloor(a.body), !timeRetried {
                     timeRetried = true

@@ -474,14 +474,37 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    // Issue #81: this link only exists with a pairing, so it stays with the
+    // KEY that has proved it holds that pairing (KeyTrust). Another KEY is
+    // looked at only once that one has been silent for KeyTrust.wait, is
+    // remembered only if its answers pass the MAC, and is let go when it says
+    // "not paired" (that refusal has no MAC: nothing is cleared on its word).
+    private var dialAt = Date()
+    private var notMine: Set<UUID> = []
+    private var toldOther = false
+
+    private func verdict(_ id: UUID) -> KeyTrust.Verdict {
+        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: true, waited: Date().timeIntervalSince(dialAt), rejected: notMine)
+    }
+
     private func go(_ c: CBCentralManager) {
-        if let p = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService]).first(where: { ($0.name ?? "").hasPrefix(KeyLink.keyName) }) {
+        dialAt = Date(); toldOther = false
+        let linked = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService]).filter { ($0.name ?? "").hasPrefix(KeyLink.keyName) }
+        if let p = linked.first(where: { verdict($0.identifier) == .mine }) ?? linked.first(where: { verdict($0.identifier) == .tryIt }) {
             connect(p, c); return
         }
-        if let s = store.string(forKey: "keyPeripheralId"), let id = UUID(uuidString: s), let p = c.retrievePeripherals(withIdentifiers: [id]).first {
+        if let id = KeyTrust.id ?? KeyTrust.guess, !notMine.contains(id), let p = c.retrievePeripherals(withIdentifiers: [id]).first {
             connect(p, c)
         }
         c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
+        if KeyTrust.id != nil {
+            let at = dialAt
+            DispatchQueue.main.asyncAfter(deadline: .now() + KeyTrust.wait + 0.2) { [weak self] in
+                guard let self, self.dialAt == at, self.state == .connecting, self.peripheral?.state != .connected, let c = self.central, c.state == .poweredOn else { return }
+                c.stopScan()
+                c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
+            }
+        }
     }
 
     private func connect(_ p: CBPeripheral, _ c: CBCentralManager) {
@@ -593,6 +616,13 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             // Only refusals of our own commands count: PAIR THE APP shares 8F1A0006.
             guard NostrLink.ours.contains(cmd) else { return }
             if st == 0x08 || st == 0x0A {                 // this client gone, or (11ah) the KEY knows no phone: not paired
+                // Issue #81: this refusal has no MAC, so any device can send it.
+                // It clears the pairing only from the KEY that has proved itself.
+                guard let p = peripheral, p.identifier == KeyTrust.id else {
+                    if let p = peripheral { notMine.insert(p.identifier) }
+                    LinkLog.shared.add("  not this iPhone's KEY (it hasn't proved itself): nothing cleared, let go")
+                    lost(KeyTrust.id != nil ? "Another KEY answered. Waiting for yours." : AppChannel.statusText(st)); return
+                }
                 // Clear only if the pairing is still the one this link used: a
                 // re-pair saved meanwhile must survive the old link's refusal.
                 if Credentials.load() == c { PairIdentity.resetAll(why: String(format: "refused 0x%02X on the link", st)) }
@@ -608,6 +638,8 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
             LinkLog.shared.add("  NOT OPENED (\(error)), \(cid)" + (current.map { ", waiting for ctr \($0.ctr)" } ?? ""))
             return
         }
+        // The MAC passed: only this iPhone's KEY holds the key for it (issue #81).
+        if let p = peripheral, KeyTrust.trust(p.identifier) { LinkLog.shared.add("  this KEY holds the pairing: remembered as this iPhone's KEY") }
         if helloCtr != 0, a.ctr == helloCtr {
             helloCtr = 0
             let b = [UInt8](a.body)
@@ -710,17 +742,27 @@ extension NostrLink: CBCentralManagerDelegate {
         let uuids = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? p.name ?? ""
         guard uuids.contains(KeyLink.favService) || name.hasPrefix(KeyLink.keyName) else { return }
-        c.stopScan()
-        if let old = peripheral {
-            if old.identifier == p.identifier { return }                   // the pending connect completes
-            c.cancelPeripheralConnection(old)                              // a re-paired KEY has a new identity
+        switch verdict(p.identifier) {
+        case .never: return
+        case .wait:
+            if !toldOther { toldOther = true; LinkLog.shared.add("dial: another KEY is nearby (\(name.isEmpty ? "no name" : name)): staying with the paired one") }
+            return
+        case .mine, .tryIt:
+            if let old = peripheral {
+                if old.identifier == p.identifier { c.stopScan(); return }      // the pending connect completes
+                if old.state == .connected { return }
+                LinkLog.shared.add(KeyTrust.id == old.identifier ? "dial: the paired KEY has been silent: trying another, to be checked before it is kept" : "dial: found the KEY under a new identity")
+                c.cancelPeripheralConnection(old)
+            }
+            c.stopScan()
+            connect(p, c)
         }
-        connect(p, c)
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        guard p.identifier == peripheral?.identifier else { return }
         c.stopScan()
-        store.set(p.identifier.uuidString, forKey: "keyPeripheralId")
+        // Nothing is saved here (issue #81): a MAC that passes proves the KEY (received).
         let wnr = p.maximumWriteValueLength(for: .withoutResponse), wr = p.maximumWriteValueLength(for: .withResponse)
         LinkLog.shared.add("connected: ATT MTU \(wnr + 3) (write without response \(wnr), with response \(wr)); requests go \(max(1, min(8, wnr / 64))) reports per write")
         p.discoverServices([KeyLink.favService])

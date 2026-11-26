@@ -40,7 +40,6 @@ final class KeyLink: NSObject, ObservableObject {
     /// (NostrLink, app only) can step aside while this one has the KEY.
     static let didStart = Notification.Name("FavillaKeyLinkDidStart")
     static let didFinish = Notification.Name("FavillaKeyLinkDidFinish")
-    private static let savedIdKey = "keyPeripheralId"
     private static let groupId    = "group.io.favillakey.app"
     private static let cmdFill: UInt8 = 0x34
     private static let siteMax = 100
@@ -188,13 +187,14 @@ final class KeyLink: NSObject, ObservableObject {
         waitingOnKey = false
         pairing = false
         securing = false; secured = false; secureSince = nil; relinks = 0; linkGen += 1
+        rejected = []; toldOther = false; pendingMine = nil
         appCode = nil
         resetLinkState()
         started = Date()
         // Issue #63: a KEY that forgot its phones comes back under a new address
         // (11dp), so the identity remembered from before points at nothing. A
         // pairing starts by finding the KEY afresh, by its service.
-        if m == .pairApp { store.removeObject(forKey: KeyLink.savedIdKey); afterPair = 0 }
+        if m == .pairApp { afterPair = 0 }      // a pairing run looks for any KEY (bonded is false)
         if !site.isEmpty, m != .probe, m != .list, m != .pairApp { add("Asked for: \(site)") }
         if m == .fill || m == .otp, KeyLink.fillBody(site: site, appName: siteIsAppName, user: fillUser) == nil {
             finish(.failed("This site's name can't be sent to the KEY."), "Site name not usable: \(site)")
@@ -213,26 +213,86 @@ final class KeyLink: NSObject, ObservableObject {
     }
 
     private func go(_ c: CBCentralManager) {
-        // 1. A KEY the system is already connected to: use that link.
-        if let p = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService, KeyLink.hidService])
-            .first(where: { ($0.name ?? "").hasPrefix(KeyLink.keyName) }) {
+        // Issue #81: a paired iPhone stays with the KEY that has proved it holds
+        // the pairing (KeyTrust). Another KEY nearby is not taken in its place.
+        // 1. A KEY the system is already connected to: this iPhone's own first.
+        let linked = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService, KeyLink.hidService])
+            .filter { ($0.name ?? "").hasPrefix(KeyLink.keyName) }
+        if let p = linked.first(where: { verdict($0.identifier) == .mine }) ?? linked.first(where: { verdict($0.identifier) == .tryIt }) {
             add("KEY already connected to the phone")
             connect(p, c)
             return
         }
-        // 2. The KEY this phone used before. A pending connect waits for it to
-        //    advertise. iOS gives a re-paired KEY a new identity, so search as
-        //    well and take whichever answers (bench, 6 Nov 2026).
-        if let s = store.string(forKey: KeyLink.savedIdKey), let id = UUID(uuidString: s),
+        // 2. This iPhone's KEY (or, before one has proved itself, the one used
+        //    last): a pending connect waits for it to advertise.
+        if let id = bonded ? (KeyTrust.id ?? KeyTrust.guess) : KeyTrust.guess, !rejected.contains(id),
            let p = c.retrievePeripherals(withIdentifiers: [id]).first {
-            add("Known KEY: connecting, and searching")
+            add(KeyTrust.id == id && bonded ? "Paired KEY: connecting" : "Known KEY: connecting, and searching")
             connect(p, c)
         } else {
             add("Looking for the KEY")
         }
         // 3. Search: the Favilla service ("App only", always advertised) or the
-        //    keyboard service ("App and keyboard", 15 s after a press).
+        //    keyboard service ("App and keyboard", 15 s after a press). With a
+        //    paired KEY the search only matters once it has been silent for
+        //    KeyTrust.wait; a KEY is reported once per search, so search anew then.
         c.scanForPeripherals(withServices: [KeyLink.favService, KeyLink.hidService], options: nil)
+        let left = KeyTrust.wait - Date().timeIntervalSince(started)
+        if bonded, KeyTrust.id != nil, left > 0 {
+            let gen = linkGen
+            DispatchQueue.main.asyncAfter(deadline: .now() + left + 0.2) { [weak self] in
+                guard let self, self.busy, self.linkGen == gen, self.peripheral?.state != .connected, let c = self.central else { return }
+                c.stopScan()
+                c.scanForPeripherals(withServices: [KeyLink.favService, KeyLink.hidService], options: nil)
+            }
+        }
+    }
+
+    // MARK: - Whose KEY (issue #81)
+
+    private var rejected: Set<UUID> = []      // KEYs let go in this request: not this iPhone's
+    private var toldOther = false
+    private var pendingMine: CBPeripheral?    // the paired KEY's connect, still waiting while another is tried
+
+    private func verdict(_ id: UUID) -> KeyTrust.Verdict {
+        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: bonded, waited: Date().timeIntervalSince(started), rejected: rejected)
+    }
+
+    /// The connected KEY is the one that has proved itself before.
+    private var isMine: Bool { peripheral != nil && peripheral?.identifier == KeyTrust.id }
+
+    /// An answer passed the MAC: this is this iPhone's KEY, whatever it was before.
+    private func proved() {
+        linkSecure()
+        guard let p = peripheral else { return }
+        if KeyTrust.trust(p.identifier) { add("This KEY holds this iPhone's pairing: it is the one to stay with") }
+        if let m = pendingMine { pendingMine = nil; central?.cancelPeripheralConnection(m) }
+    }
+
+    /// Not this iPhone's KEY: let it go for the rest of this request, save
+    /// nothing about it, and go back to waiting for the paired one.
+    private func reject(_ why: String) {
+        guard busy, let p = peripheral else { return }
+        rejected.insert(p.identifier)
+        add("Not this iPhone's KEY (\(why)): let go" + (KeyTrust.id != nil ? ", waiting for the paired one" : ", looking again"))
+        peripheral = nil
+        central?.stopScan()
+        central?.cancelPeripheralConnection(p)
+        if let m = pendingMine { pendingMine = nil; central?.cancelPeripheralConnection(m) }
+        resetLinkState()
+        secured = false; secureSince = nil; securing = false; waitingOnKey = false
+        linkGen += 1
+        let gen = linkGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.busy, self.linkGen == gen, self.peripheral == nil, let c = self.central else { return }
+            self.go(c)
+        }
+    }
+
+    /// A link that is not secure, dropped or refused: this iPhone's KEY is tried
+    /// again (issue #80); any other KEY is let go (issue #81).
+    private func retryOrReject(_ why: String) {
+        if isMine { relink(why) } else { reject(why) }
     }
 
     private func armTimeout(_ seconds: Double, _ why: String) {
@@ -353,7 +413,7 @@ final class KeyLink: NSObject, ObservableObject {
                 let gen = linkGen
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                     guard let self, self.busy, self.linkGen == gen, !self.secured, self.secureSince != nil else { return }
-                    self.relink("Not secure after 3 s")
+                    self.retryOrReject("Not secure after 3 s")
                 }
             }
             let gen = linkGen
@@ -374,13 +434,17 @@ final class KeyLink: NSObject, ObservableObject {
         }
     }
 
+    /// Issue #81: only real encrypted traffic counts. The KEY accepts the
+    /// subscription before the link is encrypted, so a subscribe that worked
+    /// proves nothing; a write the KEY took, or an answer that passed the MAC, does.
+    private func linkSecure() {
+        guard !secured else { return }
+        secured = true
+        if securing { securing = false; add("Link secure" + (relinks > 0 ? " on try \(relinks + 1)" : "")) }
+        secureSince = nil
+    }
+
     private func paired() {
-        // Something encrypted went through: the link is secure.
-        if !secured {
-            secured = true
-            if securing { securing = false; add("Link secure" + (relinks > 0 ? " on try \(relinks + 1)" : "")) }
-            secureSince = nil
-        }
         guard pairing else { return }
         pairing = false
         add("Paired")
@@ -602,6 +666,7 @@ extension KeyLink {
             }
             guard st == 0x00 else { finish(.failed(AppChannel.statusText(st)), String(format: "Pairing refused (status 0x%02X)", st)); return }
             guard c.save() else { finish(.failed("The pairing couldn't be saved on this iPhone. Try again."), "Keychain save failed"); return }
+            if let p = peripheral { KeyTrust.trust(p.identifier) }   // the KEY just paired with is this iPhone's
             PairIdentity.pairedAgain()      // the Nostr client enrols afresh with this KEY (issue #22)
             finish(.appPaired, "The app is paired with the KEY in \(ms) ms")
             // Issue #63: bring the link up now (one HELLO says which mode the
@@ -624,14 +689,23 @@ extension KeyLink {
                 // 0x08: this client is gone from the KEY. 0x0A (11ah): the KEY
                 // knows no phone at all (wiped). Either way: not paired, and
                 // everything kept for the KEY goes (issue #22 ruling).
+                // Issue #81: that refusal carries no MAC, so ANY device can send
+                // it. It is believed only from the KEY that has proved itself
+                // before. From another KEY it means "not mine": nothing is cleared.
+                guard isMine else {
+                    if KeyTrust.id != nil { reject(String(format: "it doesn't know this iPhone, 0x%02X", st)); return }
+                    finish(.failed(AppChannel.statusText(st)), String(format: "A KEY that hasn't proved itself said not paired (0x%02X): nothing was cleared", st)); return
+                }
                 PairIdentity.resetAll(why: String(format: "refused 0x%02X", st))
                 finish(.failed(AppChannel.statusText(st)), String(format: "KEY: not paired (0x%02X; forgot the stored pairing)", st)); return
             }
             if stage == .time { add(String(format: "The KEY didn't take the time (0x%02X); carrying on", st)); startOp(); return }
             finish(.failed(AppChannel.statusText(st)), String(format: "KEY refused (status 0x%02X)", st)); return
         } catch {
+            if !isMine, bonded, KeyTrust.id != nil { reject("its answer failed the check") ; return }
             finish(.failed(KeyLink.unreadable), "Answer failed its check: \(error)"); return
         }
+        proved()        // only this iPhone's KEY holds the key that MAC needs
         guard a.ctr == lastCtr else { add("Ignored an answer to an older request"); return }
         if a.rsp == AppChannel.rErr { refused(a.body); return }
         if stage == .time {
@@ -728,28 +802,68 @@ extension KeyLink: CBCentralManagerDelegate {
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? p.name ?? ""
         let uuids = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
         guard name.hasPrefix(KeyLink.keyName) || uuids.contains(KeyLink.favService) else { return }
-        c.stopScan()
-        if let old = peripheral {
-            if old.identifier == p.identifier { add("Found it advertising"); return }   // the pending connect completes
-            add("Found the KEY under a new identity (re-paired?)")
-            c.cancelPeripheralConnection(old)
-        } else {
-            add("Found \(name.isEmpty ? "the KEY" : name) (RSSI \(rssi))")
+        switch verdict(p.identifier) {
+        case .never:
+            return
+        case .wait:
+            // Issue #81: another KEY (a second one in the house, a neighbour's).
+            // The pending connect to this iPhone's own KEY stays.
+            if !toldOther { toldOther = true; add("Another KEY is nearby (\(name.isEmpty ? "no name" : name)): staying with the paired one") }
+            return
+        case .mine:
+            c.stopScan()
+            if let old = peripheral {
+                if old.identifier == p.identifier { add("Found it advertising"); return }   // the pending connect completes
+                c.cancelPeripheralConnection(old)     // another KEY was being tried: the paired one is here
+                resetLinkState()
+                secured = false; secureSince = nil; securing = false; linkGen += 1
+            }
+            pendingMine = nil
+            add("Found the paired KEY (RSSI \(rssi))")
+            connect(p, c)
+        case .tryIt:
+            if let old = peripheral {
+                if old.identifier == p.identifier { add("Found it advertising"); c.stopScan(); return }
+                if old.state == .connected || pendingMine != nil { return }        // one at a time
+                if bonded, KeyTrust.id == old.identifier {
+                    add("The paired KEY has been silent for \(Int(KeyTrust.wait)) s: trying \(name.isEmpty ? "another KEY" : name), to be checked before it is used")
+                    pendingMine = old                 // its connect stays pending
+                } else {
+                    add("Found the KEY under a new identity")
+                    c.cancelPeripheralConnection(old)
+                }
+            } else {
+                add("Found \(name.isEmpty ? "the KEY" : name) (RSSI \(rssi))")
+            }
+            c.stopScan()
+            connect(p, c)
         }
-        connect(p, c)
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        // The paired KEY turned up while another was being tried: take it.
+        if let m = pendingMine, m.identifier == p.identifier {
+            if let trial = peripheral, trial.identifier != p.identifier { c.cancelPeripheralConnection(trial) }
+            pendingMine = nil
+            resetLinkState()
+            secured = false; secureSince = nil; securing = false
+            linkGen += 1
+            peripheral = p
+            p.delegate = self
+            add("The paired KEY answered after all")
+        }
+        guard p.identifier == peripheral?.identifier else { return }
         c.stopScan()
         add("Connected")
-        store.set(p.identifier.uuidString, forKey: KeyLink.savedIdKey)
+        // Nothing is saved here (issue #81): a KEY is remembered only once an
+        // answer from it has passed the MAC (proved()).
         p.discoverServices([KeyLink.favService])
     }
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
         if KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
-        if busy, bonded { relink("Could not connect, \(KeyLink.code(error))"); return }
+        if busy, bonded { retryOrReject("Could not connect, \(KeyLink.code(error))"); return }
         finish(.failed("Couldn't connect to your KEY. Try again."), "Could not connect, \(KeyLink.code(error)): \(error?.localizedDescription ?? "unknown")")
     }
 
@@ -758,7 +872,7 @@ extension KeyLink: CBCentralManagerDelegate {
         if error != nil { KeyLife.forget("the KEY dropped a link") }
         if busy, KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
         // Issue #80: a paired iPhone's link that went before it was secure is tried again.
-        if busy, bonded, !secured { relink("The link dropped before it was secure, \(KeyLink.code(error))"); return }
+        if busy, bonded, !secured { retryOrReject("The link dropped before it was secure, \(KeyLink.code(error))"); return }
         if busy { finish(.failed("Your KEY dropped the link. Try again."), "The KEY dropped the link, \(KeyLink.code(error)): \(error?.localizedDescription ?? "no reason given")") }
     }
 }
@@ -932,6 +1046,7 @@ extension KeyLink: CBPeripheralDelegate {
             else { finish(.failed("The KEY refused the request."), "Write refused: \(e.localizedDescription)") }
             return
         }
+        linkSecure()
         paired()
         switch mode {
         case .ctap:
@@ -956,6 +1071,7 @@ extension KeyLink: CBPeripheralDelegate {
             finish(.failed("The KEY refused the request."), "App channel write refused: \(e.localizedDescription) (\(code))")
             return
         }
+        linkSecure()
         paired()
         writeNextChan(p)
     }

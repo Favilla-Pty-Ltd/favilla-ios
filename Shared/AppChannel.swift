@@ -663,6 +663,55 @@ struct Credentials: Equatable {
 /// the KEY was wiped and set up again, and the Nostr client's pinned device
 /// key and session are stale: they are cleared before the client's next
 /// session (NostrClientView), and after every successful app pairing.
+/// Which KEY is this iPhone's (firmware issue #81, 26 Nov 2026).
+///
+/// Any KEY advertises the same service and a name that starts the same way, so
+/// a neighbour's KEY used to win the race for a connection, and its identifier
+/// was saved as "the KEY". Now a peripheral is this iPhone's KEY only once an
+/// answer from it has passed the app channel's MAC, which needs the key made
+/// at pairing. A paired iPhone stays with that one; another KEY is looked at
+/// only after the trusted one has been silent for `wait`, is never saved until
+/// it proves itself the same way, and is dropped for the rest of the request
+/// when it cannot.
+enum KeyTrust {
+    static let wait: TimeInterval = 10
+    private static let store = UserDefaults(suiteName: "group.io.favillakey.app")
+    private static let key = "keyTrustedId"
+    /// Before issue #81 the last peripheral connected was saved here, proven or
+    /// not. Used only as a first guess while no KEY has proved itself yet.
+    private static let oldKey = "keyPeripheralId"
+
+    /// The peripheral whose answers have passed the MAC.
+    static var id: UUID? { store?.string(forKey: key).flatMap { UUID(uuidString: $0) } }
+    /// A first guess for an iPhone that has no trusted KEY yet.
+    static var guess: UUID? { id == nil ? store?.string(forKey: oldKey).flatMap { UUID(uuidString: $0) } : nil }
+
+    /// An answer from this peripheral passed the MAC. True when that is news.
+    @discardableResult
+    static func trust(_ p: UUID) -> Bool {
+        if id == p { return false }
+        store?.set(p.uuidString, forKey: key)
+        store?.removeObject(forKey: oldKey)
+        return true
+    }
+
+    static func forget() {
+        store?.removeObject(forKey: key)
+        store?.removeObject(forKey: oldKey)
+    }
+
+    enum Verdict: Equatable { case mine, wait, tryIt, never }
+
+    /// What to do with a KEY that was found. `paired`: this iPhone holds
+    /// app-channel credentials. `waited`: seconds since this request began.
+    static func verdict(candidate: UUID, trusted: UUID?, paired: Bool, waited: TimeInterval, rejected: Set<UUID>) -> Verdict {
+        if rejected.contains(candidate) { return .never }
+        guard paired, let t = trusted else { return .tryIt }   // nothing to stay with yet
+        if candidate == t { return .mine }
+        return waited >= wait ? .tryIt : .wait
+    }
+}
+
 enum PairIdentity {
     private static let store = UserDefaults(suiteName: "group.io.favillakey.app")!
     private static let idKey = "keyPairId"
@@ -694,6 +743,7 @@ enum PairIdentity {
     /// pairing (cleared before its next load). Issue #22 ruling, 11 Nov.
     static func resetAll(why: String) {
         Credentials.forget()
+        KeyTrust.forget()
         store.removeObject(forKey: idKey)
         store.set(true, forKey: resetKey)
         Bunker.log("pairing: cleared everything kept for the KEY (\(why))")

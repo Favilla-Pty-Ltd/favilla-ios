@@ -574,6 +574,20 @@ do {
         check(hp.pending == 2 && hp.prefixes == ["5BAA6"], "health: 0xC0 decodes (2 pending, prefix 5BAA6)")
     } else { check(false, "health: the 0xC0 vector opens") }
 
+    // Firmware issue #81: a paired iPhone stays with its own KEY.
+    do {
+        let mine = UUID(), other = UUID()
+        func v(_ c: UUID, _ t: UUID?, _ paired: Bool, _ waited: TimeInterval, _ rej: Set<UUID> = []) -> KeyTrust.Verdict {
+            KeyTrust.verdict(candidate: c, trusted: t, paired: paired, waited: waited, rejected: rej)
+        }
+        check(v(mine, mine, true, 0) == .mine, "trust: the paired KEY is taken at once")
+        check(v(other, mine, true, 0) == .wait && v(other, mine, true, 9.9) == .wait, "trust: another KEY is not taken while the paired one may still answer")
+        check(v(other, mine, true, 10) == .tryIt, "trust: after 10 s of silence another KEY may be tried")
+        check(v(other, mine, true, 60, [other]) == .never && v(mine, mine, true, 0, [mine]) == .never, "trust: a KEY let go in this request is not tried again")
+        check(v(other, nil, true, 0) == .tryIt, "trust: with no proven KEY yet, any KEY may be tried (and must prove itself)")
+        check(v(other, mine, false, 0) == .tryIt, "trust: a pairing run looks at any KEY")
+    }
+
     // Firmware issue #73: Have I Been Pwned ends its lines with CR LF, which is
     // one Character in Swift; the old split found no lines and every bucket was
     // empty. And a bucket under 100 suffixes is never packed for the KEY.

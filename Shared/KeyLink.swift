@@ -143,8 +143,35 @@ final class KeyLink: NSObject, ObservableObject {
     /// PAIR THE APP: pair this install with the KEY's app channel (PAIR A PHONE open on the KEY).
     func pairApp() { start(.pairApp) }
 
-    /// Forget this install's pairing with the KEY's app channel.
-    func forgetApp() { Credentials.forget(); objectWillChange.send() }
+    /// Forget this install's pairing with the KEY's app channel: everything
+    /// kept for the KEY, the same as when the KEY says it was set up again
+    /// (the channel key, the counter, the KEY to stay with, its pair id).
+    /// Issue #83: this used to leave the old pair id, and the next pairing was
+    /// cleared by its own first HELLO.
+    func forgetApp() {
+        PairIdentity.resetAll(why: "Forget the app's pairing")
+        maybeReset = false
+        objectWillChange.send()
+    }
+
+    /// The owner says the KEY was reset or restored: forget the old pairing and
+    /// pair, in one go (issue #83). The owner's tap is the proof; the app never
+    /// does this by itself.
+    func pairAgain() {
+        forgetApp()
+        pairApp()
+    }
+
+    /// A request failed while this iPhone's KEY stayed silent and another
+    /// Favilla KEY was in range that this iPhone couldn't use: the owner's own
+    /// KEY after a reset or restore looks exactly like that (a new address, no
+    /// pairing), and so does a stranger's. Only the owner can tell: the cards
+    /// offer PAIR AGAIN.
+    @Published private(set) var maybeReset = false
+    private var sawUnusable = false
+    /// After a pairing that replaced an older one: iOS keeps the old entry.
+    @Published private(set) var oldEntryHint = false
+    private static let everPairedKey = "keyEverPairedId"
 
     /// Add a line to the visible log (e.g. the checks on the KEY's reply).
     func note(_ s: String) { add(s) }
@@ -177,6 +204,9 @@ final class KeyLink: NSObject, ObservableObject {
     }
 
     private func start(_ m: Mode) {
+        // Issue #83: a tap on pair must never do nothing. Whatever is running
+        // (a probe waiting on a KEY that has gone) stops for it.
+        if busy, m == .pairApp { finish(.cancelled, "Stopped: pairing starts") }
         guard !busy else { return }
         mode = m
         busy = true
@@ -188,6 +218,8 @@ final class KeyLink: NSObject, ObservableObject {
         pairing = false
         securing = false; secured = false; secureSince = nil; relinks = 0; linkGen += 1
         rejected = []; toldOther = false; pendingMine = nil
+        sawUnusable = false
+        if m == .pairApp { maybeReset = false; oldEntryHint = false; add("Pairing: starting Bluetooth, searching for a KEY by its service") }
         appCode = nil
         resetLinkState()
         started = Date()
@@ -225,7 +257,10 @@ final class KeyLink: NSObject, ObservableObject {
         }
         // 2. This iPhone's KEY (or, before one has proved itself, the one used
         //    last): a pending connect waits for it to advertise.
-        if let id = bonded ? (KeyTrust.id ?? KeyTrust.guess) : KeyTrust.guess, !rejected.contains(id),
+        //    Never in a pairing run (issue #83): after a KEY reset the old
+        //    identifier points at an address the KEY has left, and a connect
+        //    to it never completes.
+        if mode != .pairApp, let id = bonded ? (KeyTrust.id ?? KeyTrust.guess) : KeyTrust.guess, !rejected.contains(id),
            let p = c.retrievePeripherals(withIdentifiers: [id]).first {
             add(KeyTrust.id == id && bonded ? "Paired KEY: connecting" : "Known KEY: connecting, and searching")
             connect(p, c)
@@ -273,6 +308,7 @@ final class KeyLink: NSObject, ObservableObject {
     /// nothing about it, and go back to waiting for the paired one.
     private func reject(_ why: String) {
         guard busy, let p = peripheral else { return }
+        sawUnusable = true
         rejected.insert(p.identifier)
         add("Not this iPhone's KEY (\(why)): let go" + (KeyTrust.id != nil ? ", waiting for the paired one" : ", looking again"))
         peripheral = nil
@@ -327,6 +363,17 @@ final class KeyLink: NSObject, ObservableObject {
 
     private func finish(_ o: Outcome, _ log: String) {
         guard busy else { return }
+        // Issue #83: the paired KEY never answered and another KEY was there.
+        if mode != .pairApp {
+            if case .failed = o {
+                if sawUnusable, !secured, Credentials.isPaired {
+                    maybeReset = true
+                    add("The paired KEY stayed silent and another KEY was in range: if yours was reset or restored, PAIR AGAIN")
+                }
+            } else if o != .cancelled {
+                maybeReset = false
+            }
+        }
         timeout?.cancel(); timeout = nil
         central?.stopScan()
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
@@ -666,7 +713,14 @@ extension KeyLink {
             }
             guard st == 0x00 else { finish(.failed(AppChannel.statusText(st)), String(format: "Pairing refused (status 0x%02X)", st)); return }
             guard c.save() else { finish(.failed("The pairing couldn't be saved on this iPhone. Try again."), "Keychain save failed"); return }
-            if let p = peripheral { KeyTrust.trust(p.identifier) }   // the KEY just paired with is this iPhone's
+            PairIdentity.forgetId()         // the id on record is the old pairing's (issue #83)
+            if let p = peripheral {
+                KeyTrust.trust(p.identifier)   // the KEY just paired with is this iPhone's
+                let was = store.string(forKey: KeyLink.everPairedKey)
+                oldEntryHint = was != nil && was != p.identifier.uuidString
+                store.set(p.identifier.uuidString, forKey: KeyLink.everPairedKey)
+            }
+            maybeReset = false
             PairIdentity.pairedAgain()      // the Nostr client enrols afresh with this KEY (issue #22)
             finish(.appPaired, "The app is paired with the KEY in \(ms) ms")
             // Issue #63: bring the link up now (one HELLO says which mode the
@@ -694,6 +748,7 @@ extension KeyLink {
                 // before. From another KEY it means "not mine": nothing is cleared.
                 guard isMine else {
                     if KeyTrust.id != nil { reject(String(format: "it doesn't know this iPhone, 0x%02X", st)); return }
+                    sawUnusable = true
                     finish(.failed(AppChannel.statusText(st)), String(format: "A KEY that hasn't proved itself said not paired (0x%02X): nothing was cleared", st)); return
                 }
                 PairIdentity.resetAll(why: String(format: "refused 0x%02X", st))

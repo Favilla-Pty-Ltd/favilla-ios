@@ -754,6 +754,11 @@ enum PairIdentity {
     /// that is already running does so at once (issue #63: it used to keep the
     /// old pairing's device key and session until the app was opened again),
     /// and the Nostr link starts over with the new pairing.
+    /// The pair id on record belongs to the pairing before. A new pairing takes
+    /// the id from its own first HELLO: without this, that HELLO read as "the
+    /// KEY was set up again" and cleared the pairing just made (issue #83).
+    static func forgetId() { store.removeObject(forKey: idKey) }
+
     static func pairedAgain() {
         store.set(true, forKey: resetKey)
         NotificationCenter.default.post(name: PairIdentity.paired, object: nil)

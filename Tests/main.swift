@@ -588,6 +588,18 @@ do {
         check(v(other, mine, false, 0) == .tryIt, "trust: a pairing run looks at any KEY")
     }
 
+    // Firmware issue #83: a new pairing takes the pair id from its own first
+    // HELLO. With the old id left on record that HELLO cleared the new pairing.
+    do {
+        func hello(_ id: UInt8) -> Data { Data([0x00, 0x02] + [UInt8](repeating: 0x31, count: 8) + [UInt8](repeating: id, count: 8)) }
+        PairIdentity.forgetId()
+        check(PairIdentity.note(helloBody: hello(0xA1)) == false, "pair id: the first one heard is kept, nothing cleared")
+        PairIdentity.forgetId()                                   // what a successful pairing now does
+        check(PairIdentity.note(helloBody: hello(0xB2)) == false, "pair id: after a new pairing the new wallet's id is taken, nothing cleared")
+        check(PairIdentity.note(helloBody: hello(0xB2)) == false, "pair id: the same id again changes nothing")
+        PairIdentity.forgetId()
+    }
+
     // Firmware issue #73: Have I Been Pwned ends its lines with CR LF, which is
     // one Character in Swift; the old split found no lines and every bucket was
     // empty. And a bucket under 100 suffixes is never packed for the KEY.

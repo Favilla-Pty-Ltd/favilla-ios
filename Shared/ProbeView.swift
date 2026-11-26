@@ -50,6 +50,7 @@ enum KeyStatus {
         if let c = link.appCode { return "The KEY shows PAIR THE APP. If its number is \(c), press ENTER on the KEY." }
         switch link.outcome {
         case .appPaired?: return "Passwords, passkeys, codes and the account list now go over the app's own locked channel."
+            + (link.oldEntryHint ? " You can forget the old Favilla KEY in iPhone Settings > Bluetooth." : "")
         case .ok(let t)?: return t
         case .failed(let why)?: return why
         default: return nil

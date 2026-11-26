@@ -236,6 +236,23 @@ struct KeyCard: View {
         return life.lastSeen != nil ? "Last seen in " + KeyLife.name(life.lastSeen) : "Not found yet"
     }
 
+    /// Issue #83: the paired KEY is silent and another KEY is in range. If the
+    /// owner's KEY was reset or restored it is that other one, at a new
+    /// address. One tap forgets the old pairing and starts a new one.
+    private var pairAgain: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Your KEY may have been reset or restored.").font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("If so, pair it again. On the KEY: Settings > Network > Pair a phone, then tap here.")
+                .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            BrandButton(title: "PAIR AGAIN", filled: true) {
+                appPaired = false
+                link.pairAgain()
+            }
+        }
+        .padding(.top, 4)
+    }
+
     var body: some View {
         BrandSection(title: "YOUR KEY") {
             if appPaired, compact {
@@ -256,6 +273,7 @@ struct KeyCard: View {
                     if let d = KeyStatus.detail(link), link.busy || link.result != nil {
                         Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
                     }
+                    if link.maybeReset, !link.busy { pairAgain }
                 }
                 .padding(16)
                 .background(Brand.card)
@@ -292,6 +310,7 @@ struct KeyCard: View {
                     BrandButton(title: link.busy ? "CANCEL" : "FIND MY KEY", filled: false) {
                         link.busy ? link.cancel() : link.probe()
                     }
+                    if link.maybeReset, !link.busy { pairAgain }
                     Text("Passwords, passkeys, one-time codes and the account list go over the app's own locked channel. Other apps on this iPhone can't ask the KEY for anything.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                     Button {

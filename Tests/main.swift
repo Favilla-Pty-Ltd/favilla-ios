@@ -588,6 +588,20 @@ do {
         check(v(other, mine, false, 0) == .tryIt, "trust: a pairing run looks at any KEY")
     }
 
+    // Firmware issue #83: the silence clock runs across requests, so a tap
+    // that cancels and starts again does not set it back.
+    do {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        KeyTrust.heard()
+        check(KeyTrust.silentFor(now: t0) == 0, "silence: the first ask starts the clock")
+        check(KeyTrust.silentFor(now: t0.addingTimeInterval(6)) == 6, "silence: a second request 6 s later counts from the first")
+        check(KeyTrust.silentFor(now: t0.addingTimeInterval(11)) == 11, "silence: 11 s after the first ask another KEY may be tried")
+        KeyTrust.heard()
+        check(KeyTrust.silentFor(now: t0.addingTimeInterval(12)) == 0, "silence: the paired KEY answered, the clock starts over")
+        check(KeyTrust.silentFor(now: t0.addingTimeInterval(50)) == 0, "silence: nothing asked for 30 s, the clock starts over")
+        KeyTrust.heard()
+    }
+
     // Firmware issue #83: a new pairing takes the pair id from its own first
     // HELLO. With the old id left on record that HELLO cleared the new pairing.
     do {

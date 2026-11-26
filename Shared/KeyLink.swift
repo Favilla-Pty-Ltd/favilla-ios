@@ -272,7 +272,7 @@ final class KeyLink: NSObject, ObservableObject {
         //    paired KEY the search only matters once it has been silent for
         //    KeyTrust.wait; a KEY is reported once per search, so search anew then.
         c.scanForPeripherals(withServices: [KeyLink.favService, KeyLink.hidService], options: nil)
-        let left = KeyTrust.wait - Date().timeIntervalSince(started)
+        let left = bonded ? KeyTrust.wait - KeyTrust.silentFor() : 0
         if bonded, KeyTrust.id != nil, left > 0 {
             let gen = linkGen
             DispatchQueue.main.asyncAfter(deadline: .now() + left + 0.2) { [weak self] in
@@ -290,7 +290,7 @@ final class KeyLink: NSObject, ObservableObject {
     private var pendingMine: CBPeripheral?    // the paired KEY's connect, still waiting while another is tried
 
     private func verdict(_ id: UUID) -> KeyTrust.Verdict {
-        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: bonded, waited: Date().timeIntervalSince(started), rejected: rejected)
+        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: bonded, waited: bonded ? KeyTrust.silentFor() : 0, rejected: rejected)
     }
 
     /// The connected KEY is the one that has proved itself before.
@@ -309,6 +309,7 @@ final class KeyLink: NSObject, ObservableObject {
     private func reject(_ why: String) {
         guard busy, let p = peripheral else { return }
         sawUnusable = true
+        if mode != .pairApp, Credentials.isPaired { maybeReset = true }
         rejected.insert(p.identifier)
         add("Not this iPhone's KEY (\(why)): let go" + (KeyTrust.id != nil ? ", waiting for the paired one" : ", looking again"))
         peripheral = nil
@@ -863,7 +864,19 @@ extension KeyLink: CBCentralManagerDelegate {
         case .wait:
             // Issue #81: another KEY (a second one in the house, a neighbour's).
             // The pending connect to this iPhone's own KEY stays.
-            if !toldOther { toldOther = true; add("Another KEY is nearby (\(name.isEmpty ? "no name" : name)): staying with the paired one") }
+            if !toldOther {
+                toldOther = true
+                add("Another KEY is nearby (\(name.isEmpty ? "no name" : name)): staying with the paired one")
+                // Issue #83: if the paired KEY is still silent in a few seconds,
+                // say what that may mean and offer PAIR AGAIN, without waiting
+                // for the request to fail. Nothing is cleared unless the owner taps.
+                let gen = linkGen
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    guard let self, self.busy, self.linkGen == gen, self.mode != .pairApp, !self.secured, self.peripheral?.state != .connected else { return }
+                    self.sawUnusable = true
+                    if !self.maybeReset { self.maybeReset = true; self.add("The paired KEY is silent and another KEY is in range: if yours was reset or restored, PAIR AGAIN") }
+                }
+            }
             return
         case .mine:
             c.stopScan()
@@ -909,6 +922,7 @@ extension KeyLink: CBCentralManagerDelegate {
         }
         guard p.identifier == peripheral?.identifier else { return }
         c.stopScan()
+        if isMine { KeyTrust.heard() }
         add("Connected")
         // Nothing is saved here (issue #81): a KEY is remembered only once an
         // answer from it has passed the MAC (proved()).

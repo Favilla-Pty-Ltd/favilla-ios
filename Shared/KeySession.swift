@@ -197,7 +197,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             }
             c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
             if KeyTrust.id != nil {
-                q.asyncAfter(deadline: .now() + KeyTrust.wait + 0.2) { [weak self] in
+                q.asyncAfter(deadline: .now() + max(0, KeyTrust.wait - KeyTrust.silentFor()) + 0.2) { [weak self] in
                     guard let self, !self.closed, self.peripheral?.state != .connected, let c = self.central, c.state == .poweredOn else { return }
                     c.stopScan()
                     c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
@@ -238,13 +238,14 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var began = Date()
     private var toldOther = false
     private func verdict(_ id: UUID) -> KeyTrust.Verdict {
-        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: true, waited: Date().timeIntervalSince(began), rejected: [])
+        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: true, waited: KeyTrust.silentFor(), rejected: [])
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
         guard p.identifier == peripheral?.identifier else { return }
         c.stopScan()
         mark("connected")
+        if p.identifier == KeyTrust.id { KeyTrust.heard() }
         // Nothing is saved here (issue #81): see received(), where a MAC that passes proves the KEY.
         p.discoverServices([KeyLink.favService])
     }

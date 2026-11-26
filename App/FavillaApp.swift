@@ -273,7 +273,7 @@ struct KeyCard: View {
                     if let d = KeyStatus.detail(link), link.busy || link.result != nil {
                         Text(d).font(Brand.small).foregroundStyle(link.pairing ? Brand.brass : Brand.grey).fixedSize(horizontal: false, vertical: true)
                     }
-                    if link.maybeReset, !link.busy { pairAgain }
+                    if link.maybeReset { pairAgain }
                 }
                 .padding(16)
                 .background(Brand.card)
@@ -310,7 +310,7 @@ struct KeyCard: View {
                     BrandButton(title: link.busy ? "CANCEL" : "FIND MY KEY", filled: false) {
                         link.busy ? link.cancel() : link.probe()
                     }
-                    if link.maybeReset, !link.busy { pairAgain }
+                    if link.maybeReset { pairAgain }
                     Text("Passwords, passkeys, one-time codes and the account list go over the app's own locked channel. Other apps on this iPhone can't ask the KEY for anything.")
                         .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                     Button {

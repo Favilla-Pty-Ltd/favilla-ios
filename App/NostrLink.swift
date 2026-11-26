@@ -484,7 +484,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     private var toldOther = false
 
     private func verdict(_ id: UUID) -> KeyTrust.Verdict {
-        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: true, waited: Date().timeIntervalSince(dialAt), rejected: notMine)
+        KeyTrust.verdict(candidate: id, trusted: KeyTrust.id, paired: true, waited: KeyTrust.silentFor(), rejected: notMine)
     }
 
     private func go(_ c: CBCentralManager) {
@@ -499,7 +499,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
         c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
         if KeyTrust.id != nil {
             let at = dialAt
-            DispatchQueue.main.asyncAfter(deadline: .now() + KeyTrust.wait + 0.2) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0, KeyTrust.wait - KeyTrust.silentFor()) + 0.2) { [weak self] in
                 guard let self, self.dialAt == at, self.state == .connecting, self.peripheral?.state != .connected, let c = self.central, c.state == .poweredOn else { return }
                 c.stopScan()
                 c.scanForPeripherals(withServices: [KeyLink.favService], options: nil)
@@ -762,6 +762,7 @@ extension NostrLink: CBCentralManagerDelegate {
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
         guard p.identifier == peripheral?.identifier else { return }
         c.stopScan()
+        if p.identifier == KeyTrust.id { KeyTrust.heard() }
         // Nothing is saved here (issue #81): a MAC that passes proves the KEY (received).
         let wnr = p.maximumWriteValueLength(for: .withoutResponse), wr = p.maximumWriteValueLength(for: .withResponse)
         LinkLog.shared.add("connected: ATT MTU \(wnr + 3) (write without response \(wnr), with response \(wr)); requests go \(max(1, min(8, wnr / 64))) reports per write")

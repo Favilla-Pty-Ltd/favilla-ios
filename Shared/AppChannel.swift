@@ -689,6 +689,7 @@ enum KeyTrust {
     /// An answer from this peripheral passed the MAC. True when that is news.
     @discardableResult
     static func trust(_ p: UUID) -> Bool {
+        heard()
         if id == p { return false }
         store?.set(p.uuidString, forKey: key)
         store?.removeObject(forKey: oldKey)
@@ -698,6 +699,30 @@ enum KeyTrust {
     static func forget() {
         store?.removeObject(forKey: key)
         store?.removeObject(forKey: oldKey)
+    }
+
+    // How long the trusted KEY has been silent, across requests (issue #83).
+    // Measured per request, a tap that cancelled and started again set the
+    // clock back to nothing, so with the paired KEY gone (reset, restored) no
+    // other KEY was ever reached: nothing connected however long the owner
+    // tapped. The clock now runs from the first request that found it silent,
+    // and starts over only when the KEY answers or nothing has asked for 30 s.
+    private static let clock = NSLock()
+    private static var silentSince: Date?
+    private static var lastAsked = Date.distantPast
+
+    /// Seconds the trusted KEY has been silent, as of this ask.
+    static func silentFor(now: Date = Date()) -> TimeInterval {
+        clock.lock(); defer { clock.unlock() }
+        if silentSince == nil || now.timeIntervalSince(lastAsked) > 30 { silentSince = now }
+        lastAsked = now
+        return now.timeIntervalSince(silentSince ?? now)
+    }
+
+    /// The trusted KEY connected: it is not silent.
+    static func heard() {
+        clock.lock(); defer { clock.unlock() }
+        silentSince = nil
     }
 
     enum Verdict: Equatable { case mine, wait, tryIt, never }

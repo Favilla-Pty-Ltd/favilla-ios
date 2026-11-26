@@ -35,7 +35,7 @@ struct ProbeView: View {
 enum KeyStatus {
     static func headline(_ link: KeyLink) -> String {
         if link.pairing || link.appCode != nil { return "Check the code on your KEY" }
-        if link.busy { return link.mode == .pairApp ? "Pairing the app" : "Connecting to your KEY" }
+        if link.busy { return link.mode == .pairApp ? "Pairing the app" : link.securing ? "Connecting securely" : "Connecting to your KEY" }
         switch link.outcome {
         case .ok?: return "Your KEY is paired"
         case .appPaired?: return "The app is paired"

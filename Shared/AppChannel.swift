@@ -397,6 +397,13 @@ enum AppChannel {
         return PwResult(state: v[0], id: Data(v[1..<9]), reason: v[9])
     }
 
+    /// Why a save ended as failed (PW_RESULT state 5). 11eo (issue #75): the
+    /// KEY asks for the PIN itself when the vault limit stops a save, so 0x11
+    /// here means it still could not go through.
+    static func pwFailedText(_ reason: UInt8) -> String {
+        reason == 0x11 ? "The vault limit needs your PIN. Lock and unlock the KEY, then save again." : pwStatusText(reason)
+    }
+
     /// PW_SAVE / PW_DELETE / ASSESS_ONE statuses (at once) and PW_RESULT reasons.
     static func pwStatusText(_ s: UInt8) -> String {
         switch s {

@@ -120,7 +120,7 @@ final class SaveJob: ObservableObject {
                 case 0x05:
                     phase = .failed(r.reason == 0x17
                         ? "An old copy of this login is already waiting on the KEY. Finish it first (open Favilla's Accounts and tap It works, or on the KEY the copy's MORE: NEW ONE WORKS), then save again."
-                        : AppChannel.pwStatusText(r.reason))
+                        : AppChannel.pwFailedText(r.reason))
                     return
                 default: phase = .failed("The KEY lost the request. Nothing was saved."); return
                 }

@@ -54,7 +54,7 @@ struct SignInView: View {
                 default: return "Approve on your KEY"
                 }
             }
-            return "Connecting to your KEY"
+            return link.securing ? "Connecting securely" : "Connecting to your KEY"
         }
     }
 
@@ -79,7 +79,7 @@ struct SignInView: View {
         case .oneTimeCode: second = "Pick the code on the KEY, press ENTER"
         }
         let third = creating ? "The site saves your passkey" : purpose == .oneTimeCode ? "iOS fills in the code" : "Safari signs you in"
-        return [(connected ? "Connected to your KEY" : "Connecting to your KEY", connected ? 2 : 1),
+        return [(connected ? "Connected to your KEY" : link.securing ? "Connecting securely to your KEY" : "Connecting to your KEY", connected ? 2 : 1),
                 (second, done ? 2 : (connected ? 1 : 0)),
                 (third, done ? 2 : 0)]
     }

@@ -69,6 +69,9 @@ final class KeyLink: NSObject, ObservableObject {
     #endif
     /// iOS is pairing with the KEY (6-digit comparison): the link is kept open.
     @Published private(set) var pairing = false
+    /// A paired iPhone's link is not encrypted yet (issue #80): "Connecting
+    /// securely", not the pairing card. iOS encrypts with the stored keys by itself.
+    @Published private(set) var securing = false
     /// PAIR THE APP: the code to compare with the KEY's screen ("123 456").
     @Published private(set) var appCode: String?
     /// The site or app iOS asked about, when run from the AutoFill sheet.
@@ -184,6 +187,7 @@ final class KeyLink: NSObject, ObservableObject {
         lines = []
         waitingOnKey = false
         pairing = false
+        securing = false; secured = false; secureSince = nil; relinks = 0; linkGen += 1
         appCode = nil
         resetLinkState()
         started = Date()
@@ -273,6 +277,7 @@ final class KeyLink: NSObject, ObservableObject {
         outcome = o
         waitingOnKey = false
         pairing = false
+        securing = false
         appCode = nil
         busy = false
         NotificationCenter.default.post(name: KeyLink.didFinish, object: self)
@@ -291,13 +296,73 @@ final class KeyLink: NSObject, ObservableObject {
     // after a fraction of a second. So keep the link and retry while the owner
     // compares the code and presses ENTER on the KEY (PAIR A PHONE open).
 
+    /// iOS's error for a dropped or failed link, for the log: domain and code
+    /// (issue #80, to line up with the KEY's own disconnect reasons).
+    static func code(_ e: Error?) -> String {
+        guard let n = e as NSError? else { return "no error given" }
+        return "\(n.domain) \(n.code)"
+    }
+
     static func needsPairing(_ e: Error) -> Bool {
         let n = e as NSError
         return n.domain == CBATTErrorDomain && (n.code == CBATTError.insufficientAuthentication.rawValue ||
                                                 n.code == CBATTError.insufficientEncryption.rawValue)
     }
 
+    // Issue #80 (KEY 11fh): on an iPhone that has paired before, that same
+    // refusal only means the link is not encrypted YET. The bench showed links
+    // that were gone before encryption finished, with the bond intact and the
+    // next connect fine. So a paired iPhone waits about 3 s for the link to
+    // become secure, then drops it and connects again, up to 2 more times.
+
+    static let notSecure = "Couldn't make a secure link to your KEY. Try again. If it keeps happening, the KEY may have forgotten this iPhone: pair again in Favilla, Settings."
+
+    /// This iPhone holds app-channel credentials: it has paired with a KEY before.
+    private var bonded: Bool { mode != .pairApp && Credentials.isPaired }
+    private var secured = false          // an encrypted read, write or subscription has worked on this link
+    private var secureSince: Date?       // when "not secure yet" was first seen on this link
+    private var relinks = 0              // reconnects made for this request, up to 2
+    private var linkGen = 0              // one per link, so a late timer leaves a newer link alone
+
+    /// Drop the link and connect again (the second try nearly always works).
+    private func relink(_ why: String) {
+        guard busy else { return }
+        guard relinks < 2 else { finish(.failed(KeyLink.notSecure), "\(why). Gave up after 3 tries"); return }
+        relinks += 1
+        add("\(why): connecting again (try \(relinks + 1) of 3)")
+        let old = peripheral
+        peripheral = nil            // its disconnect is ours, not the KEY's
+        central?.stopScan()
+        if let old { central?.cancelPeripheralConnection(old) }
+        resetLinkState()
+        secured = false; secureSince = nil; securing = true; waitingOnKey = false
+        linkGen += 1
+        let gen = linkGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self, self.busy, self.linkGen == gen, self.peripheral == nil, let c = self.central else { return }
+            self.go(c)
+        }
+    }
+
     private func awaitPairing(_ retry: @escaping () -> Void) {
+        if bonded, !pairing {
+            if secureSince == nil {
+                secureSince = Date()
+                securing = true
+                add("The link isn't secure yet (this iPhone is paired): waiting for encryption")
+                let gen = linkGen
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                    guard let self, self.busy, self.linkGen == gen, !self.secured, self.secureSince != nil else { return }
+                    self.relink("Not secure after 3 s")
+                }
+            }
+            let gen = linkGen
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.busy, self.linkGen == gen, !self.secured, self.peripheral != nil else { return }
+                retry()
+            }
+            return
+        }
         if !pairing {
             pairing = true
             add("Not paired yet: iOS is asking to pair. Compare the code with the KEY's screen, tap Pair, then press ENTER on the KEY.")
@@ -310,6 +375,12 @@ final class KeyLink: NSObject, ObservableObject {
     }
 
     private func paired() {
+        // Something encrypted went through: the link is secure.
+        if !secured {
+            secured = true
+            if securing { securing = false; add("Link secure" + (relinks > 0 ? " on try \(relinks + 1)" : "")) }
+            secureSince = nil
+        }
         guard pairing else { return }
         pairing = false
         add("Paired")
@@ -678,14 +749,17 @@ extension KeyLink: CBCentralManagerDelegate {
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
         if KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
-        finish(.failed("Couldn't connect to your KEY. Try again."), "Could not connect: \(error?.localizedDescription ?? "unknown")")
+        if busy, bonded { relink("Could not connect, \(KeyLink.code(error))"); return }
+        finish(.failed("Couldn't connect to your KEY. Try again."), "Could not connect, \(KeyLink.code(error)): \(error?.localizedDescription ?? "unknown")")
     }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
         if error != nil { KeyLife.forget("the KEY dropped a link") }
         if busy, KeyLink.keyForgotPhone(error) { finish(.failed(KeyLink.forgetOnPhone), "The KEY no longer has this iPhone's pairing (peer removed pairing information)"); return }
-        if busy { finish(.failed("Your KEY dropped the link. Try again."), "The KEY dropped the link: \(error?.localizedDescription ?? "no reason given")") }
+        // Issue #80: a paired iPhone's link that went before it was secure is tried again.
+        if busy, bonded, !secured { relink("The link dropped before it was secure, \(KeyLink.code(error))"); return }
+        if busy { finish(.failed("Your KEY dropped the link. Try again."), "The KEY dropped the link, \(KeyLink.code(error)): \(error?.localizedDescription ?? "no reason given")") }
     }
 }
 

@@ -129,8 +129,8 @@ enum NewPassword {
     /// R_GEN_PW (decrypted): the password, or the KEY's status.
     static func parseGen(_ b: Data) -> Result<String, GenFailure> {
         let v = [UInt8](b)
+        if let st = v.first, st != 0x00 { return .failure(.status(st)) }   // a refusal may carry the status alone
         guard v.count >= 2 else { return .failure(.status(0xFF)) }
-        guard v[0] == 0x00 else { return .failure(.status(v[0])) }
         let n = Int(v[1])
         guard v.count >= 2 + n, n > 0, let s = String(bytes: v[2..<(2 + n)], encoding: .utf8) else { return .failure(.status(0xFF)) }
         return .success(s)
@@ -144,6 +144,7 @@ enum NewPassword {
         case 0x06: return "The KEY made 10 passwords in the last minute. Try again in a moment."
         case 0x07: return "The KEY couldn't follow this site's password rules."
         case 0x0E: return "The KEY's random generator didn't answer. Try again."
+        case 0x11: return "Enter your PIN on the KEY, then try again."   // S_BUDGET (11eo, issue #75): no password was made, the KEY shows its PIN pad
         default: return String(format: "The KEY answered 0x%02X.", st)
         }
     }

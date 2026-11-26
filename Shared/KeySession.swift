@@ -229,12 +229,13 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
+        mark("could not connect, \(KeyLink.code(error))")
         failOpen("Couldn't connect to the KEY: \(error?.localizedDescription ?? "no reason")")
     }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }   // an old identity we let go
-        mark("disconnected")
+        mark("disconnected, \(KeyLink.code(error))")
         if error != nil, !closed { KeyLife.forget("the KEY dropped the Accounts link") }
         chanIn = nil
         if opened != nil { failOpen("The KEY dropped the link.") }

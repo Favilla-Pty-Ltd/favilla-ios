@@ -728,12 +728,13 @@ extension NostrLink: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
+        LinkLog.shared.add("could not connect, \(KeyLink.code(error))")
         lost(KeyLink.keyForgotPhone(error) ? KeyLink.forgetOnPhone : "Couldn't connect to your KEY.")
     }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p.identifier == peripheral?.identifier else { return }
-        LinkLog.shared.add("disconnected" + (error.map { ": \($0.localizedDescription)" } ?? ""))
+        LinkLog.shared.add("disconnected, \(KeyLink.code(error))" + (error.map { ": \($0.localizedDescription)" } ?? ""))
         // The KEY dropped the link: it may have restarted into another life (issue #37).
         holdingVault = false
         KeyLife.forget("the KEY dropped the Nostr link")

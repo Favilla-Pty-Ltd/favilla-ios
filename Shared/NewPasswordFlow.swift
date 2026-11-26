@@ -148,7 +148,7 @@ final class ChangeJob: ObservableObject {
                 case 0x05:
                     phase = .failed(r.reason == 0x17
                         ? "An earlier change to this login is still waiting. Open Favilla's Accounts and tap It works for it (or put the old one back on the KEY), then try again."
-                        : AppChannel.pwStatusText(r.reason))
+                        : AppChannel.pwFailedText(r.reason))
                     close(); return
                 default: phase = .failed("The KEY lost the request. Nothing was changed."); close(); return
                 }

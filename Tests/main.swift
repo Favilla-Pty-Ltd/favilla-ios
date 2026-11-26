@@ -402,6 +402,9 @@ do {   // issue #9: a 1.2 KB answer in three notifications (MTU 527: 8 + 8 + 4 r
         }
         check(NewPassword.parseGen(Data([0, 3]) + Data("aB3".utf8)) == .success("aB3"), "11bi: R_GEN_PW parses")
         check(NewPassword.parseGen(Data([0x06, 0])) == .failure(.status(0x06)), "11bi: R_GEN_PW refusal")
+        check(NewPassword.parseGen(Data([0x11, 0])) == .failure(.status(0x11)) && NewPassword.parseGen(Data([0x11])) == .failure(.status(0x11)), "11eo: R_GEN_PW S_BUDGET is a refusal, with or without a length byte")
+        check(NewPassword.genText(0x11) == "Enter your PIN on the KEY, then try again.", "11eo: S_BUDGET asks for the PIN on the KEY")
+        check(AppChannel.pwFailedText(0x11).hasPrefix("The vault limit needs your PIN") && AppChannel.pwFailedText(0x05) == AppChannel.pwStatusText(0x05), "11eo: a save that failed on the limit says so")
         let saveBody = try AppChannel.pwSaveBody(id: Data(count: 8), site: "a.com", user: "u", pass: "p", note: "", flags: 0x01).get()
         check(saveBody.last == 0x01 && saveBody.count == 8 + 6 + 2 + 2 + 1 + 1, "11bi: PW_SAVE carries the flags byte")
         NewPassword.recordFill(site: "a.com", user: "u", password: "p")

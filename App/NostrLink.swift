@@ -157,6 +157,15 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
 
     private func pause() {
         paused = true
+        // A pairing run has the KEY to itself (issue #83): no link, no pending
+        // connect, no scan, whatever this link was doing.
+        if PairingRun.active {
+            LinkLog.shared.add("dial: standing down, the app is pairing")
+            drop()
+            state = .idle
+            if current != nil { finishCurrent(.failure(KeyApiError.notReady("The app is pairing with your KEY."))) }
+            return
+        }
         if holdingVault, current == nil { return }   // an idle held link disturbs nothing; it watches for a restart
         if current != nil || peripheral != nil {
             drop()
@@ -465,7 +474,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     /// whenever the KEY comes into range, even with the app in the background.
     func stayUp() {
         DispatchQueue.main.async {
-            guard NostrLink.wantUp, !self.paused, self.state != .connecting, self.state != .ready else { return }
+            guard NostrLink.wantUp, !self.paused, !PairingRun.active, self.state != .connecting, self.state != .ready else { return }
             self.creds = Credentials.load()
             guard self.creds != nil else { return }
             guard self.mayDial("kept up for Sign for other apps") else { return }
@@ -488,6 +497,7 @@ final class NostrLink: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func go(_ c: CBCentralManager) {
+        if PairingRun.active { state = .idle; return }
         dialAt = Date(); toldOther = false
         let linked = c.retrieveConnectedPeripherals(withServices: [KeyLink.favService]).filter { ($0.name ?? "").hasPrefix(KeyLink.keyName) }
         if let p = linked.first(where: { verdict($0.identifier) == .mine }) ?? linked.first(where: { verdict($0.identifier) == .tryIt }) {

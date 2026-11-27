@@ -169,6 +169,7 @@ final class KeyLink: NSObject, ObservableObject {
     /// offer PAIR AGAIN.
     @Published private(set) var maybeReset = false
     private var sawUnusable = false
+    private var pairQueued = false
     /// After a pairing that replaced an older one: iOS keeps the old entry.
     @Published private(set) var oldEntryHint = false
     private static let everPairedKey = "keyEverPairedId"
@@ -203,11 +204,34 @@ final class KeyLink: NSObject, ObservableObject {
         finish(.cancelled, "Cancelled")
     }
 
-    private func start(_ m: Mode) {
+    private func start(_ m: Mode, queued: Bool = false) {
         // Issue #83: a tap on pair must never do nothing. Whatever is running
         // (a probe waiting on a KEY that has gone) stops for it.
-        if busy, m == .pairApp { finish(.cancelled, "Stopped: pairing starts") }
+        if m == .pairApp, !queued {
+            if pairQueued { return }
+            if busy {
+                if mode == .pairApp { return }      // one pairing run at a time
+                // 27 Nov: if that request already has a link, let the link go
+                // and wait for it to be gone. Connecting again within a second,
+                // on a link iOS had not yet dropped, is how a bond got started twice.
+                let linked = peripheral?.state == .connected || peripheral?.state == .connecting
+                finish(.cancelled, "Stopped: pairing starts")
+                if linked {
+                    pairQueued = true
+                    PairingRun.begin()              // nothing else may dial meanwhile
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                        guard let self else { return }
+                        self.pairQueued = false
+                        self.start(.pairApp, queued: true)
+                    }
+                    return
+                }
+            }
+        }
         guard !busy else { return }
+        // While a pairing runs (here, or in the app as seen from the AutoFill sheet) nothing else touches the KEY.
+        if m != .pairApp, pairQueued || PairingRun.active { return }
+        if m == .pairApp { PairingRun.begin() }
         mode = m
         busy = true
         NotificationCenter.default.post(name: KeyLink.didStart, object: self)
@@ -369,6 +393,7 @@ final class KeyLink: NSObject, ObservableObject {
 
     private func finish(_ o: Outcome, _ log: String) {
         guard busy else { return }
+        if mode == .pairApp { PairingRun.end() }
         // Issue #83: the paired KEY never answered and another KEY was there.
         if mode != .pairApp {
             if case .failed = o {
@@ -886,7 +911,7 @@ extension KeyLink: CBCentralManagerDelegate {
             // The pending connect to this iPhone's own KEY stays.
             if !toldOther {
                 toldOther = true
-                add("Another KEY is nearby (\(name.isEmpty ? "no name" : name)): staying with the paired one")
+                add("Another KEY is nearby (\(name.isEmpty ? "no name" : name)): not this iPhone's, left alone")
                 // Issue #83: if the paired KEY is still silent in a few seconds,
                 // say what that may mean and offer PAIR AGAIN, without waiting
                 // for the request to fail. Nothing is cleared unless the owner taps.
@@ -995,8 +1020,13 @@ extension KeyLink: CBPeripheralDelegate {
         switch mode {
         case .pairApp:
             guard hasChan, let pr = find(KeyLink.probeChar) else { finish(.failed(KeyLink.oldFirmware), "App channel missing"); return }
-            add("Checking this iPhone is paired with the KEY")
-            p.readValue(for: pr)   // bonds first if needed (iOS prompt)
+            // One read of an encrypted characteristic on this one link: iOS
+            // bonds first if it has to (its prompt), then answers the read.
+            // The owner has two screens to compare and confirm, so the clock
+            // starts here, not at the tap, and runs past the KEY's 90 s window.
+            add("Checking this iPhone is paired with the KEY (one encrypted read; iOS bonds first if it must)")
+            armTimeout(100, KeyLink.notConfirmed)
+            p.readValue(for: pr)
         case .otp, .list:
             finish(.failed(hasChan ? KeyLink.needsChannel : KeyLink.oldFirmware), hasChan ? "App not paired" : "App channel missing")
         case .probe:

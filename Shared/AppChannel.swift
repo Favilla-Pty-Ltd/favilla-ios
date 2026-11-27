@@ -733,8 +733,29 @@ enum KeyTrust {
         if rejected.contains(candidate) { return .never }
         guard paired, let t = trusted else { return .tryIt }   // nothing to stay with yet
         if candidate == t { return .mine }
-        return waited >= wait ? .tryIt : .wait
+        // 27 Nov (issue #83): never, however long the paired KEY is silent.
+        // A KEY at another address has no bond with this iPhone, so nothing
+        // can be asked of it without bonding first, and the check itself (one
+        // encrypted read or write) made iOS start a bond when that KEY had
+        // PAIR A PHONE open. The app then let the link go 3 s later, in the
+        // middle of it. Only a pairing run the owner starts may do that.
+        return .wait
     }
+}
+
+/// A pairing run has the KEY to itself (issue #83, bench 27 Nov: the Nostr
+/// link dialled the KEY on the same Bluetooth link while iOS was bonding, and
+/// the KEY dropped the bond). While this is set nothing else in the app, the
+/// AutoFill sheet or the notification extension connects, scans or reads.
+enum PairingRun {
+    private static let store = UserDefaults(suiteName: "group.io.favillakey.app")
+    private static let key = "pairingRunUntil"
+    /// Set for at most this long, so a run that died cannot block the app.
+    static let longest: TimeInterval = 240
+
+    static func begin() { store?.set(Date().addingTimeInterval(longest).timeIntervalSince1970, forKey: key) }
+    static func end() { store?.removeObject(forKey: key) }
+    static var active: Bool { (store?.double(forKey: key) ?? 0) > Date().timeIntervalSince1970 }
 }
 
 enum PairIdentity {

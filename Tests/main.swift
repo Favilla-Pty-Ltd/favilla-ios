@@ -582,7 +582,11 @@ do {
         }
         check(v(mine, mine, true, 0) == .mine, "trust: the paired KEY is taken at once")
         check(v(other, mine, true, 0) == .wait && v(other, mine, true, 9.9) == .wait, "trust: another KEY is not taken while the paired one may still answer")
-        check(v(other, mine, true, 10) == .tryIt, "trust: after 10 s of silence another KEY may be tried")
+        check(v(other, mine, true, 10) == .wait && v(other, mine, true, 3600) == .wait, "trust: another KEY is never taken, however long the paired one is silent")
+        PairingRun.end()
+        check(!PairingRun.active, "pairing run: not set to begin with")
+        PairingRun.begin(); check(PairingRun.active, "pairing run: set while it runs")
+        PairingRun.end(); check(!PairingRun.active, "pairing run: cleared when it ends")
         check(v(other, mine, true, 60, [other]) == .never && v(mine, mine, true, 0, [mine]) == .never, "trust: a KEY let go in this request is not tried again")
         check(v(other, nil, true, 0) == .tryIt, "trust: with no proven KEY yet, any KEY may be tried (and must prove itself)")
         check(v(other, mine, false, 0) == .tryIt, "trust: a pairing run looks at any KEY")

@@ -58,6 +58,8 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     /// Connect and open the channel; throws with a sentence for the notification.
     func open(timeout: TimeInterval = 8) async throws {
+        // A pairing run has the KEY to itself (issue #83).
+        if PairingRun.active { throw Failure("The app is pairing with your KEY. Try again when it has finished.") }
         if let hook = KeySession.willOpen {
             await MainActor.run { hook() }
             try? await Task.sleep(nanoseconds: 300_000_000)   // let its cancel settle before this link subscribes

@@ -129,7 +129,17 @@
   }
   // The app sets the row's subtitle ("Bluetooth" / "Wi-Fi: 192.168.1.20") and the route.
   var route = window.__favillaInitialRoute === 'bluetooth' ? 'bluetooth' : 'wifi';
-  var bunkerOn = false;
+  var bunkerOn = false, bunkerLine = '', bunkerBusy = false;
+  // 27 Nov: the bunker lives on one page, Connect apps. The app sends its
+  // side here (on or off, what it is doing), and the switch below works it.
+  window.__favillaSetBunker = function (on, line, busy) {
+    bunkerOn = !!on; bunkerLine = line || ''; bunkerBusy = !!busy;
+    paintBunkerNote();
+  };
+  // The app's Settings row "Connect apps" opens the page here.
+  window.__favillaOpenConnect = function () {
+    try { var b = document.querySelector('[data-set-section="bunker"]'); if (b) b.click(); return !!b; } catch (e) { return false; }
+  };
   window.__favillaSetRoute = function (text, r, bunker) {
     if (r) route = r;
     if (bunker) bunkerOn = bunker === 'on';
@@ -152,18 +162,29 @@
       n.style.cssText = 'display:flex;align-items:center;gap:12px;margin:0 0 12px;padding:12px 14px;';
       n.innerHTML = '<div style="flex:1;min-width:0"><b style="display:block;font-size:14px">Through this iPhone</b>' +
         '<small id="fv-bunker-line" style="display:block;color:var(--muted);font-size:12px;line-height:1.45"></small></div>' +
-        '<button type="button" class="bk-pill" id="fv-bunker-open" style="cursor:pointer">Set up</button>';
-      n.querySelector('#fv-bunker-open').addEventListener('click', function (ev) {
+        '<button type="button" id="fv-bunker-log" style="display:inline-block;margin-top:8px;padding:6px 0;background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer">Activity log</button></div>' +
+        '<button type="button" role="switch" id="fv-bunker-sw" aria-label="Sign for other apps through this iPhone" style="flex:none;align-self:flex-start;width:50px;height:30px;padding:0;border-radius:15px;border:1px solid var(--border2);position:relative;cursor:pointer;transition:background .15s">' +
+        '<span style="position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#F4F2EE;transition:transform .15s"></span></button>';
+      n.querySelector('#fv-bunker-sw').addEventListener('click', function (ev) {
         ev.preventDefault(); ev.stopPropagation();
-        try { mh.favillaApp.postMessage({ open: 'settings' }); } catch (e) {}
+        if (bunkerBusy) return;
+        try { mh.favillaApp.postMessage({ bunker: bunkerOn ? 'off' : 'on' }); } catch (e) {}
+      });
+      n.querySelector('#fv-bunker-log').addEventListener('click', function (ev) {
+        ev.preventDefault(); ev.stopPropagation();
+        try { mh.favillaApp.postMessage({ open: 'bunkerLog' }); } catch (e) {}
       });
       var hero = sec.querySelector('.bk-hero');
       if (hero && hero.nextSibling) sec.insertBefore(n, hero.nextSibling); else sec.appendChild(n);
     }
-    n.querySelector('#fv-bunker-line').textContent = bunkerOn
-      ? 'Favilla reaches your KEY over Bluetooth, and passes each app\'s request to it and sends the answer back, even when Favilla is closed.'
-      : 'On Bluetooth your KEY has no internet, so other apps reach it through Favilla on this iPhone. Turn on This iPhone > Bunker > Sign for other apps.';
-    n.querySelector('#fv-bunker-open').textContent = bunkerOn ? 'On' : 'Set up';
+    n.querySelector('#fv-bunker-line').textContent = bunkerLine || (bunkerOn
+      ? 'On. Favilla passes each app\'s request to your KEY over Bluetooth and sends the answer back.'
+      : 'Off. On Bluetooth your KEY has no internet, so other apps reach it through Favilla on this iPhone. Turn this on to let them.');
+    var sw = n.querySelector('#fv-bunker-sw');
+    sw.setAttribute('aria-checked', bunkerOn ? 'true' : 'false');
+    sw.style.background = bunkerOn ? '#C9A45C' : 'transparent';
+    sw.style.opacity = bunkerBusy ? '0.5' : '1';
+    sw.firstChild.style.transform = bunkerOn ? 'translateX(20px)' : 'none';
   }
 
   // On Bluetooth the KEY's address means nothing (the app sends every /api call

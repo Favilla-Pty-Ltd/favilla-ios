@@ -62,6 +62,11 @@ struct NostrClientView: UIViewRepresentable {
         }
         // A ring started from a push: the client gets the call wraps the bridge
         // kept (the offer is ephemeral; a client that wasn't connected missed it).
+        context.coordinator.bunkerWatch = BunkerService.shared.objectWillChange.receive(on: DispatchQueue.main)
+            .sink { [weak c = context.coordinator] _ in c?.pushBunker() }
+        context.coordinator.connectObserver = NotificationCenter.default.addObserver(forName: SettingsStart.openConnect, object: nil, queue: .main) { [weak wv] _ in
+            wv?.evaluateJavaScript("window.__favillaOpenConnect && window.__favillaOpenConnect()")
+        }
         context.coordinator.wakeObserver = NotificationCenter.default.addObserver(forName: CallRing.wake, object: nil, queue: .main) { [weak wv] _ in
             guard let wv else { return }
             Task { @MainActor in await Coordinator.feedCallWraps(wv) }
@@ -166,6 +171,14 @@ struct NostrClientView: UIViewRepresentable {
                 }
             }
         }
+        if Demo.mode == "nostr-connect" {
+            // The Connect apps page with the app's own card on it, as on Bluetooth.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak wv] in
+                wv?.evaluateJavaScript("window.__favillaOpenConnect && window.__favillaOpenConnect(); window.__favillaSetRoute && window.__favillaSetRoute('Bluetooth', 'bluetooth', 'on'); window.__favillaSetBunker && window.__favillaSetBunker(true, 'On. Listening on 4 relays while Favilla is open. When it is closed, a notification wakes this iPhone for each request.', false); 'ok'") { r, e in
+                    Bunker.log("sample run: connect apps \(r.map { "\($0)" } ?? "error \(String(describing: e))")")
+                }
+            }
+        }
         if Demo.mode == "nostr-profile" {
             let author = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"   // a well-known public account
             DispatchQueue.main.asyncAfter(deadline: .now() + 14) { [weak wv] in
@@ -260,7 +273,25 @@ struct NostrClientView: UIViewRepresentable {
             }
         }
 
+        /// The bunker's state for the Connect apps page (its switch and line; bridge.js).
+        func pushBunker() {
+            let b = BunkerService.shared
+            let line: String
+            if b.busy, !b.status.isEmpty { line = b.status }
+            else if !b.on { line = b.status.isEmpty ? "" : "Off. " + b.status }
+            else if b.listening > 0 { line = "On. Listening on \(b.listening) relay\(b.listening == 1 ? "" : "s") while Favilla is open. When it is closed, a notification wakes this iPhone for each request." }
+            else { line = "On. Favilla isn't listening right now; a notification wakes this iPhone for each request." }
+            let arg = (try? String(data: JSONSerialization.data(withJSONObject: [b.on, line, b.busy]), encoding: .utf8)) ?? "[false, \"\", false]"
+            guard arg != lastBunker, let wv = webView else { return }
+            lastBunker = arg
+            wv.evaluateJavaScript("window.__favillaSetBunker && window.__favillaSetBunker(\(arg)[0], \(arg)[1], \(arg)[2])")
+        }
+        var lastBunker = ""
+        var bunkerWatch: AnyCancellable?
+        var connectObserver: NSObjectProtocol?
+
         func pushRoute(_ text: String) {
+            pushBunker()
             let route = KeyRoute.current.rawValue
             let bunker = Bunker.on ? "on" : "off"         // the Connect apps note (bridge.js)
             guard text + route + bunker != lastRoute, let wv = webView else { return }
@@ -271,7 +302,7 @@ struct NostrClientView: UIViewRepresentable {
 
         // The page has loaded: give it the route (the Settings row and the Bluetooth Connect).
         func webView(_ wv: WKWebView, didFinish navigation: WKNavigation!) {
-            lastRoute = ""
+            lastRoute = ""; lastBunker = ""
             pushRoute(parent.routeText)
         }
 
@@ -332,6 +363,12 @@ struct NostrClientView: UIViewRepresentable {
                 tasks[id]?.cancel(); tasks[id] = nil
             } else if message.name == "favillaApp", m["open"] as? String == "settings" {
                 parent.onOpenSettings()
+            } else if message.name == "favillaApp", m["open"] as? String == "bunkerLog" {
+                SettingsStart.next = .bunkerLog
+                parent.onOpenSettings()
+            } else if message.name == "favillaApp", let want = m["bunker"] as? String {
+                // The switch on the Connect apps page.
+                if want == "on" { BunkerService.shared.turnOn() } else { BunkerService.shared.turnOff() }
             } else if message.name == "favillaApp", m["open"] as? String == "modes" {
                 parent.onOpenModes()
             } else if message.name == "favillaApp", m["chip"] as? String == "missing" {

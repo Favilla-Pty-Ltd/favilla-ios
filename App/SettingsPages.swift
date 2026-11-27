@@ -106,6 +106,14 @@ struct Footnote: View {
 
 // MARK: - Pages
 
+/// Where the Settings sheet opens (the page's "Activity log" goes straight to
+/// the log), and the way back to the page's Connect apps (27 Nov: one page
+/// for the bunker).
+enum SettingsStart {
+    static var next: SettingsDest?
+    static let openConnect = Notification.Name("FavillaOpenConnectApps")
+}
+
 enum SettingsDest: Hashable {
     case route, bunker, accounts, keyboard, backup, lastRequest, bluetoothLog, bunkerLog, chatLog, pushTest
 }
@@ -487,9 +495,10 @@ struct ThisPhoneView: View {
     @State private var listCount = AccountList.entries.count
     @Environment(\.scenePhase) private var phase
     @Environment(\.dismiss) private var dismiss
+    @State private var path: [SettingsDest] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     KeyCard(link: link, appPaired: $appPaired)
@@ -514,8 +523,13 @@ struct ThisPhoneView: View {
                             }
                             if mode == .nostr {
                                 RowLine()
-                                NavigationLink(value: SettingsDest.bunker) {
-                                    SettingsRow(icon: "signature", title: "Sign for other apps", subtitle: bunkerSubtitle)
+                                // One page for the bunker: the client's Connect apps
+                                // (its switch, the apps, the links). This row goes there.
+                                Button {
+                                    dismiss(); go?(.nostr)
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { NotificationCenter.default.post(name: SettingsStart.openConnect, object: nil) }
+                                } label: {
+                                    SettingsRow(icon: "signature", title: "Connect apps", subtitle: bunkerSubtitle)
                                 }
                                 RowLine()
                                 NavigationLink(value: SettingsDest.backup) {
@@ -582,6 +596,7 @@ struct ThisPhoneView: View {
                 .padding(20)
             }
             .background(Brand.bg.ignoresSafeArea())
+            .onAppear { if let s = SettingsStart.next { SettingsStart.next = nil; path = [s] } }
             .navigationDestination(for: SettingsDest.self) { d in
                 switch d {
                 case .route: RoutePage(route: $route)

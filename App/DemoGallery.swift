@@ -44,6 +44,17 @@ struct DemoGallery: View {
             case "x-newpw-done": NewPasswordView(job: change(.done(change: true), matches: 1), onCancel: {})
             case "x-save-user": SaveToKeyView(job: save(.needUser, user: ""), onDone: {}, onCancel: {})
             case "x-save-asking": SaveToKeyView(job: save(.asking(change: true), user: "you@example.com"), onDone: {}, onCancel: {})
+            case "x-pair-search", "x-pair-none":
+                ScrollView {
+                    KeyCard(link: link, appPaired: .constant(false))
+                        .padding(20)
+                }
+                .onAppear {
+                    link.demoSearch(name == "x-pair-none" ? [] : [
+                        KeyLink.Found(id: UUID(), name: "Favilla KEY 9EF1", rssi: -48),
+                        KeyLink.Found(id: UUID(), name: "Favilla KEY 27C0", rssi: -81),
+                    ])
+                }
             case "x-wait-key":
                 SignInView(link: link, purpose: .password, onNewPassword: {}, onClose: {})
                     .onAppear { link.site = "www.example-shop.com"; link.demoWaiting() }

@@ -170,6 +170,118 @@ final class KeyLink: NSObject, ObservableObject {
     @Published private(set) var maybeReset = false
     private var sawUnusable = false
     private var pairQueued = false
+
+    // MARK: Pairing search (issue #83, 27 Nov)
+    // The pairing run's search found nothing while nRF Connect on the same
+    // iPhone saw the KEY at once. So the run now searches as nRF does: a fresh
+    // central, no service filter, every advertisement logged, and the KEYs it
+    // sees shown to the owner, who taps the one to pair with.
+
+    struct Found: Identifiable, Equatable {
+        let id: UUID
+        var name: String
+        var rssi: Int
+        var linked = false        // already connected to this iPhone (it does not advertise then)
+    }
+    /// KEYs the pairing search has seen, strongest first.
+    @Published private(set) var found: [Found] = []
+    /// The pairing run is searching and waits for the owner to tap a KEY.
+    @Published private(set) var searching = false
+    /// 10 s of searching and no KEY.
+    @Published private(set) var noneFound = false
+    private var candidates: [UUID: CBPeripheral] = [:]
+    private var adsSeen = 0, adsMatched = 0
+    private var searchGen = 0
+
+    #if targetEnvironment(simulator)
+    /// Sample screen only (App/DemoGallery.swift): the pairing search with two KEYs in range.
+    func demoSearch(_ keys: [Found]) { mode = .pairApp; busy = true; searching = true; found = keys; noneFound = keys.isEmpty }
+    #endif
+
+    /// Start the pairing search over on a fresh central.
+    func searchAgain() {
+        guard busy, mode == .pairApp, searching else { pairApp(); return }
+        add("Search again")
+        freshSearch()
+    }
+
+    private func freshSearch() {
+        central?.stopScan()
+        central?.delegate = nil
+        central = nil
+        found = []; candidates = [:]; adsSeen = 0; adsMatched = 0; noneFound = false
+        searching = true
+        searchGen += 1
+        armTimeout(150, "No KEY found. On the KEY, open PAIR A PHONE, then tap PAIR.")
+        central = CBCentralManager(delegate: self, queue: .main)     // the scan starts on poweredOn
+    }
+
+    private static func stateName(_ s: CBManagerState) -> String {
+        switch s {
+        case .poweredOn: return "on"
+        case .poweredOff: return "off"
+        case .resetting: return "resetting"
+        case .unauthorized: return "not allowed"
+        case .unsupported: return "unsupported"
+        default: return "unknown"
+        }
+    }
+
+    private func beginPairingScan(_ c: CBCentralManager) {
+        add("Search: Bluetooth is \(KeyLink.stateName(c.state)), authorization \(CBCentralManager.authorization.rawValue), scanning with no filter")
+        // A KEY this iPhone is already connected to does not advertise.
+        for p in c.retrieveConnectedPeripherals(withServices: [KeyLink.favService, KeyLink.hidService]) where (p.name ?? "").hasPrefix(KeyLink.keyName) {
+            candidates[p.identifier] = p
+            add("Search: \(p.name ?? "a KEY") is already connected to this iPhone")
+            show(Found(id: p.identifier, name: p.name ?? "Favilla KEY", rssi: 0, linked: true))
+        }
+        c.scanForPeripherals(withServices: nil, options: nil)
+        let gen = searchGen
+        func tick(_ n: Int) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                guard let self, self.busy, self.searching, self.searchGen == gen else { return }
+                self.add("Search: still searching, \(self.adsSeen) advertisements seen, \(self.adsMatched) from a KEY, scanning \(self.central?.isScanning == true ? "yes" : "NO")")
+                if n == 1, self.found.isEmpty { self.noneFound = true }
+                tick(n + 1)
+            }
+        }
+        tick(0)
+    }
+
+    private func show(_ f: Found) {
+        var all = found.filter { $0.id != f.id }
+        all.append(f)
+        found = all.sorted { ($0.linked ? 1 : 0, $0.rssi) > ($1.linked ? 1 : 0, $1.rssi) }
+        noneFound = false
+    }
+
+    private func pairingDiscovered(_ p: CBPeripheral, _ ad: [String: Any], _ rssi: NSNumber) {
+        adsSeen += 1
+        let name = (ad[CBAdvertisementDataLocalNameKey] as? String) ?? p.name ?? ""
+        let uuids = ((ad[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []) + ((ad[CBAdvertisementDataOverflowServiceUUIDsKey] as? [CBUUID]) ?? [])
+        let match = name.hasPrefix(KeyLink.keyName) || uuids.contains(KeyLink.favService)
+        // Every device once, kept or not, so a bench log shows what iOS reported.
+        // Other people's devices are logged without their names.
+        if adsSeen <= 60 || match {
+            add("Search: \(match ? "KEY" : "other") \(match ? (name.isEmpty ? "(no name)" : name) : "device") rssi \(rssi.intValue) services [\(uuids.map { $0.uuidString }.joined(separator: ","))]" + (match ? "" : " (not a KEY)"))
+        }
+        guard match else { return }
+        adsMatched += 1
+        candidates[p.identifier] = p
+        show(Found(id: p.identifier, name: name.isEmpty ? "Favilla KEY" : name, rssi: rssi.intValue))
+    }
+
+    /// The owner tapped a KEY in the list: connect to that one, once. The bond
+    /// and the app pairing then run on this link.
+    func pair(with id: UUID) {
+        guard busy, mode == .pairApp, searching, let p = candidates[id], let c = central else { return }
+        c.stopScan()
+        searching = false
+        searchGen += 1
+        add("Pairing with \(found.first { $0.id == id }?.name ?? "the KEY"): connecting")
+        armTimeout(25, "Couldn't connect to that KEY. Check PAIR A PHONE is still open on it, then tap Search again.")
+        connect(p, c)
+    }
     /// After a pairing that replaced an older one: iOS keeps the old entry.
     @Published private(set) var oldEntryHint = false
     private static let everPairedKey = "keyEverPairedId"
@@ -231,7 +343,7 @@ final class KeyLink: NSObject, ObservableObject {
         guard !busy else { return }
         // While a pairing runs (here, or in the app as seen from the AutoFill sheet) nothing else touches the KEY.
         if m != .pairApp, pairQueued || PairingRun.active { return }
-        if m == .pairApp { PairingRun.begin() }
+        if m == .pairApp, !queued { PairingRun.begin() }     // the queued path began it when it queued
         mode = m
         busy = true
         NotificationCenter.default.post(name: KeyLink.didStart, object: self)
@@ -243,7 +355,7 @@ final class KeyLink: NSObject, ObservableObject {
         securing = false; secured = false; secureSince = nil; relinks = 0; linkGen += 1
         rejected = []; toldOther = false; pendingMine = nil
         sawUnusable = false
-        if m == .pairApp { maybeReset = false; oldEntryHint = false; add("Pairing: starting Bluetooth, searching for a KEY by its service") }
+        if m == .pairApp { maybeReset = false; oldEntryHint = false; add("Pairing: searching for KEYs") }
         appCode = nil
         resetLinkState()
         started = Date()
@@ -256,8 +368,15 @@ final class KeyLink: NSObject, ObservableObject {
             finish(.failed("This site's name can't be sent to the KEY."), "Site name not usable: \(site)")
             return
         }
+        if m == .pairApp {
+            // A fresh central, so nothing left from a cancelled request or a
+            // pending connect can touch this run.
+            add("Starting Bluetooth on a fresh central")
+            freshSearch()
+            return
+        }
         add("Starting Bluetooth")
-        armTimeout(m == .probe || m == .pairApp ? 60 : 30, "Your KEY didn't answer. Check it's on its home screen in VAULT mode with Bluetooth on. If its Bluetooth is set to App and keyboard, press a button on it first.")
+        armTimeout(m == .probe ? 60 : 30, "Your KEY didn't answer. Check it's on its home screen in VAULT mode with Bluetooth on. If its Bluetooth is set to App and keyboard, press a button on it first.")
         if let c = central, c.state == .poweredOn { go(c) } else { central = CBCentralManager(delegate: self, queue: .main) }
     }
 
@@ -269,6 +388,7 @@ final class KeyLink: NSObject, ObservableObject {
     }
 
     private func go(_ c: CBCentralManager) {
+        if mode == .pairApp { if searching { beginPairingScan(c) }; return }
         // Issue #81: a paired iPhone stays with the KEY that has proved it holds
         // the pairing (KeyTrust). Another KEY nearby is not taken in its place.
         // 1. A KEY the system is already connected to: this iPhone's own first.
@@ -393,7 +513,7 @@ final class KeyLink: NSObject, ObservableObject {
 
     private func finish(_ o: Outcome, _ log: String) {
         guard busy else { return }
-        if mode == .pairApp { PairingRun.end() }
+        if mode == .pairApp { PairingRun.end(); searching = false; searchGen += 1; candidates = [:] }
         // Issue #83: the paired KEY never answered and another KEY was there.
         if mode != .pairApp {
             if case .failed = o {
@@ -891,7 +1011,7 @@ extension KeyLink {
 extension KeyLink: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ c: CBCentralManager) {
         switch c.state {
-        case .poweredOn: if busy { go(c) }
+        case .poweredOn: if busy, c === central { go(c) }
         case .unauthorized: finish(.failed("Bluetooth permission is off for Favilla. Turn it on in Settings > Favilla."), "Bluetooth permission off")
         case .poweredOff: finish(.failed("Bluetooth is off on this iPhone. Turn it on in Control Centre."), "Bluetooth off")
         case .unsupported: finish(.failed("This device has no Bluetooth LE."), "No Bluetooth LE")
@@ -900,6 +1020,8 @@ extension KeyLink: CBCentralManagerDelegate {
     }
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
+        guard c === central else { return }
+        if mode == .pairApp { if searching { pairingDiscovered(p, advertisementData, rssi) }; return }
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? p.name ?? ""
         let uuids = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
         guard name.hasPrefix(KeyLink.keyName) || uuids.contains(KeyLink.favService) else { return }

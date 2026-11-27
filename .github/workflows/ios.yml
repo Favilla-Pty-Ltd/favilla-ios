@@ -73,7 +73,7 @@ jobs:
           xcrun simctl install "$UDID" "$APP"
           BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
           mkdir -p shots
-          for m in unknown home-vault to-nostr vault vault-sheet vault-add vault-import settings-vault settings-nostr x-signin x-newpw-choose x-newpw-new x-newpw-asking x-newpw-done x-save-user x-save-asking x-wait-key x-waits nostr nostr-profile; do
+          for m in unknown home-vault to-nostr vault vault-sheet vault-add vault-import settings-vault settings-nostr x-signin x-newpw-choose x-newpw-new x-newpw-asking x-newpw-done x-save-user x-save-asking x-wait-key x-waits x-pair-search x-pair-none nostr nostr-profile; do
             xcrun simctl launch --terminate-running-process "$UDID" "$BID" -FavillaDemo "$m"
             # The profile run opens a profile at 14 s and its fetch can take 13 s more.
             if [ "$m" = nostr-profile ]; then sleep 40; elif [ "$m" = nostr-profiles ]; then sleep 175; else sleep 10; fi

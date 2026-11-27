@@ -260,6 +260,46 @@ struct KeyCard: View {
         .padding(.top, 4)
     }
 
+    /// The pairing search, live (issue #83): the KEYs in range, strongest first.
+    /// The owner taps the one to pair with; the bond and the app pairing then
+    /// run on that one link.
+    private var keysFound: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                TurningRing(size: 18)
+                Text(link.found.isEmpty ? "Searching for your KEY" : "Tap your KEY").font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
+                Spacer()
+            }
+            ForEach(link.found) { k in
+                Button { link.pair(with: k.id) } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "key.horizontal").font(.system(size: 18, weight: .semibold)).foregroundStyle(Brand.brass).frame(width: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: k.name).font(Brand.font(16, .semibold)).foregroundStyle(Brand.ink).lineLimit(1)
+                            Text(k.linked ? "Already connected to this iPhone" : KeyCard.signal(k.rssi)).font(Brand.small).foregroundStyle(Brand.grey)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.grey)
+                    }
+                    .padding(.horizontal, 14).frame(minHeight: 56)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.brass.opacity(0.5), lineWidth: 1))
+                    .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Pair with \(k.name)")
+            }
+            if link.noneFound, link.found.isEmpty {
+                Text("No KEY found. On the KEY, open PAIR A PHONE, then tap Search again.")
+                    .font(Brand.small).foregroundStyle(Brand.brass).fixedSize(horizontal: false, vertical: true)
+            }
+            BrandButton(title: "SEARCH AGAIN", filled: false) { link.searchAgain() }
+        }
+    }
+
+    /// The signal in words; the number is in the Bluetooth log.
+    static func signal(_ rssi: Int) -> String {
+        rssi >= -60 ? "Strong signal" : rssi >= -75 ? "Good signal" : "Weak signal: bring the KEY closer"
+    }
+
     /// Clears everything this iPhone keeps for a KEY. In Settings always: when
     /// the app shows Not paired there can still be a KEY remembered (issue #83).
     private var forget: some View {
@@ -304,7 +344,9 @@ struct KeyCard: View {
                     Text("Your KEY isn't paired with this iPhone.").font(Brand.font(17, .semibold)).foregroundStyle(Brand.ink)
                     Text("On the KEY: Settings > Network > Pair a phone, then tap Pair. If iPhone asks for a number, type the one the KEY shows.")
                         .font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
-                    if let code = link.appCode {
+                    if link.busy, link.mode == .pairApp, link.searching {
+                        keysFound
+                    } else if let code = link.appCode {
                         Text(code).font(Brand.font(30, .bold)).monospacedDigit().foregroundStyle(Brand.brass).accessibilityLabel("Code \(code)")
                         Text("On the KEY: if PAIR THE APP shows the same number, press ENTER.")
                             .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)

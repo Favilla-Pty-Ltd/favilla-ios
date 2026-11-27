@@ -470,6 +470,7 @@
     try {
       if (typeof window._dmLockDrop === 'function') window._dmLockDrop('KEY gone over Bluetooth: ' + (why || ''));
       else wipeDmsDirect('KEY gone (no poller yet): ' + (why || ''));
+      clearThreadPane(true);
       if (typeof window.keyLinkBeat === 'function') setTimeout(window.keyLinkBeat, 300);
       console.log('[dev] KEY gone over Bluetooth: ' + (why || ''));
     } catch (e) {}
@@ -483,13 +484,36 @@
   // time or for good. The app repeats the call every 3 s while the KEY stays
   // locked, so anything a late decrypt puts back goes too.
   var lockedByKey = false;
-  function dropDms(reason) {
+  // 27 Nov (issue #25, app log: "3 in the open thread" before and after a
+  // lock): the page's wipe empties its memory and redraws the list, but it
+  // redraws the thread pane only while a thread is open. Closing a thread
+  // only hides the pane, so its decrypted messages stayed in the page; and
+  // when memory was already empty the wipe returned before touching the pane
+  // at all. So the pane is emptied here: once when the KEY locks or goes, and
+  // again whenever a wipe found something (a late decrypt). An open thread is
+  // redrawn (the page then shows its own empty "Encrypted chat" pane).
+  var paneCleared = false;
+  function clearThreadPane(force) {
     try {
-      if (typeof dmState === 'undefined') return false;
-      if (!dmState.cacheKey && !Object.keys(dmState.threads || {}).length) return false;
-      if (typeof window._dmLockDrop === 'function') window._dmLockDrop(reason); else wipeDmsDirect(reason);
-      return true;
-    } catch (e) { return false; }
+      if (paneCleared && !force) return;
+      paneCleared = true;
+      var m = document.getElementById('dm-thread-messages');
+      if (!m) return;
+      var peer = typeof dmState !== 'undefined' ? dmState.currentPeer : null;
+      if (peer && typeof dmRenderThread === 'function') { try { dmRenderThread(peer); return; } catch (e) {} }
+      if (m.children.length || m.textContent) m.innerHTML = '';
+    } catch (e) {}
+  }
+  function dropDms(reason) {
+    var did = false;
+    try {
+      if (typeof dmState !== 'undefined' && (dmState.cacheKey || Object.keys(dmState.threads || {}).length)) {
+        if (typeof window._dmLockDrop === 'function') window._dmLockDrop(reason); else wipeDmsDirect(reason);
+        did = true;
+      }
+    } catch (e) {}
+    clearThreadPane(did);
+    return did;
   }
   // What the page holds, for the app's log (no names, no text): so a bench
   // log says whether there was anything to wipe and whether it went.
@@ -508,6 +532,7 @@
     try {
       var was = lockedByKey;
       lockedByKey = !unlocked;
+      if (unlocked) paneCleared = false;
       if (!unlocked) { if (dropDms('KEY locked (its nudge)')) console.log('[dev] the KEY is locked (nudge): plaintext DMs dropped'); }
       if (edge || was !== lockedByKey) {
         console.log('[dev] the KEY ' + (unlocked ? 'unlocked' : 'locked') + ' (nudge): link probe now');
@@ -542,7 +567,7 @@
       var why = lockedByKey ? 'KEY locked (standing check)'
         : window.keyLinkUp === false ? 'KEY not reachable (standing check)'
         : (window.keyLinkUp === true && window.keyLinkUnlocked === false) ? 'KEY locked, says the probe (standing check)' : '';
-      if (why) dropDms(why);
+      if (why) dropDms(why); else paneCleared = false;
     } catch (e) {}
   }, 4000);
   // Back to the foreground: probe at once rather than at the next 10 s tick.

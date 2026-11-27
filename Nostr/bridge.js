@@ -159,12 +159,14 @@
     if (!n) {
       n = document.createElement('div');
       n.id = 'fv-bunker-note'; n.className = 'bk-card';
-      n.style.cssText = 'display:flex;align-items:center;gap:12px;margin:0 0 12px;padding:12px 14px;';
-      n.innerHTML = '<div style="flex:1;min-width:0"><b style="display:block;font-size:14px">Through this iPhone</b>' +
+      // Two rows: the name, line and switch; then the log link on its own line.
+      n.style.cssText = 'display:block;margin:0 0 12px;padding:12px 14px;';
+      n.innerHTML = '<div style="display:flex;align-items:flex-start;gap:12px">' +
+        '<div style="display:block;flex:1;min-width:0"><b style="display:block;font-size:14px">Through this iPhone</b>' +
         '<small id="fv-bunker-line" style="display:block;color:var(--muted);font-size:12px;line-height:1.45"></small></div>' +
-        '<button type="button" id="fv-bunker-log" style="display:inline-block;margin-top:8px;padding:6px 0;background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer">Activity log</button></div>' +
-        '<button type="button" role="switch" id="fv-bunker-sw" aria-label="Sign for other apps through this iPhone" style="flex:none;align-self:flex-start;width:50px;height:30px;padding:0;border-radius:15px;border:1px solid var(--border2);position:relative;cursor:pointer;transition:background .15s">' +
-        '<span style="position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#F4F2EE;transition:transform .15s"></span></button>';
+        '<button type="button" role="switch" id="fv-bunker-sw" aria-label="Sign for other apps through this iPhone" style="flex:none;width:50px;height:30px;padding:0;border-radius:15px;border:1px solid var(--border2);position:relative;cursor:pointer;transition:background .15s">' +
+        '<span style="position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#F4F2EE;transition:transform .15s"></span></button></div>' +
+        '<button type="button" id="fv-bunker-log" style="display:block;margin:6px 0 0;padding:6px 0;min-height:32px;background:none;border:0;color:var(--muted);font-size:12px;text-align:left;text-decoration:underline;cursor:pointer">Activity log</button>';
       n.querySelector('#fv-bunker-sw').addEventListener('click', function (ev) {
         ev.preventDefault(); ev.stopPropagation();
         if (bunkerBusy) return;

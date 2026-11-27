@@ -52,7 +52,9 @@ enum KeyStatus {
         case .appPaired?: return "Passwords, passkeys, codes and the account list now go over the app's own locked channel."
             + (link.oldEntryHint ? " You can forget the old Favilla KEY in iPhone Settings > Bluetooth." : "")
         case .ok(let t)?: return t
-        case .failed(let why)?: return why
+        case .failed(let why)?:
+            // Every pairing run that reached a KEY and failed (issue #83).
+            return link.mode == .pairApp && link.pairTried ? why + "\n\n" + KeyLink.oldEntries : why
         default: return nil
         }
     }

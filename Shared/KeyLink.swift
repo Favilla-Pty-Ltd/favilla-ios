@@ -190,6 +190,12 @@ final class KeyLink: NSObject, ObservableObject {
     /// 10 s of searching and no KEY.
     @Published private(set) var noneFound = false
     private var candidates: [UUID: CBPeripheral] = [:]
+    /// This pairing run got as far as connecting to a KEY. If it then fails,
+    /// old Favilla KEY entries in iPhone Settings are a likely cause: every
+    /// Forget all phones gives the KEY a new address and name, and iOS keeps
+    /// the dead entry, which no app can remove (issue #83, 27 Nov).
+    @Published private(set) var pairTried = false
+    static let oldEntries = "Open Settings > Bluetooth on this iPhone, remove any old Favilla KEY entries (tap the i, then Forget This Device), then pair again."
     private var adsSeen = 0, adsMatched = 0
     private var searchGen = 0
 
@@ -278,6 +284,7 @@ final class KeyLink: NSObject, ObservableObject {
         c.stopScan()
         searching = false
         searchGen += 1
+        pairTried = true
         add("Pairing with \(found.first { $0.id == id }?.name ?? "the KEY"): connecting")
         armTimeout(25, "Couldn't connect to that KEY. Check PAIR A PHONE is still open on it, then tap Search again.")
         connect(p, c)
@@ -355,7 +362,7 @@ final class KeyLink: NSObject, ObservableObject {
         securing = false; secured = false; secureSince = nil; relinks = 0; linkGen += 1
         rejected = []; toldOther = false; pendingMine = nil
         sawUnusable = false
-        if m == .pairApp { maybeReset = false; oldEntryHint = false; add("Pairing: searching for KEYs") }
+        if m == .pairApp { maybeReset = false; oldEntryHint = false; pairTried = false; add("Pairing: searching for KEYs") }
         appCode = nil
         resetLinkState()
         started = Date()

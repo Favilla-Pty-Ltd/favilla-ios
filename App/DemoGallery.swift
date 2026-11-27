@@ -38,6 +38,9 @@ struct DemoGallery: View {
             case "x-signin":
                 SignInView(link: link, purpose: .password, onNewPassword: {}, onClose: {})
                     .onAppear { link.site = "www.example-shop.com" }
+            case "x-signin-name":
+                SignInView(link: link, purpose: .password, onName: { _ in }, onNewPassword: {}, onClose: {})
+                    .onAppear { link.given = "nothing (no site, no app name)" }
             case "x-newpw-choose": NewPasswordView(job: change(.choose, matches: 2), onCancel: {})
             case "x-newpw-new": NewPasswordView(job: change(.choose, matches: 0), onCancel: {})
             case "x-newpw-asking": NewPasswordView(job: change(.asking(change: true), matches: 1), onCancel: {})

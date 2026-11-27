@@ -127,6 +127,9 @@ final class KeyLink: NSObject, ObservableObject {
 
     /// Ask the KEY for the login for `site` (set before calling).
     func fill() { start(.fill) }
+    /// What iOS handed the AutoFill sheet to say where the sign-in is, as text
+    /// for the log and the sheet (27 Nov: an app iOS names nothing for).
+    @Published var given = ""
 
     /// Send one CTAP2 request (command byte + CBOR) to the KEY's passkey service.
     func ctap(_ request: Data) {
@@ -370,6 +373,7 @@ final class KeyLink: NSObject, ObservableObject {
         // (11dp), so the identity remembered from before points at nothing. A
         // pairing starts by finding the KEY afresh, by its service.
         if m == .pairApp { afterPair = 0 }      // a pairing run looks for any KEY (bonded is false)
+        if (m == .fill || m == .otp), !given.isEmpty { add("iOS gave: \(given)") }
         if !site.isEmpty, m != .probe, m != .list, m != .pairApp { add("Asked for: \(site)") }
         if m == .fill || m == .otp, KeyLink.fillBody(site: site, appName: siteIsAppName, user: fillUser) == nil {
             finish(.failed("This site's name can't be sent to the KEY."), "Site name not usable: \(site)")

@@ -24,6 +24,11 @@ struct SignInView: View {
     /// Shown instead of a request (something iOS asked for that the KEY can't do).
     var notice: String?
     var onRetry: () -> Void = {}
+    /// Passwords and codes, when iOS named nothing the KEY can take: the owner
+    /// types the app's name and this sends it.
+    var onName: ((String) -> Void)? = nil
+    @State private var typed = ""
+    @FocusState private var typing: Bool
     /// Passwords only: the app-run change (NEW PASSWORD FOR THIS SITE).
     var onNewPassword: (() -> Void)? = nil
     var onClose: () -> Void
@@ -38,8 +43,20 @@ struct SignInView: View {
         }
     }
 
+    /// iOS gave no name the KEY can use, and the owner can type one.
+    private var nameless: Bool {
+        guard notice == nil, onName != nil, purpose == .password || purpose == .oneTimeCode else { return false }
+        return KeyLink.siteBytes(site: link.site, appName: link.siteIsAppName) == nil
+    }
+    private func sendName() {
+        guard let n = KeyLink.cleanAppName(typed) else { return }
+        typing = false
+        onName?(n)
+    }
+
     private var headline: String {
         if notice != nil { return "Not available yet" }
+        if nameless { return "Which app is this?" }
         if link.pairing { return "Check the code on your KEY" }
         switch link.outcome {
         case .otp?: return "Code sent"
@@ -95,7 +112,16 @@ struct SignInView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(creating ? "MAKING A PASSKEY FOR" : purpose == .oneTimeCode ? "ONE-TIME CODE FOR" : "SIGNING IN TO").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
-                Text(place).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
+                if nameless {
+                    TextField("", text: $typed, prompt: Text("App or site name").foregroundColor(Brand.grey))
+                        .font(Brand.font(24, .bold)).foregroundStyle(Brand.ink).tint(Brand.brass)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.go).focused($typing).onSubmit(sendName)
+                        .frame(minHeight: 44)
+                        .onAppear { typing = true }
+                } else {
+                    Text(place).font(Brand.font(30, .bold)).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.6)
+                }
                 if !user.isEmpty { Text("as \(user)").font(Brand.body).foregroundStyle(Brand.grey) }
             }
             .padding(20)
@@ -105,6 +131,11 @@ struct SignInView: View {
 
             if let n = notice {
                 Text(n).font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            } else if nameless {
+                Text("iOS didn't give Favilla a name the KEY can use for this app. Type the name it is saved under on your KEY. If nothing matches, the KEY offers all your logins and can save this name on the one you pick.")
+                    .font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+                Text("What iOS gave: \(link.given.isEmpty ? "nothing" : link.given)")
+                    .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             } else if link.pairing {
                 WaitCard(title: "Check your KEY", detail: "This iPhone isn't paired with it yet. If the numbers in iOS's prompt match the KEY's screen, tap Pair, then press ENTER on the KEY. PAIR A PHONE must be open on the KEY.")
             } else if let why = failed {
@@ -124,7 +155,7 @@ struct SignInView: View {
                 }
             }
 
-            if purpose == .password, notice == nil, !link.pairing, link.outcome?.isReply != true, let go = onNewPassword {
+            if purpose == .password, notice == nil, !nameless, !link.pairing, link.outcome?.isReply != true, let go = onNewPassword {
                 // Changing or making a password (also when the KEY has no login
                 // for the site yet): the app runs it, the KEY only asks for ENTER.
                 // A row that reads as a choice (21 Nov: on a reset form the plain
@@ -149,7 +180,11 @@ struct SignInView: View {
             }
 
             Spacer()
-            if notice == nil {
+            if nameless {
+                BrandButton(title: "FIND ON KEY", filled: true, action: sendName)
+                    .disabled(KeyLink.cleanAppName(typed) == nil)
+                    .opacity(KeyLink.cleanAppName(typed) == nil ? 0.4 : 1)
+            } else if notice == nil {
                 if link.busy {
                     BrandButton(title: "CANCEL", filled: false) { link.cancel() }
                 } else if failed != nil || link.outcome == .cancelled {

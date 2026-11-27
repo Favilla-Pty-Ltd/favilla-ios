@@ -35,6 +35,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private var watch: AnyCancellable?
     private var closed = false
     private var retry: () -> Void = {}
+    /// iOS named nothing the KEY can take: the owner types the app's name, and
+    /// this runs the request with it.
+    private var onName: ((String) -> Void)?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -48,7 +51,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         let onRetry: () -> Void = { [weak self] in self?.retry() }
         let root: AnyView = configuring
             ? AnyView(ProbeView(link: link, onClose: onClose).preferredColorScheme(.dark))
-            : AnyView(SignInView(link: link, purpose: purpose, user: user, notice: notice, onRetry: onRetry,
+            : AnyView(SignInView(link: link, purpose: purpose, user: user, notice: notice, onRetry: onRetry, onName: onName,
                                  onNewPassword: purpose == .password && notice == nil ? { [weak self] in self?.startNewPassword() } : nil,
                                  onClose: onClose).preferredColorScheme(.dark))
         let host = UIHostingController(rootView: root)
@@ -65,7 +68,24 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     // Passwords, the generic entry: only the site (or app) is known.
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         let (site, isApp) = Self.pick(serviceIdentifiers)
+        link.given = Self.describe(serviceIdentifiers)
         fillPassword(site: site, user: "", isApp: isApp)
+    }
+
+    /// What iOS gave, written out: each identifier's kind, text and (for an app) name.
+    static func describe(_ ids: [ASCredentialServiceIdentifier]) -> String {
+        if ids.isEmpty { return "nothing (no site, no app name)" }
+        return ids.map { id in
+            var kind = "other"
+            switch id.type {
+            case .domain: kind = "domain"
+            case .URL: kind = "URL"
+            default: if #available(iOS 26.2, *), id.type == .app { kind = "app" }
+            }
+            var s = "\(kind) \"\(id.identifier)\""
+            if #available(iOS 26.2, *), id.type == .app { s += " named \"\(id.displayName ?? "")\"" }
+            return s
+        }.joined(separator: "; ")
     }
 
     /// The website iOS gave, if any (a native app linked to its site gives its
@@ -75,7 +95,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     static func pick(_ ids: [ASCredentialServiceIdentifier]) -> (String, Bool) {
         if let web = ids.first(where: { $0.type == .domain || $0.type == .URL }) { return (web.identifier, false) }
         if #available(iOS 26.2, *), let app = ids.first(where: { $0.type == .app }) {
-            return (app.displayName ?? app.identifier, true)
+            // An empty name is no name: fall back to the app's ID (27 Nov).
+            if let n = app.displayName, KeyLink.cleanAppName(n) != nil { return (n, true) }
+            return (app.identifier, true)
         }
         return (ids.first?.identifier ?? "", false)
     }
@@ -91,6 +113,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     @available(iOS 18.0, *)
     override func prepareOneTimeCodeCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         let (site, isApp) = Self.pick(serviceIdentifiers)
+        link.given = Self.describe(serviceIdentifiers)
         oneTimeCode(site: site, isApp: isApp)
     }
 
@@ -104,6 +127,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     override func prepareInterfaceToProvideCredential(for credentialRequest: ASCredentialRequest) {
         if #available(iOS 18.0, *), credentialRequest.type == .oneTimeCode {
             let (site, isApp) = Self.pick([credentialRequest.credentialIdentity.serviceIdentifier])
+            link.given = Self.describe([credentialRequest.credentialIdentity.serviceIdentifier])
             oneTimeCode(site: site, isApp: isApp)
             return
         }
@@ -112,6 +136,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                               uv: p.userVerificationPreference, allow: [id.credentialID])
         } else if let id = credentialRequest.credentialIdentity as? ASPasswordCredentialIdentity {
             let (site, isApp) = Self.pick([id.serviceIdentifier])
+            link.given = Self.describe([id.serviceIdentifier])
             fillPassword(site: site, user: id.user == AccountList.unknownUser ? "" : id.user, isApp: isApp)   // a list entry the KEY hadn't labelled: ask by site
         } else {
             notice = "iOS asked for something Favilla can't read."
@@ -277,7 +302,12 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         link.site = site
         link.siteIsAppName = isApp
         link.fillUser = wanted
+        // Nothing the KEY can take (an app iOS names nothing for): ask the owner
+        // for the app's name and send that, as an app name (27 Nov).
+        let nameless = KeyLink.siteBytes(site: site, appName: isApp) == nil
+        onName = nameless ? { [weak self] name in self?.fillPassword(site: name, user: "", isApp: true, insertText: insertText) } : nil
         show()
+        if nameless { return }
         let host = (isApp ? KeyLink.cleanAppName(site) : KeyLink.cleanSite(site)) ?? site
         watch = link.$outcome.sink { [weak self] o in
             guard let self, case .answer(let body)? = o else { return }
@@ -327,7 +357,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         link.site = site
         link.siteIsAppName = isApp
         link.fillUser = ""
+        let nameless = KeyLink.siteBytes(site: site, appName: isApp) == nil
+        onName = nameless ? { [weak self] name in self?.oneTimeCode(site: name, isApp: true) } : nil
         show()
+        if nameless { return }
         let host = (isApp ? KeyLink.cleanAppName(site) : KeyLink.cleanSite(site)) ?? site
         watch = link.$outcome.sink { [weak self] o in
             guard let self else { return }

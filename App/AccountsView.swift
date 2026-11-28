@@ -966,7 +966,7 @@ struct AccountsView: View {
                     } else if v.scored > 0 {
                         Text("\(v.strong) of \(v.total) strong").font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink).lineLimit(1).minimumScaleFactor(0.8)
                         HStack(spacing: 6) {
-                            EmberMark(size: 10)
+                            EmberCross(size: 10)
                             Text("\(v.made) made by the KEY").font(Brand.small).foregroundStyle(Brand.brass).lineLimit(1).minimumScaleFactor(0.8)
                         }
                     } else {
@@ -1059,8 +1059,9 @@ private struct HealthRing: View {
     }
 }
 
-/// The five-cell cross of the Entropy Ember: a password the KEY made.
-struct EmberMark: View {
+/// The five-cell cross at the heart of the Entropy Ember (Brand's EmberMark is
+/// the whole mark): a password the KEY made.
+struct EmberCross: View {
     var size: CGFloat = 10
     var color: Color = Brand.brass
     var body: some View {
@@ -1097,7 +1098,7 @@ struct SiteTile: View {
             .clipShape(RoundedRectangle(cornerRadius: size * 0.25))
             .overlay(alignment: .bottomTrailing) {
                 if made {
-                    EmberMark(size: size * 0.25).frame(width: size * 0.45, height: size * 0.45)
+                    EmberCross(size: size * 0.25).frame(width: size * 0.45, height: size * 0.45)
                         .background(Brand.card).clipShape(Circle()).offset(x: size * 0.12, y: size * 0.12)
                 }
             }

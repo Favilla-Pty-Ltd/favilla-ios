@@ -127,14 +127,17 @@ struct ModeHome: View {
                     VStack(spacing: 12) {
                         card(.vault, "Passwords, passkeys and one-time codes. Sign in to sites and apps with a press on the KEY.")
                         card(.nostr, "Notes, messages and secure chat, signed by the KEY. Sign for other Nostr apps too.")
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("BITCOIN").font(Brand.font(19, .bold)).tracking(2).foregroundStyle(Brand.grey)
-                                Spacer()
-                                Text("LATER").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
+                        HStack(alignment: .center, spacing: 16) {
+                            modeIcon("ModeBitcoin", Brand.grey)
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text("BITCOIN").font(Brand.font(19, .bold)).tracking(2).foregroundStyle(Brand.grey)
+                                    Spacer()
+                                    Text("LATER").font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
+                                }
+                                Text("A wallet on the phone that the KEY signs for. Not built yet.")
+                                    .font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                             }
-                            Text("A wallet on the phone that the KEY signs for. Not built yet.")
-                                .font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(18)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -164,9 +167,18 @@ struct ModeHome: View {
         .onReceive(link.$outcome) { _ in appPaired = KeyLink.appPaired }
     }
 
+    /// The KEY's SELECT MODE marks (28 Nov 2026), in the app's warm white: one
+    /// box for all three, so the titles line up down the page.
+    private func modeIcon(_ name: String, _ tint: Color) -> some View {
+        Image(name).resizable().scaledToFit().foregroundStyle(tint)
+            .frame(width: 44, height: 44).accessibilityHidden(true)
+    }
+
     private func card(_ d: Door, _ text: String) -> some View {
         let t = tag(d)
         return Button { open(d) } label: {
+            HStack(alignment: .center, spacing: 16) {
+            modeIcon(d == .nostr ? "ModeNostr" : "ModeVault", Brand.ink)
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(d.title).font(Brand.font(19, .bold)).tracking(2).foregroundStyle(Brand.ink)
@@ -181,6 +193,7 @@ struct ModeHome: View {
                     }
                 }
                 Text(text).font(Brand.body).foregroundStyle(Brand.grey).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            }
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)

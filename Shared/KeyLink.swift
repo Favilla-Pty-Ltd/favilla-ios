@@ -1447,8 +1447,8 @@ enum Demo {
         entry(1, "example-bank.com", "you@example.com", 0x62),
         entry(2, "mail.example.com", "you@example.com", 0x52),
         entry(3, "shop.example.net", "you", 0x41),
-        entry(4, "code.example.org", "you", 0xC3),
+        entry(4, "code.example.org", "you", 0xC7),
         entry(5, "news.example.com", "reader", 0x4F),
-        entry(6, "cloud.example.io", "you@example.com", 0x03),
+        entry(6, "cloud.example.io", "you@example.com", 0x47),
     ]
 }

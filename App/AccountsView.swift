@@ -1005,9 +1005,9 @@ struct AccountsView: View {
                 HStack(spacing: 8) {
                     Image(systemName: done ? "checkmark" : "shield").font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(done ? VaultHealth.good : Brand.brass)
-                    Text(done ? "Checked" : "Check breaches").font(Brand.font(13, .semibold)).foregroundStyle(done ? Brand.grey : Brand.brass)
+                    Text(done ? "Checked" : "Check breaches").font(Brand.font(13, .semibold)).foregroundStyle(done ? Brand.grey : Brand.brass).lineLimit(1).fixedSize()
                 }
-                .padding(.horizontal, 16).frame(minHeight: 44)
+                .padding(.horizontal, 14).frame(minHeight: 44)
                 .overlay(Capsule().stroke(done ? Brand.line : Brand.brass, lineWidth: 1))
                 .contentShape(Capsule())
             }

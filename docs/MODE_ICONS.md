@@ -1,7 +1,13 @@
 # The mode icons on the home page
 
-The same three marks as the KEY's SELECT MODE screen, tinted by the app.
+The same three marks as the KEY's SELECT MODE screen, tinted by the app
+(warm white, `Brand.ink`; grey on the BITCOIN card while it says LATER).
 
-- `ModeVault`: the Favilla Vault mark, from the firmware repo, `docs/brand/mode-vault.svg` (firmware issue #94). Our own art.
-- `ModeBitcoin`: the B of the Bitcoin logo, taken out of `src/qt/res/src/bitcoin.svg` in Bitcoin Core (MIT licence, The Bitcoin Core developers): the B's outline and its two counters as one even-odd path.
-- `ModeNostr`: the running ostrich, traced from the KEY's own 39 x 44 mask (`NOSTR_LOGO_A4`), because its vector source was not to hand on 28 Nov 2026. Replace it with the source file when there is one (firmware issue #94).
+All three are copies of the files in the firmware repo, `docs/brand/`
+(firmware issue #94, commits 01a3332 and 1027b98): `mode-vault.svg`,
+`mode-nostr.svg`, `mode-bitcoin.svg`. One filled path each, cropped to the art.
+To change one, change it there and copy it here:
+
+- `App/Assets.xcassets/ModeVault.imageset/mode-vault.svg`
+- `App/Assets.xcassets/ModeNostr.imageset/mode-nostr.svg`
+- `App/Assets.xcassets/ModeBitcoin.imageset/mode-bitcoin.svg`

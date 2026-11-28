@@ -121,7 +121,50 @@ enum AppChannel {
     static let rErr: UInt8 = 0xBF
 
     /// Answers whose body is encrypted.
-    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp, rApi, rHealth, rGenPw]
+    static let encrypted: Set<UInt8> = [rLogin, rCtap, rList, rOtp, rApi, rHealth, rGenPw, rFind, rListState, rListAnswer]
+
+    // The account list cache (KEY 11gm, issues #92 and #93). VAULT mode, VAULT
+    // PIN in; none of the three shows anything on the KEY.
+    static let cListState: UInt8 = 0x52    // none -> rListState [status][state 16]
+    static let cFind: UInt8 = 0x53         // [sLen][site] -> rFind [status][flags][count] entries
+    static let cListAnswer: UInt8 = 0x54   // [challenge 32] -> rListAnswer [status][answer 32]
+    static let rFind: UInt8 = 0xC2
+    static let rListState: UInt8 = 0xC3
+    static let rListAnswer: UInt8 = 0xC4
+
+    struct FindPage: Equatable {
+        var flags: UInt8
+        var hits: [ListEntry]
+        var scores: [UInt8]                 // 3 exact, 2 same domain, 1 close name
+        var loading: Bool { flags & 0x01 != 0 }   // some names are still loading on the KEY
+        var more: Bool { flags & 0x02 != 0 }      // more matches than fit
+    }
+
+    /// 0xC2 body: [0x00][flags][count], then per entry
+    /// [0x02][sLen][site][uLen][user][health][id 8][score].
+    static func parseFind(_ body: Data) throws -> FindPage {
+        let b = [UInt8](body)
+        guard let st = b.first else { throw BodyFailure.malformed }
+        guard st == 0x00 else { throw BodyFailure.status(st) }
+        guard b.count >= 3 else { throw BodyFailure.malformed }
+        var i = 3
+        func take(_ n: Int) throws -> [UInt8] {
+            guard n >= 0, i + n <= b.count else { throw BodyFailure.malformed }
+            defer { i += n }
+            return Array(b[i..<i + n])
+        }
+        func text() throws -> String { String(decoding: try take(Int(try take(1)[0])), as: UTF8.self) }
+        var page = FindPage(flags: b[1], hits: [], scores: [])
+        for _ in 0..<Int(b[2]) {
+            guard try take(1)[0] == 0x02 else { throw BodyFailure.malformed }
+            let site = try text(), user = try text()
+            let h = try take(1)[0]
+            let id = Data(try take(8))
+            page.scores.append(try take(1)[0])
+            page.hits.append(ListEntry(passkey: false, site: site, user: user, health: Health(raw: h), id: id))
+        }
+        return page
+    }
 
     // MARK: - Reports
 

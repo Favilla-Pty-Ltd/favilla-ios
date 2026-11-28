@@ -723,6 +723,37 @@ do {
     check(t.s >= 0.2 && t.s < 2 && Bunker.replyReady() == false, "nudge 11gl: no nudge, the 250 ms wait as before; nothing polling afterwards")
 }
 
+// The account list cache (KEY 11gm, issue #93)
+do {
+    let page1 = Data([0x00, 0x00, 0x02, 0x01, 0x02, 3] + Array("a.b".utf8) + [2] + Array("me".utf8) + [0x43] + [1, 2, 3, 4, 5, 6, 7, 8] + [1])
+    let page2 = Data([0x00, 0x00, 0x02, 0x01, 0x02, 3] + Array("c.d".utf8) + [0] + [0x03] + [8, 7, 6, 5, 4, 3, 2, 1] + [0])
+    let state = Data(repeating: 0x11, count: 16), c1 = Data(repeating: 0xC1, count: 32), a1 = Data(repeating: 0xA1, count: 32)
+    check(ListCache.unpack(ListCache.pack([page1, page2])) == [page1, page2] && ListCache.unpack(ListCache.pack([])) == [] && ListCache.unpack(Data([0, 9, 1])) == nil, "list cache: pages pack and unpack; a cut copy is refused")
+    let made = ListCache.make(pages: [page1, page2], state: state, challenge: c1, answer: a1)
+    check(made != nil && made!.state == state && made!.challenge == c1, "list cache: made with its state and challenge")
+    let opened = made.flatMap { ListCache.open($0, answer: a1) }
+    let es = ListCache.entries(opened?.pages ?? [])
+    check(es.count == 2 && es[0].site == "a.b" && es[0].user == "me" && es[0].id == Data([1, 2, 3, 4, 5, 6, 7, 8]) && es[1].site == "c.d", "list cache: the KEY's answer opens it, the entries come back")
+    check(made.flatMap { ListCache.open($0, answer: Data(repeating: 0xA2, count: 32)) } == nil, "list cache: another answer (a restore, another KEY) does not open it")
+    if let m = made, let o = opened {
+        let plain = ListCache.pack([page1, page2])
+        check(m.box.range(of: Data("a.b".utf8)) == nil && m.box.count > plain.count && m.wrap.count == 32 + 28, "list cache: no site in the clear on disk; the cache key is kept only wrapped")
+        var moved = m; moved.state = Data(repeating: 0x22, count: 16)
+        check(ListCache.open(moved, answer: a1) == nil, "list cache: the pages are bound to the state they were read at")
+        let c2 = Data(repeating: 0xC2, count: 32), a2 = Data(repeating: 0xB2, count: 32)
+        let next = ListCache.rewrapped(m, key: o.key, challenge: c2, answer: a2)
+        check(next != nil && next!.box == m.box && next!.wrap != m.wrap && ListCache.open(next!, answer: a2)?.pages == [page1, page2] && ListCache.open(next!, answer: a1) == nil, "list cache: re-wrapped under a fresh challenge, the old answer no longer opens it")
+    }
+    check(ListCache.newChallenge().count == 32 && ListCache.newChallenge() != ListCache.newChallenge(), "list cache: challenges are 32 random bytes")
+    let find = Data([0x00, 0x01, 0x02, 0x02, 8] + Array("Forge PC".utf8) + [0] + [0x03] + [9, 9, 9, 9, 9, 9, 9, 9] + [3] + [0x02, 5] + Array("forge".utf8) + [2] + Array("me".utf8) + [0x00] + [1, 1, 1, 1, 1, 1, 1, 1] + [1])
+    let fp = try? AppChannel.parseFind(find)
+    check(fp?.hits.count == 2 && fp?.scores == [3, 1] && fp?.loading == true && fp?.more == false && fp?.hits[0].site == "Forge PC" && fp?.hits[1].user == "me" && fp?.hits[1].id == Data(repeating: 1, count: 8), "FIND: flags, entries and scores")
+    check((try? AppChannel.parseFind(Data([0x00, 0x00, 0x00])))?.hits.isEmpty == true && (try? AppChannel.parseFind(Data([0x00, 0x00, 0x01, 0x02, 9]))) == nil, "FIND: nothing found, and a cut answer is refused")
+    var locked = false
+    do { _ = try AppChannel.parseFind(Data([0x05])) } catch AppChannel.BodyFailure.status(let st) { locked = st == 0x05 } catch {}
+    check(locked && AppChannel.encrypted.isSuperset(of: [AppChannel.rFind, AppChannel.rListState, AppChannel.rListAnswer]) && AppChannel.cListState == 0x52 && AppChannel.cFind == 0x53 && AppChannel.cListAnswer == 0x54, "FIND: locked is a status; the three answers are encrypted")
+}
+
 // Voice sign-in: the spoken name and TYPE_LOGIN's answers (KEY 11gk, issue #90)
 do {
     check(AppChannel.spokenName("Log into Forge PC") == "Forge PC" && AppChannel.spokenName("log in to the Forge P.C.") == "Forge PC", "voice: the leading words, 'the' and the dots in spoken letters come off")

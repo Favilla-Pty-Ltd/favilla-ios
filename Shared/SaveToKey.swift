@@ -59,8 +59,20 @@ final class SaveJob: ObservableObject {
             // The login, if the KEY has it (site and username, as LIST shows them).
             var found: AppChannel.ListEntry?, start = 0
             var here: [AppChannel.ListEntry] = [], seen: [String: Int] = [:]
-            while true {
-                let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start), timeout: 35)
+            // 11gm (issue #93): one site from the KEY (FIND), not its whole list.
+            var paged = false
+            switch try await ListCache.find(s, site: site, isApp: isApp) {
+            case .hits(let h):
+                here = h
+                seen = await ListCache.usernames(s)
+            case .refused(let st):
+                phase = .failed(st == 0x04 ? "Saving to the KEY needs its VAULT mode. On the KEY choose VAULT, enter the VAULT PIN, then save again from the site." : AppChannel.pwStatusText(st))
+                return
+            case .old:
+                paged = true
+            }
+            while paged {
+                let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start, health: true), timeout: 35)
                 if a.rsp == AppChannel.rErr {
                     phase = .failed(a.body.first == 0x04 ? "Saving to the KEY needs its VAULT mode. On the KEY choose VAULT, enter the VAULT PIN, then save again from the site." : AppChannel.pwStatusText(a.body.first ?? 0xFF))
                     return

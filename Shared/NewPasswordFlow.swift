@@ -71,8 +71,19 @@ final class ChangeJob: ObservableObject {
             try await s.open()
             var found: [AppChannel.ListEntry] = [], start = 0, busy = 0
             var seen: [String: Int] = [:]
-            while true {
-                let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start), timeout: 35)
+            // 11gm (issue #93): one site from the KEY (FIND), not its whole list.
+            var paged = false
+            switch try await ListCache.find(s, site: site, isApp: isApp) {
+            case .hits(let h):
+                found = h.filter { $0.id != nil }
+                seen = await ListCache.usernames(s)
+            case .refused(let st):
+                phase = .failed(ChangeJob.vaultOnly(st)); close(); return
+            case .old:
+                paged = true
+            }
+            while paged {
+                let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start, health: true), timeout: 35)
                 if a.rsp == AppChannel.rErr, a.body.first == 0x06, busy < 10 {
                     // The KEY's login picker (from the sign-in sheet) is still closing.
                     busy += 1

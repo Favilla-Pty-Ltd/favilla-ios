@@ -59,18 +59,66 @@ final class AccountsModel: ObservableObject {
         return KeySession.refusal(st)
     }
 
-    /// LIST with health, all pages.
+    /// The KEY's LIST_STATE the list in memory was read at (11gm, issue #93).
+    private var memState: Data?
+
+    private func show(_ got: [AppChannel.ListEntry], keyboard: Bool) {
+        entries = got.filter { !$0.passkey }
+        oldFirmware = !entries.isEmpty && entries.allSatisfy { $0.health == nil }
+        // The list above the keyboard (when on) follows the KEY's: this is
+        // where iOS learns which sites have a code, so Favilla shows on
+        // their code fields.
+        if keyboard, AccountList.isOn { AccountList.replace(with: got) { n in Bunker.log("accounts: \(n) listed for the keyboard bar") } }
+        listOff = !AccountList.isOn && got.contains { $0.health?.hasCode == true }
+    }
+
+    /// The list: from this iPhone's copy when the KEY says nothing changed
+    /// (LIST_STATE, 11gm), else LIST with health, all pages.
     func load() {
         if Demo.mode != nil { entries = Demo.accounts; return }
         guard busy.isEmpty else { return }
         busy = "Reading the KEY's list…"
         status = ""
-        reading = (0, 0)
+        if entries.isEmpty { reading = (0, 0) }
         Task {
             defer { busy = ""; reading = nil }
             do {
                 let s = try await open()
+                var now: Data?
+                switch try await ListCache.state(s) {
+                case .old:
+                    break                                   // a KEY before 11gm: LIST as before
+                case .locked:
+                    entries = []; memState = nil            // the list leaves memory; the copy on disk stays wrapped
+                    status = "Your KEY is locked. Enter the VAULT PIN on the KEY."
+                    note("list: the KEY is locked")
+                    return
+                case .refused(let st):
+                    if st == 0x04 { KeyLife.inferred(3, from: "LIST_STATE refused 0x04: not a VAULT life") }
+                    throw KeySession.Failure(AccountsModel.refusal(st))
+                case .state(let d):
+                    now = d
+                    KeyLife.inferred(2, from: "LIST_STATE answered: a VAULT life")
+                    if d == memState { return }             // nothing changed since it was read
+                    if let kept = ListCache.load(), let ans = try await ListCache.answer(s, kept.challenge) {
+                        if let opened = ListCache.open(kept, answer: ans) {
+                            if kept.state == d {
+                                show(ListCache.entries(opened.pages), keyboard: false)
+                                memState = d
+                                note("list: \(entries.count) accounts, unchanged on the KEY")
+                                await ListCache.rewrap(s, kept, key: opened.key)
+                                return
+                            }
+                        } else {
+                            // A restore, a new setup or another KEY: no message, read fresh.
+                            ListCache.delete()
+                            Bunker.log("accounts: this iPhone's copy of the list did not open; deleted, reading fresh")
+                        }
+                    }
+                }
+                reading = (0, 0)
                 var got: [AppChannel.ListEntry] = [], start = 0
+                var raw: [Data] = []
                 while true {
                     let a = try await s.request(AppChannel.cList, AppChannel.listBody(start: start, health: true), timeout: 35)
                     if a.rsp == AppChannel.rErr {
@@ -82,18 +130,14 @@ final class AccountsModel: ObservableObject {
                     let page: AppChannel.ListPage
                     do { page = try AppChannel.parseList(a.body) } catch AppChannel.BodyFailure.status(let st) { throw KeySession.Failure(KeyLink.listMessage(st)) }
                     got += page.entries
+                    raw.append(a.body)
                     reading = (got.count, max(page.total, got.count))
                     if !page.more || page.entries.isEmpty || got.count >= 2000 { break }
                     start += page.entries.count
                 }
-                entries = got.filter { !$0.passkey }
-                oldFirmware = !entries.isEmpty && entries.allSatisfy { $0.health == nil }
-                // The list above the keyboard (when on) follows the KEY's: this is
-                // where iOS learns which sites have a code, so Favilla shows on
-                // their code fields.
-                if AccountList.isOn { AccountList.replace(with: got) { n in Bunker.log("accounts: \(n) listed for the keyboard bar") } }
-                listOff = !AccountList.isOn && got.contains { $0.health?.hasCode == true }
+                show(got, keyboard: true)
                 note("list: \(entries.count) accounts" + (oldFirmware ? " (no health: KEY before 11s)" : ""))
+                if let now { memState = now; await ListCache.store(s, pages: raw, state: now) }
             } catch {
                 status = "\(error)"
                 note("list failed: \(error)")
@@ -753,7 +797,8 @@ struct AccountsView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if m.busy.isEmpty { m.load() } }
             }
             .onChange(of: phase) { _, p in
-                if home, p == .active, m.busy.isEmpty, m.entries.isEmpty || !m.status.isEmpty { m.load() }
+                // One LIST_STATE (11gm): a changed list is read, a locked KEY empties it.
+                if home, p == .active, m.busy.isEmpty { m.load() }
             }
     }
 

@@ -387,6 +387,39 @@ final class AccountsModel: ObservableObject {
         return out
     }
 
+    /// Voice sign-in (KEY 11gk, issue #90): TYPE_LOGIN with the spoken name,
+    /// then the KEY's one-byte outcome. The KEY does the matching and the
+    /// typing; nothing of the login comes back.
+    func typeLogin(_ name: String) async -> (typed: Bool, text: String) {
+        guard let b = KeyLink.fillBody(site: name, appName: true) else { return (false, "That name can't be sent to the KEY.") }
+        guard busy.isEmpty else { return (false, "The page is still talking to the KEY. Try again in a moment.") }
+        busy = "Voice sign-in…"
+        defer { busy = "" }
+        do {
+            let s = try await open()
+            let a = try await s.request(AppChannel.cTypeLogin, Data(b.dropFirst()), timeout: 8)
+            guard a.rsp == AppChannel.rAck, let st = a.body.first else {
+                note("voice sign-in: not answered as TYPE_LOGIN")
+                return (false, "Voice sign-in needs KEY firmware 11gk or later.")
+            }
+            guard st == 0x00 else {
+                note(String(format: "voice sign-in: refused at once, 0x%02X", st))
+                return (false, st == 0x07 ? "Voice sign-in needs KEY firmware 11gk or later, or the KEY couldn't read the name." : AppChannel.typeLoginAck(st))
+            }
+            note("voice sign-in: on the KEY")
+            let r = try await s.later(a, timeout: 75)
+            guard r.rsp == AppChannel.rLogin, let out = r.body.first else {
+                note("voice sign-in: the outcome was unreadable")
+                return (false, "The KEY's answer couldn't be read. Try again.")
+            }
+            note(String(format: "voice sign-in: outcome 0x%02X", out))
+            return (out == 0x01, AppChannel.typeLoginText(out, name: name))
+        } catch {
+            note("voice sign-in failed: \(error)")
+            return (false, "\(error)")
+        }
+    }
+
     /// PW_SAVE then PW_RESULT until the KEY is answered. nil = saved.
     /// `id` nil: a new entry.
     func save(id: Data?, site: String, user: String, pass: String, note text: String, flags: UInt8? = nil) async -> String? {
@@ -598,6 +631,7 @@ struct AccountsView: View {
     @State private var dropOld: AppChannel.ListEntry?
     @State private var dropNote = ""
     @State private var importing = false
+    @State private var voice = false
     @State private var selecting = false
     @State private var selected: Set<String> = []
     @State private var selStatus = ""
@@ -666,6 +700,19 @@ struct AccountsView: View {
                 .padding(.vertical, 16)
             }
             .background(Brand.bg.ignoresSafeArea())
+            .overlay(alignment: .bottomTrailing) {
+                // Voice sign-in (issue #90): say the login's name, the KEY types it by USB.
+                if !selecting, KeyLink.appPaired {
+                    Button { voice = true } label: {
+                        Image(systemName: "mic.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(Brand.bg)
+                            .frame(width: 58, height: 58).background(Brand.brass).clipShape(Circle())
+                            .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
+                    }
+                    .accessibilityLabel("Sign in by voice")
+                    .padding(.trailing, 20).padding(.bottom, 20)
+                }
+            }
+            .sheet(isPresented: $voice) { VoiceSignInSheet(model: m) { voice = false } }
             .navigationTitle("Accounts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Brand.bg, for: .navigationBar)
@@ -696,6 +743,7 @@ struct AccountsView: View {
                 if d == "vault-sheet", let e = m.entries.first { picked = PickedAccount(e: e) }
                 if d == "vault-add" { adding = true }
                 if d == "vault-import" { importing = true }
+                if d == "vault-voice" || d == "vault-voice-key" { voice = true }
             }
             .onDisappear { m.close() }
             .onChange(of: life.life) { _, l in

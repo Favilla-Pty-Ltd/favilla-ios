@@ -694,5 +694,18 @@ do {
     check(NostrLink.ours.contains(CipherDay.cDay) && CipherDay.askBit == 0x04, "cipher day: 0x50 rides the Nostr link, nudge bit2 asks")
 }
 
+// Voice sign-in: the spoken name and TYPE_LOGIN's answers (KEY 11gk, issue #90)
+do {
+    check(AppChannel.spokenName("Log into Forge PC") == "Forge PC" && AppChannel.spokenName("log in to the Forge P.C.") == "Forge PC", "voice: the leading words, 'the' and the dots in spoken letters come off")
+    check(AppChannel.spokenName("Sign into my bank") == "bank" && AppChannel.spokenName("sign in to GitHub") == "GitHub" && AppChannel.spokenName("login to Forge PC.") == "Forge PC", "voice: sign into, my, login to, and a full stop at the end")
+    check(AppChannel.spokenName("Open amazon.com") == "amazon.com" && AppChannel.spokenName("Opening night") == "Opening night" && AppChannel.spokenName("The Guardian") == "Guardian", "voice: open is a whole word, a site keeps its dot")
+    check(AppChannel.spokenName("log into") == nil && AppChannel.spokenName("  ") == nil && AppChannel.spokenName("log into the") == nil, "voice: nothing left is no name")
+    check(AppChannel.spokenName("Log into caf\u{E9} \u{2019}s P.C.") == "caf 's PC", "voice: only printable ASCII goes to the KEY")
+    check((AppChannel.spokenName("open " + String(repeating: "a", count: 150))?.utf8.count ?? 0) == 100, "voice: at most 100 bytes")
+    check(AppChannel.cTypeLogin == 0x51 && KeyLink.fillBody(site: "Forge PC", appName: true)?.dropFirst() == Data([8] + Array("Forge PC".utf8) + [0]), "voice: 0x51 carries [sLen][site][uLen 0], as FILL")
+    check(AppChannel.typeLoginText(0x01, name: "Forge PC") == "Typed on the computer." && AppChannel.typeLoginText(0x02, name: "x") == "Cancelled on the KEY." && AppChannel.typeLoginText(0x03, name: "Forge PC") == "No saved login called Forge PC.", "voice: typed, cancelled, no saved login")
+    check(AppChannel.typeLoginText(0x05, name: "x") == "Enter the VAULT PIN on the KEY first." && AppChannel.typeLoginText(0x18, name: "x") == "Plug the KEY into the computer by USB, then try again." && AppChannel.typeLoginAck(0x04).contains("VAULT mode"), "voice: locked, no computer, not in VAULT mode")
+}
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

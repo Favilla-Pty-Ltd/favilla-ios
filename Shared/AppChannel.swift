@@ -42,6 +42,56 @@ enum AppChannel {
     static let rHello: UInt8 = 0xB0
     static let rAck: UInt8 = 0xB1
     static let rLogin: UInt8 = 0xB3
+    /// Voice sign-in (KEY 11gk, issue #90): [sLen][site][uLen][user] as FILL ->
+    /// rAck [status] at once, then rLogin, ONE status byte and never a login.
+    /// The KEY types the login on the computer its USB cable is in.
+    static let cTypeLogin: UInt8 = 0x51
+
+    /// "log into Forge PC" -> "Forge PC": the leading words off, then "the" or
+    /// "my", the dots out of spoken letters ("P.C." -> "PC"), printable ASCII,
+    /// at most 100 bytes. nil when nothing is left.
+    static func spokenName(_ heard: String) -> String? {
+        var s = heard.replacingOccurrences(of: "\u{2019}", with: "'").replacingOccurrences(of: "\u{2018}", with: "'")
+        s = String(s.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7F }.map(Character.init))
+        func tidy(_ t: String) -> String { t.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ") }
+        s = tidy(s)
+        func strip(_ words: [String]) {
+            let low = s.lowercased()
+            for w in words where low == w || low.hasPrefix(w + " ") {
+                s = tidy(String(s.dropFirst(w.count))); return
+            }
+        }
+        strip(["log into", "log in to", "login to", "sign into", "sign in to", "open"])
+        strip(["the", "my"])
+        // A single letter followed by a dot is a spoken letter; "amazon.com" keeps its dot.
+        s = s.replacingOccurrences(of: "(?<![A-Za-z0-9])([A-Za-z])\\.", with: "$1", options: .regularExpression)
+        while let l = s.last, ".,!?;:".contains(l) { s.removeLast() }
+        s = tidy(s)
+        while s.utf8.count > 100 { s.removeLast() }
+        s = tidy(s)
+        return s.isEmpty ? nil : s
+    }
+
+    /// TYPE_LOGIN's status at once, when it is not "on the KEY".
+    static func typeLoginAck(_ st: UInt8) -> String {
+        switch st {
+        case 0x04: return "Your KEY isn't in VAULT mode. Restart it and choose VAULT."
+        case 0x05: return "Enter the VAULT PIN on the KEY first."
+        default: return statusText(st)
+        }
+    }
+
+    /// TYPE_LOGIN's outcome (the rLogin byte).
+    static func typeLoginText(_ st: UInt8, name: String) -> String {
+        switch st {
+        case 0x01: return "Typed on the computer."
+        case 0x02: return "Cancelled on the KEY."
+        case 0x03: return "No saved login called \(name)."
+        case 0x05: return "Enter the VAULT PIN on the KEY first."
+        case 0x18: return "Plug the KEY into the computer by USB, then try again."
+        default: return String(format: "The KEY answered with a status this app doesn't know (0x%02X).", st)
+        }
+    }
     static let rCtap: UInt8 = 0xB4
     static let rKeepalive: UInt8 = 0xB5
     static let rList: UInt8 = 0xB6

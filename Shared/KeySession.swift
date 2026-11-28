@@ -30,6 +30,10 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private var opened: CheckedContinuation<Void, Error>?
     private var waiting: (cmd: UInt8, ctr: UInt32, k: CheckedContinuation<AppChannel.Answer, Error>)?
     private var timer: DispatchWorkItem?
+    /// The last request's counter, and a second answer to it that came before
+    /// anyone asked for it (TYPE_LOGIN answers twice; issue #90).
+    private var lastCtr: UInt32 = 0
+    private var held: AppChannel.Answer?
     private var closed = false
     private let t0 = Date()
 
@@ -85,6 +89,22 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         return AppChannel.unsealAck(a, for: cmd, creds)   // 11ay: ASSESS_ONE's 0xB1 is encrypted (issue #66)
     }
 
+    /// The second answer to a request that answers twice (TYPE_LOGIN: an ack at
+    /// once, the outcome when the owner has answered on the KEY).
+    func later(_ first: AppChannel.Answer, timeout: TimeInterval) async throws -> AppChannel.Answer {
+        try await withCheckedThrowingContinuation { (k: CheckedContinuation<AppChannel.Answer, Error>) in
+            q.async {
+                if let h = self.held, h.ctr == first.ctr { self.held = nil; k.resume(returning: h); return }
+                guard !self.closed, let p = self.peripheral, p.state == .connected, self.chanIn != nil else {
+                    k.resume(throwing: Failure(KeySession.linkClosed)); return
+                }
+                guard self.waiting == nil else { k.resume(throwing: Failure("busy")); return }
+                self.waiting = (0, first.ctr, k)
+                self.arm(timeout) { self.noAnswer(0, first.ctr) }
+            }
+        }
+    }
+
     func close() {
         if let hook = KeySession.didClose { DispatchQueue.main.async { hook() } }
         q.async {
@@ -113,6 +133,7 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                 let msg = AppChannel.request(cmd, self.creds, ctr: ctr, body: body)
                 guard msg.count <= AppChannel.msgMaxApi else { k.resume(throwing: Failure("request too large")); return }
                 self.waiting = (cmd, ctr, k)
+                self.lastCtr = ctr; self.held = nil
                 // Generous while the request is going out; the real limit is
                 // armed from the last write (issue #20 item 3).
                 self.pendingLimit = timeout
@@ -347,7 +368,10 @@ final class KeySession: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                 }
                 timeDone("clock set"); return
             }
-            guard let w = waiting, a.ctr == w.ctr else { return }
+            guard let w = waiting, a.ctr == w.ctr else {
+                if waiting == nil, lastCtr != 0, a.ctr == lastCtr { held = a }   // kept for later(_:)
+                return
+            }
             timer?.cancel()
             waiting = nil
             w.k.resume(returning: a)

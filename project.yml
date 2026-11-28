@@ -43,7 +43,8 @@ targets:
         # The Nostr client (7 Nov 2026): the KEY on Wi-Fi, the pairing QR and calls.
         NSLocalNetworkUsageDescription: Favilla reaches your Favilla KEY on your Wi-Fi when the Nostr client is set to Wi-Fi.
         NSCameraUsageDescription: Favilla uses the camera to scan your Favilla KEY's pairing code and QR codes in Nostr, and for video calls.
-        NSMicrophoneUsageDescription: Favilla uses the microphone for voice and video calls in Nostr.
+        NSMicrophoneUsageDescription: Favilla uses the microphone for voice and video calls in Nostr, and to hear a login's name for voice sign-in.
+        NSSpeechRecognitionUsageDescription: Favilla turns your voice into text on this iPhone to find a login on your Favilla KEY. Nothing is sent to a server.
         UIBackgroundModes: [audio, bluetooth-central, voip]   # a call keeps sounding; the KEY wakes the app for bunker requests (path B); calls ring (CallRing)
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true    # the KEY's API is plain HTTP on the local network

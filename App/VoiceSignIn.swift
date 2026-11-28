@@ -18,6 +18,7 @@ final class VoiceListener: ObservableObject {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var quiet: DispatchWorkItem?
+    private var limit: DispatchWorkItem?
     private var tapped = false
     private var finished = true
     private var done: (String) -> Void = { _ in }
@@ -82,6 +83,10 @@ final class VoiceListener: ObservableObject {
             }
         }
         restartQuiet(8)                          // nothing said at all
+        // A room that is never quiet: take what has been heard after 12 s.
+        let cap = DispatchWorkItem { [weak self] in self?.finishNow() }
+        limit = cap
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: cap)
     }
 
     private func restartQuiet(_ s: TimeInterval) {
@@ -94,7 +99,7 @@ final class VoiceListener: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: w)
     }
 
-    /// The owner's DONE: take what has been heard so far.
+    /// Take what has been heard so far.
     func finishNow() {
         guard !finished else { return }
         heard.isEmpty ? end(nil, "Nothing was heard. Try again.") : end(heard, nil)
@@ -107,6 +112,7 @@ final class VoiceListener: ObservableObject {
         guard !finished else { return }
         finished = true
         quiet?.cancel(); quiet = nil
+        limit?.cancel(); limit = nil
         if engine.isRunning { engine.stop() }
         if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
         request?.endAudio(); request = nil
@@ -163,7 +169,7 @@ struct VoiceSignInSheet: View {
 
             switch step {
             case .listening:
-                Text("For example: \"log into Forge PC\". Your voice is turned into text on this iPhone only. The KEY finds the login and types it on the computer its USB cable is in.")
+                Text("For example: \"log into Forge PC\". It stops listening when you stop talking. Your voice is turned into text on this iPhone only. The KEY finds the login and types it on the computer its USB cable is in.")
                     .font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             case .onKey:
                 WaitCard(title: "Check the KEY", detail: "Pick the login on the KEY and press ENTER. It types it on the computer its USB cable is in. Hold ENTER to press Enter after it.")
@@ -174,11 +180,8 @@ struct VoiceSignInSheet: View {
             Spacer(minLength: 0)
 
             switch step {
-            case .listening:
-                BrandButton(title: "DONE", filled: true) { ears.finishNow() }
-                    .disabled(ears.heard.isEmpty).opacity(ears.heard.isEmpty ? 0.4 : 1)
-            case .onKey:
-                EmptyView()
+            case .listening, .onKey:
+                EmptyView()          // listening ends by itself (28 Nov ruling)
             case .ended:
                 BrandButton(title: "SAY IT AGAIN", filled: true) { begin() }
             }

@@ -172,7 +172,7 @@ struct VoiceSignInSheet: View {
                 Text("For example: \"log into Forge PC\". It stops listening when you stop talking. Your voice is turned into text on this iPhone only. The KEY finds the login and types it on the computer its USB cable is in.")
                     .font(Brand.body).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
             case .onKey:
-                WaitCard(title: "Check the KEY", detail: "Pick the login on the KEY and press ENTER. It types it on the computer its USB cable is in. Hold ENTER to press Enter after it.")
+                WaitCard(title: "Waiting for ENTER on the KEY", detail: "Pick the login on the KEY and press ENTER. It types it on the computer its USB cable is in. Hold ENTER to press Enter after it.")
             case .ended(let text, let typed):
                 Text(text).font(Brand.body).foregroundStyle(typed ? Brand.ink : Brand.danger).fixedSize(horizontal: false, vertical: true)
             }

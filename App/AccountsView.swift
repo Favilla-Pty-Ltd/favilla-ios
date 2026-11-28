@@ -147,12 +147,20 @@ final class AccountsModel: ObservableObject {
     }
 
     /// The breach check: prefixes from the KEY, buckets from HIBP, back to the KEY.
+    /// How far the breach check is, 0 to 1; nil when none runs (28 Nov).
+    @Published var checkFraction: Double?
+    private var checkStop = false
+    /// The owner's Stop: the check ends after the bucket it is on.
+    func stopCheck() { if checkFraction != nil { checkStop = true } }
+
     func checkBreaches() {
         guard busy.isEmpty else { return }
         busy = "Checking breaches…"
         status = ""
+        checkStop = false
+        checkFraction = 0
         Task {
-            defer { busy = "" }
+            defer { busy = ""; checkFraction = nil }
             do {
                 let s = try await open()
                 // 11ab: have the KEY score the entries it has never assessed (24
@@ -173,6 +181,12 @@ final class AccountsModel: ObservableObject {
                 }
                 busy = "Checking breaches…"
                 let (buckets, pending) = try await healthRounds(s)
+                if checkStop {
+                    status = "Stopped after \(buckets) bucket\(buckets == 1 ? "" : "s"). Tap Check breaches to carry on."
+                    note("breach check stopped by the owner after \(buckets) buckets")
+                    load()
+                    return
+                }
                 status = pending == 0 ? "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). Every password the KEY has seen this sitting is checked."
                     : "Checked \(buckets) bucket\(buckets == 1 ? "" : "s"). \(pending) account\(pending == 1 ? "" : "s") not scored yet" + (unseen > opening ? ": the KEY scores 24 per unlock. Lock and unlock the KEY and check again." : ". Check again in a moment.")
                 load()
@@ -185,14 +199,18 @@ final class AccountsModel: ObservableObject {
 
     /// HEALTH rounds until the KEY wants no more buckets: (buckets sent, still pending).
     private func healthRounds(_ s: KeySession) async throws -> (Int, Int) {
-        var buckets = 0, rounds = 0, lastPending = -1
+        var buckets = 0, rounds = 0, lastPending = -1, first = -1
         while rounds < 40 {
             rounds += 1
+            if checkStop { return (buckets, max(lastPending, 0)) }
             let page = try await health(s, body: Data())
+            if first < 0 { first = page.pending }
+            if first > 0 { checkFraction = min(1, max(checkFraction ?? 0, Double(first - page.pending) / Double(first))) }
             if page.prefixes.isEmpty { return (buckets, page.pending) }
             if page.pending == lastPending, page.prefixes.isEmpty { return (buckets, page.pending) }
             lastPending = page.pending
             for prefix in page.prefixes {
+                if checkStop { return (buckets, page.pending) }
                 let suffixes = try await hibp(prefix)
                 // 11bc (issue #32): parts of up to 1,000, bit 15 on all but the last.
                 // Issue #73: a bucket that could not be fetched is never sent.
@@ -670,6 +688,8 @@ struct AccountsView: View {
     @StateObject private var m = AccountsModel()
     @State private var picked: PickedAccount?
     @State private var filter = ""
+    enum Scope { case all, attention, code }
+    @State private var scope: Scope = .all
     @State private var qr: SetupKeyQR.Prefill?
     @State private var adding = false
     @State private var dropOld: AppChannel.ListEntry?
@@ -684,7 +704,14 @@ struct AccountsView: View {
     private var shown: [AppChannel.ListEntry] {
         let f = filter.trimmingCharacters(in: .whitespaces).lowercased()
         let all = m.entries.filter { !m.isNested($0) }   // old copies sit under their login (11az)
-        let list = f.isEmpty ? all : all.filter { $0.site.lowercased().contains(f) || $0.user.lowercased().contains(f) }
+        let scoped = all.filter { e in
+            switch scope {
+            case .all: return true
+            case .attention: return VaultHealth.needsAttention(e.health)
+            case .code: return e.health?.hasCode == true
+            }
+        }
+        let list = f.isEmpty ? scoped : scoped.filter { $0.site.lowercased().contains(f) || $0.user.lowercased().contains(f) }
         // Trouble first: breached, then reused, then weak; the rest by site.
         return list.sorted { a, b in
             let ra = rank(a.health), rb = rank(b.health)
@@ -712,8 +739,25 @@ struct AccountsView: View {
                     }
                     if !selecting { changesCard }
                     if m.entries.count > 8 {
-                        TextField("Search", text: $filter).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .font(Brand.body).foregroundStyle(Brand.ink).padding(12).background(Brand.card).clipShape(RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 16)
+                        HStack(spacing: 10) {
+                            Image(systemName: "magnifyingglass").font(.system(size: 15, weight: .semibold)).foregroundStyle(Brand.grey)
+                            TextField("", text: $filter, prompt: Text("Search sites and usernames").foregroundColor(Brand.grey))
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .font(Brand.body).foregroundStyle(Brand.ink).tint(Brand.brass)
+                        }
+                        .padding(.horizontal, 14).frame(minHeight: 44)
+                        .background(Brand.card).clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Brand.line, lineWidth: 1))
+                        .padding(.horizontal, 16)
+                    }
+                    if m.entries.contains(where: { $0.health != nil }) {
+                        let n = m.entries.filter { !m.isNested($0) && VaultHealth.needsAttention($0.health) }.count
+                        HStack(spacing: 8) {
+                            chip("All", nil, .all)
+                            chip("Needs attention", n > 0 ? n : nil, .attention)
+                            chip("Has a code", nil, .code)
+                        }
+                        .padding(.horizontal, 16)
                     }
                     LazyVStack(spacing: 0) {
                         ForEach(Array(shown.enumerated()), id: \.offset) { _, e in
@@ -721,7 +765,7 @@ struct AccountsView: View {
                             Button {
                                 if selecting { toggle(key) } else { picked = PickedAccount(e: e) }
                             } label: { AccountRow(e: e, selecting: selecting, selected: selected.contains(key), oldKept: m.oldCopy(of: e) != nil) }
-                            Divider().overlay(Brand.line).padding(.leading, 16)
+                            Divider().overlay(Brand.line).padding(.leading, 66)
                         }
                     }
                     .background(Brand.card)
@@ -768,10 +812,24 @@ struct AccountsView: View {
                             .foregroundStyle(Brand.brass).accessibilityLabel("Settings")
                     }
                 } else if !pushed { ToolbarItem(placement: .cancellationAction) { Button("Done") { m.close(); dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) } }
-                if !m.entries.isEmpty && m.entries.contains(where: { $0.id != nil }) {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button(selecting ? "Cancel" : "Select") { selecting.toggle(); selected = []; selStatus = "" }
-                            .font(Brand.button).foregroundStyle(Brand.brass).disabled(!m.busy.isEmpty)
+                ToolbarItem(placement: .primaryAction) {
+                    if selecting {
+                        Button("Cancel") { selecting = false; selected = []; selStatus = "" }
+                            .font(Brand.button).foregroundStyle(Brand.brass)
+                    } else {
+                        Menu {
+                            Button { adding = true } label: { Label("Add an account", systemImage: "plus") }
+                            Button { importing = true } label: { Label("Import from another manager", systemImage: "square.and.arrow.down") }
+                            Button { qr = SetupKeyQR.Prefill(site: "", account: "") } label: { Label("Setup key to QR", systemImage: "qrcode") }
+                            Divider()
+                            if m.entries.contains(where: { $0.id != nil }) {
+                                Button { selecting = true; selected = []; selStatus = "" } label: { Label("Select accounts to delete", systemImage: "checkmark.circle") }
+                            }
+                            Button { m.load() } label: { Label("Read the list again", systemImage: "arrow.clockwise") }
+                        } label: {
+                            Image(systemName: "plus").font(.system(size: 17, weight: .semibold))
+                        }
+                        .foregroundStyle(Brand.brass).disabled(!m.busy.isEmpty).accessibilityLabel("Add, import and more")
                     }
                 }
             }
@@ -877,58 +935,173 @@ struct AccountsView: View {
         .padding(.horizontal, 16)
     }
 
+    private func chip(_ title: String, _ count: Int?, _ value: Scope) -> some View {
+        let on = scope == value
+        return Button { scope = value } label: {
+            HStack(spacing: 6) {
+                Text(title).font(Brand.font(13, on ? .semibold : .medium)).foregroundStyle(on ? Brand.bg : Brand.ink)
+                if let count { Text("\(count)").font(Brand.font(13, .bold)).foregroundStyle(on ? Brand.bg : Brand.danger) }
+            }
+            .padding(.horizontal, 14).frame(minHeight: 34)
+            .background(on ? Brand.brass : Brand.card).clipShape(Capsule())
+            .overlay(Capsule().stroke(on ? Brand.brass : Brand.line, lineWidth: 1))
+            .frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The top of the list (28 Nov): a ring for how much of the vault is in
+    /// good shape, how much of that the KEY made, and the breach check as one
+    /// small button that shows how far it is and stops on a tap.
     private var summary: some View {
-        let hs = m.entries.compactMap { $0.health }
-        let breached = hs.filter { $0.breached }.count, reused = hs.filter { $0.reused }.count
-        let weak = hs.filter { $0.strength == 1 }.count, pending = hs.filter { !$0.checked }.count
+        let own = m.entries.filter { !m.isNested($0) }
+        let v = VaultHealth(own)
+        let first = m.reading != nil && m.entries.isEmpty
         return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                // No "0 accounts" while the first read is still coming in.
-                if !(m.reading != nil && m.entries.isEmpty) {
-                    Text("\(m.entries.count)").font(Brand.font(28, .semibold)).foregroundStyle(Brand.ink)
+            HStack(alignment: .center, spacing: 12) {
+                if v.scored > 0 { HealthRing(strong: v.strongShare, made: v.madeShare) }
+                VStack(alignment: .leading, spacing: 3) {
+                    if first {
+                        Text("Accounts on the KEY").font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
+                    } else if v.scored > 0 {
+                        Text("\(v.strong) of \(v.total) strong").font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink).lineLimit(1).minimumScaleFactor(0.8)
+                        HStack(spacing: 6) {
+                            EmberMark(size: 10)
+                            Text("\(v.made) made by the KEY").font(Brand.small).foregroundStyle(Brand.brass).lineLimit(1).minimumScaleFactor(0.8)
+                        }
+                    } else {
+                        Text("\(v.total) account\(v.total == 1 ? "" : "s")").font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
+                    }
                 }
-                Text(m.reading != nil && m.entries.isEmpty ? "Accounts on the KEY" : "accounts on the KEY").font(Brand.body).foregroundStyle(Brand.grey)
-                Spacer()
+                Spacer(minLength: 8)
+                if !first { checkButton(v) }
             }
-            if !hs.isEmpty {
-                FlowRow(spacing: 8) {
-                    Pill("\(breached) breached", tone: breached > 0 ? .bad : .quiet)
-                    Pill("\(reused) reused", tone: reused > 0 ? .warn : .quiet)
-                    Pill("\(weak) weak", tone: weak > 0 ? .warn : .quiet)
-                    if pending > 0 { Pill("\(pending) unchecked", tone: .quiet) }
-                    let codes = hs.filter { $0.hasCode }.count
-                    if codes > 0 { Pill("\(codes) with 2FA", tone: .good) }
-                }
-            }
-            // Reading the list: a turning ring and the count, not only a button label (issue #59).
+            if let f = m.checkFraction { WaitBar(fraction: f) }
+            // Reading the list: a turning ring and the count (issue #59).
             if let r = m.reading {
                 WaitCard(title: "Reading the KEY's list", detail: r.total > 0 ? "\(r.got) of \(r.total)" : "Connecting to your KEY")
                 if r.total > 0 { WaitBar(fraction: Double(r.got) / Double(r.total)) }
             }
-            HStack(spacing: 12) {
-                BrandButton(title: m.busy.isEmpty || m.reading != nil ? "CHECK BREACHES" : m.busy.uppercased(), filled: m.busy.isEmpty) { m.checkBreaches() }
-                    .disabled(!m.busy.isEmpty)
-                Button("Refresh") { m.load() }.font(Brand.button).foregroundStyle(Brand.brass).disabled(!m.busy.isEmpty)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    @ViewBuilder private func checkButton(_ v: VaultHealth) -> some View {
+        if let f = m.checkFraction {
+            Button { m.stopCheck() } label: {
+                HStack(spacing: 10) {
+                    TurningRing(size: 22)
+                    Text("\(Int((f * 100).rounded()))%").font(Brand.font(13, .semibold)).foregroundStyle(Brand.ink).monospacedDigit()
+                    Rectangle().fill(Brand.line).frame(width: 1, height: 18)
+                    Text("Stop").font(Brand.font(13, .semibold)).foregroundStyle(Brand.brass)
+                }
+                .padding(.leading, 10).padding(.trailing, 14).frame(minHeight: 44)
+                .background(Brand.card).clipShape(Capsule()).overlay(Capsule().stroke(Brand.line, lineWidth: 1))
             }
-            Button { adding = true } label: {
-                HStack(spacing: 6) { Image(systemName: "plus"); Text("Add an account") }
-                    .font(Brand.small).foregroundStyle(Brand.brass)
+            .buttonStyle(.plain).accessibilityLabel("Stop the breach check")
+        } else {
+            let done = v.scored > 0 && v.unchecked == 0
+            Button { m.checkBreaches() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: done ? "checkmark" : "shield").font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(done ? VaultHealth.good : Brand.brass)
+                    Text(done ? "Checked" : "Check breaches").font(Brand.font(13, .semibold)).foregroundStyle(done ? Brand.grey : Brand.brass)
+                }
+                .padding(.horizontal, 16).frame(minHeight: 44)
+                .overlay(Capsule().stroke(done ? Brand.line : Brand.brass, lineWidth: 1))
+                .contentShape(Capsule())
             }
-            .disabled(!m.busy.isEmpty)
-            Button { importing = true } label: {
-                HStack(spacing: 6) { Image(systemName: "square.and.arrow.down"); Text("Import from another manager") }
-                    .font(Brand.small).foregroundStyle(Brand.brass)
-            }
-            .disabled(!m.busy.isEmpty)
-            Button { qr = SetupKeyQR.Prefill(site: "", account: "") } label: {
-                HStack(spacing: 6) { Image(systemName: "qrcode"); Text("Setup key to QR, for the KEY to scan") }
-                    .font(Brand.small).foregroundStyle(Brand.brass)
+            .buttonStyle(.plain).disabled(!m.busy.isEmpty).opacity(m.busy.isEmpty ? 1 : 0.5)
+            .accessibilityLabel(done ? "Every account is checked. Check breaches again" : "Check breaches")
+        }
+    }
+}
+
+/// What the top of the list counts (28 Nov). Strong is the KEY's own score of
+/// Strong, on a password that is not reused, not in a breach, and has been
+/// checked against breaches: an unchecked password does not count as strong.
+struct VaultHealth {
+    static let good = Color(red: 0.61, green: 0.80, blue: 0.63)
+    var total = 0, scored = 0, strong = 0, made = 0, strongMade = 0, unchecked = 0
+    init(_ entries: [AppChannel.ListEntry]) {
+        total = entries.count
+        for e in entries {
+            guard let h = e.health else { continue }
+            scored += 1
+            if !h.checked { unchecked += 1 }
+            if h.origin == 1 { made += 1 }
+            if VaultHealth.isStrong(h) { strong += 1; if h.origin == 1 { strongMade += 1 } }
+        }
+    }
+    static func isStrong(_ h: AppChannel.Health) -> Bool { h.strength == 3 && !h.reused && !h.breached && h.checked }
+    static func needsAttention(_ h: AppChannel.Health?) -> Bool {
+        guard let h else { return false }
+        return h.breached || h.reused || h.strength == 1
+    }
+    var strongShare: Double { total > 0 ? Double(strong) / Double(total) : 0 }
+    var madeShare: Double { total > 0 ? Double(strongMade) / Double(total) : 0 }
+}
+
+/// The ring: all of it that is drawn is strong, the brass part is strong and
+/// made by the KEY.
+private struct HealthRing: View {
+    let strong: Double, made: Double
+    var body: some View {
+        ZStack {
+            Circle().stroke(Brand.line, lineWidth: 5)
+            Circle().trim(from: 0, to: strong).stroke(Brand.faint, style: StrokeStyle(lineWidth: 5, lineCap: .round)).rotationEffect(.degrees(-90))
+            Circle().trim(from: 0, to: made).stroke(Brand.brass, style: StrokeStyle(lineWidth: 5, lineCap: .round)).rotationEffect(.degrees(-90))
+            Text("\(Int((strong * 100).rounded()))%").font(Brand.font(13, .bold)).foregroundStyle(Brand.ink).monospacedDigit()
+        }
+        .frame(width: 52, height: 52)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(Int((strong * 100).rounded())) percent of accounts are strong, \(Int((made * 100).rounded())) percent made by the KEY")
+    }
+}
+
+/// The five-cell cross of the Entropy Ember: a password the KEY made.
+struct EmberMark: View {
+    var size: CGFloat = 10
+    var color: Color = Brand.brass
+    var body: some View {
+        Canvas { ctx, sz in
+            let c = sz.width * 0.3, g = (sz.width - 3 * c) / 2
+            for (x, y) in [(1, 0), (0, 1), (1, 1), (2, 1), (1, 2)] {
+                ctx.fill(Path(CGRect(x: CGFloat(x) * (c + g), y: CGFloat(y) * (c + g), width: c, height: c)), with: .color(color))
             }
         }
-        .padding(16)
-        .background(Brand.card)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 16)
+        .frame(width: size, height: size).accessibilityHidden(true)
+    }
+}
+
+/// The site's tile: its first letter on a quiet tint worked out from the
+/// name here on the iPhone. No network: nothing learns which sites are used.
+struct SiteTile: View {
+    let site: String
+    var size: CGFloat = 40
+    var made = false
+    private static let tints: [UInt32] = [0x3A2E24, 0x24303A, 0x2F2A3A, 0x233530, 0x363022, 0x3A2630, 0x26323A]
+    static func letter(_ site: String) -> String {
+        var s = site.lowercased()
+        for p in ["https://", "http://", "www."] where s.hasPrefix(p) { s.removeFirst(p.count) }
+        return s.first(where: { $0.isLetter || $0.isNumber }).map { String($0).uppercased() } ?? "?"
+    }
+    static func tint(_ site: String) -> Color {
+        var h: UInt32 = 2166136261
+        for b in site.lowercased().utf8 { h = (h ^ UInt32(b)) &* 16777619 }
+        return Color(hex: tints[Int(h % UInt32(tints.count))])
+    }
+    var body: some View {
+        Text(SiteTile.letter(site)).font(Brand.font(size * 0.45, .bold)).foregroundStyle(Brand.ink)
+            .frame(width: size, height: size).background(SiteTile.tint(site))
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.25))
+            .overlay(alignment: .bottomTrailing) {
+                if made {
+                    EmberMark(size: size * 0.25).frame(width: size * 0.45, height: size * 0.45)
+                        .background(Brand.card).clipShape(Circle()).offset(x: size * 0.12, y: size * 0.12)
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -943,51 +1116,49 @@ private struct AccountRow: View {
     var selected = false
     var oldKept = false
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             if selecting {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20)).foregroundStyle(selected ? Brand.brass : Brand.faint).padding(.top, 1)
+                    .font(.system(size: 20)).foregroundStyle(selected ? Brand.brass : Brand.faint)
             }
-            details
+            SiteTile(site: e.site, made: e.health?.origin == 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(e.site).font(Brand.font(16, .semibold)).foregroundStyle(Brand.ink).lineLimit(1)
+                if !second.isEmpty { Text(second).font(Brand.small).foregroundStyle(Brand.grey).lineLimit(1) }
+                if oldKept || AccountsModel.isOld(e) {
+                    HStack(spacing: 6) {
+                        if oldKept { Pill("Old password kept", tone: .warn) }
+                        if AccountsModel.isOld(e) { Pill("OLD", tone: .quiet) }
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            Spacer(minLength: 8)
+            status
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, 14).padding(.vertical, 12)
         .contentShape(Rectangle())
     }
-    private var details: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(e.site).font(Brand.font(16, .semibold)).foregroundStyle(Brand.ink).lineLimit(1)
-                Spacer()
-                if !selecting { Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.grey) }
+    /// The username, then what is worth knowing at a glance.
+    private var second: String {
+        var parts: [String] = []
+        if !e.user.isEmpty { parts.append(e.user) }
+        if e.health?.origin == 1 { parts.append("made by the KEY") }
+        if e.health?.hasCode == true { parts.append("has a code") }
+        return parts.joined(separator: " · ")
+    }
+    /// One status, the worst one; the rest is on the account's page.
+    @ViewBuilder private var status: some View {
+        if let h = e.health {
+            if h.breached { Pill("Breached", tone: .bad) }
+            else if h.reused { Pill("Reused", tone: .warn) }
+            else if h.strength == 1 { Pill("Weak", tone: .warn) }
+            else if !h.checked { Pill("Not checked", tone: .quiet) }
+            else if h.strength == 3 {
+                Image(systemName: "checkmark").font(.system(size: 14, weight: .bold)).foregroundStyle(VaultHealth.good)
+                    .accessibilityLabel("Strong, nothing to fix")
             }
-            Text(e.user).font(Brand.small).foregroundStyle(Brand.grey).lineLimit(1)
-            if oldKept || AccountsModel.isOld(e) {
-                HStack(spacing: 6) {
-                    if oldKept { Pill("Old password kept", tone: .warn) }
-                    if AccountsModel.isOld(e) { Pill("OLD", tone: .quiet) }
-                }
-                .padding(.top, 2)
-            }
-            if let h = e.health {
-                HStack(spacing: 6) {
-                    if h.breached { Pill("Seen in a breach", tone: .bad) }
-                    if h.reused { Pill("Reused", tone: .warn) }
-                    switch h.strength {
-                    case 1: Pill("Weak", tone: .warn)
-                    case 2: Pill("Fair", tone: .quiet)
-                    case 3: Pill("Strong", tone: .good)
-                    default: EmptyView()
-                    }
-                    switch h.origin {
-                    case 1: Pill("✓ Made on KEY", tone: .good)
-                    case 3: Pill("Imported", tone: .quiet)
-                    default: EmptyView()
-                    }
-                    if h.hasCode { Pill("2FA", tone: .good) }
-                    if !h.checked { Pill("Breach check pending", tone: .quiet) }
-                }
-                .padding(.top, 2)
-            }
+            else if h.strength == 2 { Pill("Fair", tone: .quiet) }
         }
     }
 }
@@ -999,8 +1170,8 @@ private struct Pill: View {
     init(_ t: String, tone: Tone) { text = t; self.tone = tone }
     var body: some View {
         let c: Color = { switch tone { case .bad: return Brand.danger; case .warn: return Brand.brass; case .good: return Color(red: 0.55, green: 0.78, blue: 0.56); case .quiet: return Brand.grey } }()
-        Text(text).font(Brand.font(11, .semibold)).foregroundStyle(c).lineLimit(1).fixedSize()
-            .padding(.horizontal, 8).padding(.vertical, 3)
+        Text(text).font(Brand.font(12, .semibold)).foregroundStyle(c).lineLimit(1).fixedSize()
+            .padding(.horizontal, 10).padding(.vertical, 5)
             .background(c.opacity(0.14)).clipShape(Capsule())
     }
 }

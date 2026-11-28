@@ -181,6 +181,56 @@ enum Bunker {
     /// Hand each request to the KEY, publish its replies as they come, and poll
     /// while the KEY says more is coming (a request waiting for approval on the
     /// KEY, or encrypt/decrypt on its worker), until `deadline`.
+    // MARK: - The nudge that a reply is ready (KEY 11gl, issue #52)
+    // The KEY sends one nudge as each NIP-46 reply enters its outbox. A serve
+    // that is polling for that reply waits here between polls, and the nudge
+    // ends the wait at once: one poll, by the request that is already running,
+    // not a second poll beside it. Without a nudge (an older KEY) the wait
+    // runs its 250 ms as before.
+    private static let waitLock = NSLock()
+    private static var waiter: CheckedContinuation<Void, Never>?
+    private static var waitGen = 0
+    private static var polling = 0
+    private static var readyEarly = false
+
+    /// A nudge with replies waiting. True when a running serve takes it (it
+    /// polls now, or straight after the poll it has in flight).
+    static func replyReady() -> Bool {
+        waitLock.lock(); defer { waitLock.unlock() }
+        guard polling > 0 else { return false }
+        if let w = waiter { waiter = nil; w.resume() } else { readyEarly = true }
+        return true
+    }
+
+    static func pollBegan() { waitLock.lock(); polling += 1; waitLock.unlock() }
+    static func pollEnded() {
+        waitLock.lock()
+        polling = max(0, polling - 1)
+        if polling == 0 { readyEarly = false }
+        waitLock.unlock()
+    }
+
+    /// The wait between two polls: `s` seconds, or until replyReady().
+    static func waitForReply(_ s: TimeInterval) async {
+        await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
+            waitLock.lock()
+            if readyEarly { readyEarly = false; waitLock.unlock(); k.resume(); return }
+            let old = waiter            // two serves at once: neither is left hanging
+            waiter = k
+            waitGen += 1
+            let g = waitGen
+            waitLock.unlock()
+            old?.resume()
+            DispatchQueue.global().asyncAfter(deadline: .now() + s) {
+                waitLock.lock()
+                let mine = waitGen == g ? waiter : nil
+                if mine != nil { waiter = nil }
+                waitLock.unlock()
+                mine?.resume()
+            }
+        }
+    }
+
     static func serve(_ reqs: [(String, Data)], via k: ChannelCaller, relays: [String], until deadline: Date,
                       poll: Bool = false, note: ((Outcome) -> Void)? = nil) async -> Outcome {
         var o = Outcome()
@@ -237,10 +287,12 @@ enum Bunker {
                 }
             }
             // Replies the KEY finishes later (an approval, encrypt/decrypt on its worker).
+            pollBegan()
             while more, o.error == nil, deadline.timeIntervalSinceNow > 0.6 {
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                await waitForReply(0.25)      // or at once, on the KEY's nudge (11gl)
                 do { guard await take(try await k.request(cPoll, Data(), timeout: min(12, max(1, deadline.timeIntervalSinceNow)))) else { break } } catch { o.error = "\(error)"; break }
             }
+            pollEnded()
             // The KEY is free again: the requests it was too busy for, once more.
             guard !o.later.isEmpty, !more, o.error == nil, deadline.timeIntervalSinceNow > 2 else { break }
             pending = o.later

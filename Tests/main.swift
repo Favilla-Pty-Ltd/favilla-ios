@@ -694,6 +694,35 @@ do {
     check(NostrLink.ours.contains(CipherDay.cDay) && CipherDay.askBit == 0x04, "cipher day: 0x50 rides the Nostr link, nudge bit2 asks")
 }
 
+// The nudge that a reply is ready ends the poll wait (KEY 11gl, issue #52)
+do {
+    check(Bunker.replyReady() == false, "nudge 11gl: with nothing polling, the nudge is not taken (the old path runs)")
+    // A wait of 5 s that the nudge ends in a fraction of that.
+    let woke = DispatchSemaphore(value: 0)
+    final class T: @unchecked Sendable { var s = 9.0 }
+    let t = T()
+    Bunker.pollBegan()
+    Task { let t0 = Date(); await Bunker.waitForReply(5); t.s = Date().timeIntervalSince(t0); woke.signal() }
+    Thread.sleep(forTimeInterval: 0.2)
+    check(Bunker.replyReady() == true, "nudge 11gl: a polling request takes the nudge")
+    woke.wait()
+    check(t.s < 1.5, "nudge 11gl: the wait ends at once on the nudge, not after its interval")
+    // A nudge while the poll is in flight is kept for the next wait.
+    check(Bunker.replyReady() == true, "nudge 11gl: taken while the poll is in flight")
+    let kept = DispatchSemaphore(value: 0)
+    Task { let t0 = Date(); await Bunker.waitForReply(5); t.s = Date().timeIntervalSince(t0); kept.signal() }
+    kept.wait()
+    check(t.s < 1.0, "nudge 11gl: the next wait returns straight away")
+    Bunker.pollEnded()
+    // Without a nudge the wait still runs its interval.
+    let plain = DispatchSemaphore(value: 0)
+    Bunker.pollBegan()
+    Task { let t0 = Date(); await Bunker.waitForReply(0.25); t.s = Date().timeIntervalSince(t0); plain.signal() }
+    plain.wait()
+    Bunker.pollEnded()
+    check(t.s >= 0.2 && t.s < 2 && Bunker.replyReady() == false, "nudge 11gl: no nudge, the 250 ms wait as before; nothing polling afterwards")
+}
+
 // Voice sign-in: the spoken name and TYPE_LOGIN's answers (KEY 11gk, issue #90)
 do {
     check(AppChannel.spokenName("Log into Forge PC") == "Forge PC" && AppChannel.spokenName("log in to the Forge P.C.") == "Forge PC", "voice: the leading words, 'the' and the dots in spoken letters come off")

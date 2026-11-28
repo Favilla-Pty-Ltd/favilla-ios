@@ -86,6 +86,9 @@ final class BunkerService: ObservableObject {
     /// this link and publish the replies. In the foreground the relay listener
     /// does this already, so only the KEY's outbox is collected here.
     func nudged(waiting: Int) {
+        // KEY 11gl (issue #52): a reply is ready and a request is already
+        // polling for it. Its wait ends now; no second poll beside it.
+        if waiting > 0, Bunker.replyReady() { return }
         guard !nudging else { return }
         // KEY 11o (issue #13): the KEY also nudges for its own events (SHARE RUN
         // in CIPHER), with the bunker off and without NUDGE_SET. Anything waiting

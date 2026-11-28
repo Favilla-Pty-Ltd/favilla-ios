@@ -939,7 +939,7 @@ struct AccountsView: View {
         let on = scope == value
         return Button { scope = value } label: {
             HStack(spacing: 6) {
-                Text(title).font(Brand.font(13, on ? .semibold : .medium)).foregroundStyle(on ? Brand.bg : Brand.ink)
+                Text(title).font(Brand.font(13, on ? .semibold : .regular)).foregroundStyle(on ? Brand.bg : Brand.ink)
                 if let count { Text("\(count)").font(Brand.font(13, .bold)).foregroundStyle(on ? Brand.bg : Brand.danger) }
             }
             .padding(.horizontal, 14).frame(minHeight: 34)

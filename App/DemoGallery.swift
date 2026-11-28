@@ -78,7 +78,6 @@ struct DemoGallery: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Brand.bg.ignoresSafeArea())
-        .preferredColorScheme(.dark)
     }
 }
 #endif

@@ -25,7 +25,7 @@ struct TurningRing: View {
                 Circle().trim(from: 0, to: 0.3)
                     .stroke(Brand.brass, style: StrokeStyle(lineWidth: line, lineCap: .round))
                     .rotationEffect(.degrees(turn * 360))
-                if still { Circle().fill(Brand.brass).frame(width: size * 0.36, height: size * 0.36) }
+                if still { Circle().fill(Brand.brassFill).frame(width: size * 0.36, height: size * 0.36) }
             }
             .padding(line / 2)
             .frame(width: size, height: size)
@@ -67,7 +67,7 @@ struct WaitBar: View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
                 Capsule().fill(Brand.line)
-                Capsule().fill(Brand.brass).frame(width: max(4, g.size.width * min(1, max(0, fraction))))
+                Capsule().fill(Brand.brassFill).frame(width: max(4, g.size.width * min(1, max(0, fraction))))
             }
         }
         .frame(height: 4)

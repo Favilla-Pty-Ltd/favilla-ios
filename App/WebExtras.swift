@@ -208,7 +208,7 @@ enum WebExtras {
         let cfg = SFSafariViewController.Configuration()
         cfg.entersReaderIfAvailable = false
         let sf = SFSafariViewController(url: url, configuration: cfg)
-        sf.preferredBarTintColor = UIColor(red: 0x11 / 255, green: 0x11 / 255, blue: 0x11 / 255, alpha: 1)
+        sf.preferredBarTintColor = UIColor(Brand.bg)
         sf.preferredControlTintColor = UIColor(red: 0xC9 / 255, green: 0xA4 / 255, blue: 0x5C / 255, alpha: 1)
         sf.dismissButtonStyle = .done
         t.present(sf, animated: true)

@@ -271,7 +271,6 @@ struct ImportSheet: View {
                     }
                 }
         }
-        .preferredColorScheme(.dark)
         .interactiveDismissDisabled(running)
     }
 

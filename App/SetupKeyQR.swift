@@ -72,7 +72,6 @@ struct SetupKeyQR: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { clear(); dismiss() }.font(Brand.button).foregroundStyle(Brand.brass) } }
         }
-        .preferredColorScheme(.dark)
         .onDisappear { clear() }
     }
 

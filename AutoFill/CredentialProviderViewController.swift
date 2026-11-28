@@ -50,12 +50,12 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         let onClose: () -> Void = { [weak self] in self?.close() }
         let onRetry: () -> Void = { [weak self] in self?.retry() }
         let root: AnyView = configuring
-            ? AnyView(ProbeView(link: link, onClose: onClose).preferredColorScheme(.dark))
+            ? AnyView(ProbeView(link: link, onClose: onClose))
             : AnyView(SignInView(link: link, purpose: purpose, user: user, notice: notice, onRetry: onRetry, onName: onName,
                                  onNewPassword: purpose == .password && notice == nil ? { [weak self] in self?.startNewPassword() } : nil,
-                                 onClose: onClose).preferredColorScheme(.dark))
+                                 onClose: onClose))
         let host = UIHostingController(rootView: root)
-        host.view.backgroundColor = UIColor(red: 14 / 255, green: 13 / 255, blue: 12 / 255, alpha: 1)
+        host.view.backgroundColor = UIColor(Brand.bg)
         addChild(host)
         host.view.frame = view.bounds
         host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -205,9 +205,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         }, onCancel: { [weak self] in
             self?.closed = true
             self?.extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue))
-        }).preferredColorScheme(.dark)
+        })
         let host = UIHostingController(rootView: view)
-        host.view.backgroundColor = UIColor(red: 14 / 255, green: 13 / 255, blue: 12 / 255, alpha: 1)
+        host.view.backgroundColor = UIColor(Brand.bg)
         addChild(host)
         host.view.frame = self.view.bounds
         host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -252,9 +252,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             job.close()
             LastRequest.save("New password for \(host)", ["closed on the sheet"])
             self.extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue))
-        }).preferredColorScheme(.dark)
+        })
         let hostVC = UIHostingController(rootView: view)
-        hostVC.view.backgroundColor = UIColor(red: 14 / 255, green: 13 / 255, blue: 12 / 255, alpha: 1)
+        hostVC.view.backgroundColor = UIColor(Brand.bg)
         addChild(hostVC)
         hostVC.view.frame = self.view.bounds
         hostVC.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

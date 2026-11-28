@@ -206,8 +206,8 @@ struct StepRow: View {
         HStack(spacing: 12) {
             ZStack {
                 if state == 2 {
-                    Circle().fill(Brand.brass)
-                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Brand.bg)
+                    Circle().fill(Brand.brassFill)
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Brand.onBrass)
                 } else if state == 1 {
                     TurningRing(size: 22)      // the running step turns, like the KEY's (issue #59)
                 } else {

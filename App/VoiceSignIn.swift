@@ -189,7 +189,6 @@ struct VoiceSignInSheet: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Brand.bg.ignoresSafeArea())
-        .preferredColorScheme(.dark)
         .onAppear { begin() }
         .onDisappear { ears.cancel() }
     }

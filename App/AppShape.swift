@@ -70,9 +70,9 @@ struct ModeSwitcher: View {
     private func segment(_ d: Door) -> some View {
         Button { if d != here { go(d) } } label: {
             Text(d.title).font(Brand.font(12, d == here ? .bold : .semibold)).tracking(1.5)
-                .foregroundStyle(d == here ? Brand.bg : Brand.grey)
+                .foregroundStyle(d == here ? Brand.onBrass : Brand.grey)
                 .frame(maxWidth: .infinity, minHeight: 40)
-                .background(d == here ? Brand.brass : Color.clear)
+                .background(d == here ? Brand.brassFill : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
                 .contentShape(Rectangle())
         }
@@ -158,7 +158,6 @@ struct ModeHome: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .tint(Brand.brass)
         // Ask the KEY which mode it's in: one HELLO on open and on return.
         .onAppear { probe() }
@@ -185,8 +184,8 @@ struct ModeHome: View {
                     Spacer()
                     if let t {
                         if t.1 {
-                            Text(t.0).font(Brand.label).tracking(2).foregroundStyle(Brand.bg)
-                                .padding(.horizontal, 10).padding(.vertical, 4).background(Brand.brass).clipShape(Capsule())
+                            Text(t.0).font(Brand.label).tracking(2).foregroundStyle(Brand.onBrass)
+                                .padding(.horizontal, 10).padding(.vertical, 4).background(Brand.brassFill).clipShape(Capsule())
                         } else {
                             Text(t.0).font(Brand.label).tracking(2).foregroundStyle(Brand.grey)
                         }
@@ -251,9 +250,9 @@ struct SwitchPage: View {
                             Text("ON THE KEY").font(Brand.label).tracking(2).foregroundStyle(Brand.brass)
                             ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
                                 HStack(alignment: .top, spacing: 12) {
-                                    Text("\(i + 1)").font(Brand.font(13, .bold)).foregroundStyle(i == 0 ? Brand.bg : Brand.ink)
+                                    Text("\(i + 1)").font(Brand.font(13, .bold)).foregroundStyle(i == 0 ? Brand.onBrass : Brand.ink)
                                         .frame(width: 26, height: 26)
-                                        .background(i == 0 ? Brand.brass : Color.clear).clipShape(Circle())
+                                        .background(i == 0 ? Brand.brassFill : Color.clear).clipShape(Circle())
                                         .overlay(Circle().stroke(i == 0 ? Color.clear : Brand.grey, lineWidth: 1))
                                     Text(s).font(Brand.body).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true).padding(.top, 3)
                                 }
@@ -289,7 +288,6 @@ struct SwitchPage: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .tint(Brand.brass)
         .task {
             // One HELLO every 10 s while this page shows; the answer carries the mode.

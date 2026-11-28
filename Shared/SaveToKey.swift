@@ -273,9 +273,9 @@ struct UsernameField: View {
                         ForEach(suggestions, id: \.self) { u in
                             let on = text.lowercased() == u.lowercased()
                             Button { text = u } label: {
-                                Text(verbatim: u).font(Brand.font(14, .semibold)).foregroundStyle(on ? Brand.bg : Brand.ink).lineLimit(1)
+                                Text(verbatim: u).font(Brand.font(14, .semibold)).foregroundStyle(on ? Brand.onBrass : Brand.ink).lineLimit(1)
                                     .padding(.horizontal, 14).frame(minHeight: 40)
-                                    .background(on ? Brand.brass : Color.clear)
+                                    .background(on ? Brand.brassFill : Color.clear)
                                     .clipShape(Capsule())
                                     .overlay(Capsule().stroke(on ? Color.clear : Brand.grey.opacity(0.6), lineWidth: 1))
                             }

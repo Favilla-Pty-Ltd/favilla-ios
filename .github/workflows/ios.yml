@@ -79,6 +79,13 @@ jobs:
             if [ "$m" = nostr-profile ]; then sleep 40; elif [ "$m" = nostr-profiles ]; then sleep 175; else sleep 10; fi
             xcrun simctl io "$UDID" screenshot "shots/$m.png"
           done
+          # Light mode (28 Nov): the screens that carry the palette.
+          xcrun simctl ui "$UDID" appearance light || true
+          for m in home-vault vault vault-sheet vault-voice-key settings-vault x-signin x-newpw-choose; do
+            xcrun simctl launch --terminate-running-process "$UDID" "$BID" -FavillaDemo "$m"
+            sleep 10
+            xcrun simctl io "$UDID" screenshot "shots/light-$m.png"
+          done
           # The app's own log lines from the sample runs (profile fetches among them).
           xcrun simctl spawn "$UDID" log show --last 6m --style compact --predicate 'eventMessage CONTAINS "FVLOG"' 2>/dev/null | sed -E 's/^.*FVLOG /FVLOG /' | tail -120 || true
           ls -la shots

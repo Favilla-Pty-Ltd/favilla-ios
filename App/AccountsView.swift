@@ -727,7 +727,7 @@ struct AccountsView: View {
     }
 
     var body: some View {
-        if pushed { page } else { NavigationStack { page }.preferredColorScheme(.dark) }
+        if pushed { page } else { NavigationStack { page } }
     }
 
     private var page: some View {
@@ -792,8 +792,8 @@ struct AccountsView: View {
                 // Voice sign-in (issue #90): say the login's name, the KEY types it by USB.
                 if !selecting, KeyLink.appPaired {
                     Button { voice = true } label: {
-                        Image(systemName: "mic.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(Brand.bg)
-                            .frame(width: 58, height: 58).background(Brand.brass).clipShape(Circle())
+                        Image(systemName: "mic.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(Brand.onBrass)
+                            .frame(width: 58, height: 58).background(Brand.brassFill).clipShape(Circle())
                             .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
                     }
                     .accessibilityLabel("Sign in by voice")
@@ -875,9 +875,9 @@ struct AccountsView: View {
                         }
                         Spacer()
                         Button { dropOld = w.old; dropNote = "" } label: {
-                            Text("It works").font(Brand.font(13, .semibold)).foregroundStyle(Brand.bg)
+                            Text("It works").font(Brand.font(13, .semibold)).foregroundStyle(Brand.onBrass)
                                 .padding(.horizontal, 14).frame(minHeight: 36)
-                                .background(Brand.brass).clipShape(Capsule())
+                                .background(Brand.brassFill).clipShape(Capsule())
                         }
                         .disabled(!m.busy.isEmpty || w.old.id == nil)
                     }
@@ -939,12 +939,12 @@ struct AccountsView: View {
         let on = scope == value
         return Button { scope = value } label: {
             HStack(spacing: 6) {
-                Text(title).font(Brand.font(13, on ? .semibold : .regular)).foregroundStyle(on ? Brand.bg : Brand.ink)
-                if let count { Text("\(count)").font(Brand.font(13, .bold)).foregroundStyle(on ? Brand.bg : Brand.danger) }
+                Text(title).font(Brand.font(13, on ? .semibold : .regular)).foregroundStyle(on ? Brand.onBrass : Brand.ink)
+                if let count { Text("\(count)").font(Brand.font(13, .bold)).foregroundStyle(on ? Brand.onBrass : Brand.danger) }
             }
             .padding(.horizontal, 14).frame(minHeight: 34)
-            .background(on ? Brand.brass : Brand.card).clipShape(Capsule())
-            .overlay(Capsule().stroke(on ? Brand.brass : Brand.line, lineWidth: 1))
+            .background(on ? Brand.brassFill : Brand.card).clipShape(Capsule())
+            .overlay(Capsule().stroke(on ? Brand.brassFill : Brand.line, lineWidth: 1))
             .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
@@ -1004,7 +1004,7 @@ struct AccountsView: View {
             Button { m.checkBreaches() } label: {
                 HStack(spacing: 8) {
                     Image(systemName: done ? "checkmark" : "shield").font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(done ? VaultHealth.good : Brand.brass)
+                        .foregroundStyle(done ? Brand.good : Brand.brass)
                     Text(done ? "Checked" : "Check breaches").font(Brand.font(13, .semibold)).foregroundStyle(done ? Brand.grey : Brand.brass).lineLimit(1).fixedSize()
                 }
                 .padding(.horizontal, 14).frame(minHeight: 44)
@@ -1021,7 +1021,6 @@ struct AccountsView: View {
 /// Strong, on a password that is not reused, not in a breach, and has been
 /// checked against breaches: an unchecked password does not count as strong.
 struct VaultHealth {
-    static let good = Color(red: 0.61, green: 0.80, blue: 0.63)
     var total = 0, scored = 0, strong = 0, made = 0, strongMade = 0, unchecked = 0
     init(_ entries: [AppChannel.ListEntry]) {
         total = entries.count
@@ -1082,6 +1081,7 @@ struct SiteTile: View {
     var size: CGFloat = 40
     var made = false
     private static let tints: [UInt32] = [0x3A2E24, 0x24303A, 0x2F2A3A, 0x233530, 0x363022, 0x3A2630, 0x26323A]
+    private static let light: [UInt32] = [0xEBDCC8, 0xD3DFE8, 0xDCD7EA, 0xD2E4DB, 0xE9E0C6, 0xEAD4DE, 0xD5E0E6]
     static func letter(_ site: String) -> String {
         var s = site.lowercased()
         for p in ["https://", "http://", "www."] where s.hasPrefix(p) { s.removeFirst(p.count) }
@@ -1090,7 +1090,8 @@ struct SiteTile: View {
     static func tint(_ site: String) -> Color {
         var h: UInt32 = 2166136261
         for b in site.lowercased().utf8 { h = (h ^ UInt32(b)) &* 16777619 }
-        return Color(hex: tints[Int(h % UInt32(tints.count))])
+        let i = Int(h % UInt32(tints.count))
+        return Brand.two(tints[i], light[i])
     }
     var body: some View {
         Text(SiteTile.letter(site)).font(Brand.font(size * 0.45, .bold)).foregroundStyle(Brand.ink)
@@ -1156,7 +1157,7 @@ private struct AccountRow: View {
             else if h.strength == 1 { Pill("Weak", tone: .warn) }
             else if !h.checked { Pill("Not checked", tone: .quiet) }
             else if h.strength == 3 {
-                Image(systemName: "checkmark").font(.system(size: 14, weight: .bold)).foregroundStyle(VaultHealth.good)
+                Image(systemName: "checkmark").font(.system(size: 14, weight: .bold)).foregroundStyle(Brand.good)
                     .accessibilityLabel("Strong, nothing to fix")
             }
             else if h.strength == 2 { Pill("Fair", tone: .quiet) }
@@ -1170,7 +1171,7 @@ private struct Pill: View {
     let tone: Tone
     init(_ t: String, tone: Tone) { text = t; self.tone = tone }
     var body: some View {
-        let c: Color = { switch tone { case .bad: return Brand.danger; case .warn: return Brand.brass; case .good: return Color(red: 0.55, green: 0.78, blue: 0.56); case .quiet: return Brand.grey } }()
+        let c: Color = { switch tone { case .bad: return Brand.danger; case .warn: return Brand.brass; case .good: return Brand.good; case .quiet: return Brand.grey } }()
         Text(text).font(Brand.font(12, .semibold)).foregroundStyle(c).lineLimit(1).fixedSize()
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(c.opacity(0.14)).clipShape(Capsule())
@@ -1222,10 +1223,10 @@ private struct AccountSheet: View {
                     if let h = e.health {
                         HStack(spacing: 8) {
                             fact("PASSWORD", h.reused ? "Reused" : ["Not scored", "Weak", "Fair", "Strong"][h.strength],
-                                 h.reused || h.strength == 1 ? Brand.brass : h.strength == 3 ? VaultHealth.good : Brand.ink)
+                                 h.reused || h.strength == 1 ? Brand.brass : h.strength == 3 ? Brand.good : Brand.ink)
                             fact("BREACHES", h.breached ? "Seen in one" : h.checked ? "None found" : "Not checked",
-                                 h.breached ? Brand.danger : h.checked ? VaultHealth.good : Brand.grey)
-                            fact("CODE", h.hasCode ? "On the KEY" : "None yet", h.hasCode ? VaultHealth.good : Brand.grey)
+                                 h.breached ? Brand.danger : h.checked ? Brand.good : Brand.grey)
+                            fact("CODE", h.hasCode ? "On the KEY" : "None yet", h.hasCode ? Brand.good : Brand.grey)
                         }
                         VStack(alignment: .leading, spacing: 8) {
                             if h.breached { Line("Seen in a breach", "This password appears in a known data breach. Change it on the site: the first step under Fix it says how.", bad: true) }
@@ -1335,7 +1336,6 @@ private struct AccountSheet: View {
             .sheet(item: $qr) { p in SetupKeyQR(prefill: p) }
             .sheet(isPresented: $editing) { EntryEditor(entry: e, model: model) { editing = false; dismiss() } }
         }
-        .preferredColorScheme(.dark)
         .onDisappear { code = "" }
     }
 
@@ -1409,8 +1409,8 @@ private struct AccountSheet: View {
             var t = top
             while let p = t.presentedViewController { t = p }
             let sf = SFSafariViewController(url: url)
-            sf.preferredBarTintColor = UIColor(red: 0x11 / 255, green: 0x11 / 255, blue: 0x11 / 255, alpha: 1)
-            sf.preferredControlTintColor = UIColor(red: 0xC9 / 255, green: 0xA4 / 255, blue: 0x5C / 255, alpha: 1)
+            sf.preferredBarTintColor = UIColor(Brand.bg)
+            sf.preferredControlTintColor = UIColor(Brand.brass)
             t.present(sf, animated: true)
         }
     }
@@ -1526,7 +1526,6 @@ struct EntryEditor: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.font(Brand.button).foregroundStyle(Brand.brass).disabled(working) } }
         }
-        .preferredColorScheme(.dark)
         .interactiveDismissDisabled(working)
         .onAppear { if let e = entry, site.isEmpty { site = e.site; user = e.user } }
         .onDisappear { pass = "" }

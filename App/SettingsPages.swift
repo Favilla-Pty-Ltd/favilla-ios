@@ -629,7 +629,6 @@ struct ThisPhoneView: View {
             .onReceive(NotificationCenter.default.publisher(for: PairIdentity.cleared)) { _ in appPaired = false }
             .onReceive(link.$outcome) { _ in refreshCounts() }
         }
-        .preferredColorScheme(.dark)
     }
 
     private func refreshCounts() {

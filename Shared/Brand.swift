@@ -7,16 +7,31 @@
 // the site name in the sheet 30 (the one thing to read against the KEY's screen).
 
 import SwiftUI
+import UIKit
 
 enum Brand {
-    static let bg     = Color(hex: 0x0E0D0C)
-    static let card   = Color(hex: 0x1A1817)
-    static let line   = Color(hex: 0x2A2725)
-    static let brass  = Color(hex: 0xC9A45C)
-    static let ink    = Color(hex: 0xF4F2EE)
-    static let grey   = Color(hex: 0xA8A29A)   // 7.9:1 on bg
-    static let faint  = Color(hex: 0x6F6A64)
-    static let danger = Color(hex: 0xF2A08A)
+    // Dark and light (28 Nov 2026): the app follows the iPhone's appearance.
+    // Light is the wordmark's warm white as the ground, cards a shade lighter,
+    // and the dark of the dark mode as the text.
+    static let bg     = two(0x0E0D0C, 0xF4F2EE)
+    static let card   = two(0x1A1817, 0xFCFBF8)
+    static let line   = two(0x2A2725, 0xDDD8CE)
+    /// Brass as text, icons and thin strokes. On white the brand brass is too
+    /// faint to read (2.3:1), so light mode uses a deeper one (6:1).
+    static let brass  = two(0xC9A45C, 0x765A1C)
+    /// Brass as a filled shape with dark text on it: the same in both modes.
+    static let brassFill = Color(hex: 0xC9A45C)
+    /// Text and icons on a brass fill.
+    static let onBrass = Color(hex: 0x0E0D0C)
+    static let ink    = two(0xF4F2EE, 0x0E0D0C)
+    static let grey   = two(0xA8A29A, 0x5A564E)   // 7.9:1 on bg dark, 6.6:1 light
+    static let faint  = two(0x6F6A64, 0x9A958B)
+    static let danger = two(0xF2A08A, 0x8A2E1B)
+    static let good   = two(0x9CCBA0, 0x2F6B3A)
+
+    static func two(_ dark: UInt32, _ light: UInt32) -> Color {
+        Color(uiColor: UIColor { $0.userInterfaceStyle == .light ? UIColor(hex: light) : UIColor(hex: dark) })
+    }
 
     enum Weight { case light, regular, semibold, bold }
 
@@ -37,6 +52,12 @@ enum Brand {
     static let small: Font    = font(13)
     static let headline: Font = font(22, .bold)
     static let button: Font   = font(14, .semibold)
+}
+
+extension UIColor {
+    convenience init(hex: UInt32) {
+        self.init(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
 }
 
 extension Color {
@@ -114,8 +135,9 @@ struct BrandButton: View {
                 .font(Brand.button)
                 .tracking(2)
                 .frame(maxWidth: .infinity, minHeight: 50)
-                .background(filled ? Brand.brass : Brand.card)
-                .foregroundStyle(filled ? Brand.bg : Brand.ink)
+                .background(filled ? Brand.brassFill : Brand.card)
+                .foregroundStyle(filled ? Brand.onBrass : Brand.ink)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(filled ? Color.clear : Brand.line, lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .opacity(enabled ? 1 : 0.35)   // a button that can't be pressed yet looks it
         }

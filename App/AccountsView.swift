@@ -1194,25 +1194,50 @@ private struct AccountSheet: View {
     @State private var checkNote = ""
     @State private var confirmOld = false
     @State private var oldNote = ""
+    @State private var openStep = 0          // the Fix it step that is open; 0 = none
+
+    private func fact(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(Brand.label).tracking(1.5).foregroundStyle(Brand.grey)
+            Text(value).font(Brand.font(15, .semibold)).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Brand.card).clipShape(RoundedRectangle(cornerRadius: 12))
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(e.site).font(Brand.font(20, .semibold)).foregroundStyle(Brand.ink)
-                        Text(e.user).font(Brand.body).foregroundStyle(Brand.grey)
+                    HStack(alignment: .center, spacing: 14) {
+                        SiteTile(site: e.site, size: 60, made: e.health?.origin == 1)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(e.site).font(Brand.headline).foregroundStyle(Brand.ink).lineLimit(2).minimumScaleFactor(0.7)
+                            if !e.user.isEmpty { Text(e.user).font(Brand.body).foregroundStyle(Brand.grey).lineLimit(1) }
+                        }
                     }
+                    BrandButton(title: working ? "ASKING THE KEY…" : "SIGN IN ON THE SITE", filled: !working) { signIn() }
+                        .disabled(working)
+                    if !status.isEmpty { Text(status).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
                     if let h = e.health {
+                        HStack(spacing: 8) {
+                            fact("PASSWORD", h.reused ? "Reused" : ["Not scored", "Weak", "Fair", "Strong"][h.strength],
+                                 h.reused || h.strength == 1 ? Brand.brass : h.strength == 3 ? VaultHealth.good : Brand.ink)
+                            fact("BREACHES", h.breached ? "Seen in one" : h.checked ? "None found" : "Not checked",
+                                 h.breached ? Brand.danger : h.checked ? VaultHealth.good : Brand.grey)
+                            fact("CODE", h.hasCode ? "On the KEY" : "None yet", h.hasCode ? VaultHealth.good : Brand.grey)
+                        }
                         VStack(alignment: .leading, spacing: 8) {
                             if h.breached { Line("Seen in a breach", "This password appears in a known data breach. Change it on the site: the first step under Fix it says how.", bad: true) }
                             if h.reused { Line("Reused", "The same password is on another account on the KEY. Each site should have its own.", bad: true) }
                             if h.strength == 1 { Line("Weak", "Short or guessable. A password made on the KEY is long and random.", bad: true) }
-                            if h.strength == 3 && !h.breached && !h.reused { Line("Strong", "Long and random. Nothing to do here.", bad: false) }
-                            if h.origin == 1 { Line("Made on KEY", "The KEY generated this one; it was never typed anywhere.", bad: false) }
-                            if h.origin == 3 { Line("Imported", "Came in through the Nostr client's import. The KEY has scored it like any other.", bad: false) }
-                            if h.hasCode { Line("2FA", "A one-time code on the KEY is linked to this account. At a sign-in, the code is one press on the KEY after the password.", bad: false) }
-                            if !h.checked { Line("Breach check pending", "Not scored yet. Check this one now, or Check breaches on the list for up to 24 at a time.", bad: false) }
+                            if h.origin == 1 {
+                                HStack(alignment: .top, spacing: 8) {
+                                    EmberCross(size: 12).padding(.top, 3)
+                                    Line("Made by the KEY", "The KEY generated this one; it was never typed anywhere.", bad: false)
+                                }
+                            }
+                            if h.origin == 3 { Line("Imported", "Came in from another password manager. The KEY has scored it like any other.", bad: false) }
                         }
                     }
                     if let old = model.oldCopy(of: e) { oldSection(old) }
@@ -1221,23 +1246,6 @@ private struct AccountSheet: View {
                     } else if !oldNote.isEmpty {
                         Text(oldNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true)
                     }
-                    if e.id != nil {
-                        Button { checkOne() } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "shield.lefthalf.filled")
-                                Text(model.busy.hasPrefix("Checking") ? "Checking…" : "Check this one for breaches")
-                            }
-                            .font(Brand.small).foregroundStyle(Brand.brass)
-                        }
-                        .disabled(!model.busy.isEmpty)
-                        if !checkNote.isEmpty { Text(checkNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
-                    }
-                    BrandButton(title: working ? "ASKING THE KEY…" : "SIGN IN ON THE SITE", filled: !working) { signIn() }
-                        .disabled(working)
-                    Text("Puts this account on the KEY's screen and opens the site. Tap the password field, choose Favilla in the keyboard bar, and the sign-in is one press on the KEY.")
-                        .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
-                    if !status.isEmpty { Text(status).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
-
                     if e.health?.hasCode == true {
                         BrandButton(title: codeWorking ? "ASKING THE KEY…" : "GET CODE", filled: false) { getCode() }
                             .disabled(codeWorking || working)
@@ -1257,25 +1265,40 @@ private struct AccountSheet: View {
                         Text("Press ENTER on the KEY when it shows the code. Codes change every 30 seconds; the sign-in sheet usually fills them for you without this.")
                             .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
                     }
-                    Button { qr = SetupKeyQR.Prefill(site: e.site, account: e.user) } label: {
-                        HStack(spacing: 6) { Image(systemName: "qrcode"); Text("Site gave you a setup key instead of a QR? Make the QR here") }
-                            .font(Brand.small).foregroundStyle(Brand.brass).multilineTextAlignment(.leading)
-                    }
 
-                    Text("FIX IT").font(Brand.label).tracking(2).foregroundStyle(Brand.brass).padding(.top, 6)
+                    Text("FIX IT").font(Brand.label).tracking(2).foregroundStyle(Brand.grey).padding(.top, 6)
                     VStack(alignment: .leading, spacing: 0) {
-                        Step(n: 1, title: "Change the password", text: "Sign in on the site and open its change-password form. Tap the new password box, choose Favilla, then New password for this site. The KEY makes the password and saves it when you hold ENTER, and keeps the old one until you tap It works here.")
+                        Step(n: 1, open: $openStep, urgent: e.health.map { $0.breached || $0.reused || $0.strength == 1 } ?? false, title: "Change the password", short: e.health?.breached == true ? "It appears in a known breach" : "The KEY makes a new one and keeps the old until it works", text: "Sign in on the site and open its change-password form. Tap the new password box, choose Favilla, then New password for this site. The KEY makes the password and saves it when you hold ENTER, and keeps the old one until you tap It works here.")
                         Divider().overlay(Brand.line)
-                        Step(n: 2, title: "Add two-factor", text: "Turn on an authenticator app on the site. When it shows the QR code, on the KEY open VAULT > Codes > ADD BY QR and point the KEY at it. The code then comes from the KEY at each sign-in.")
+                        Step(n: 2, open: $openStep, urgent: false, title: "Add two-factor", short: "The KEY scans the site's QR and keeps the code", text: "Turn on an authenticator app on the site. When it shows the QR code, on the KEY open VAULT > Codes > ADD BY QR and point the KEY at it. The code then comes from the KEY at each sign-in.")
                         Divider().overlay(Brand.line)
-                        Step(n: 3, title: "Add a passkey", text: "If the site offers passkeys, add one and choose Favilla when iOS asks where to save it. The KEY keeps it; the password stops mattering.")
+                        Step(n: 3, open: $openStep, urgent: false, title: "Add a passkey", short: "If the site offers one, the password stops mattering", text: "If the site offers passkeys, add one and choose Favilla when iOS asks where to save it. The KEY keeps it; the password stops mattering.")
                     }
                     .background(Brand.card)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
 
                     if e.id != nil {
-                        Text("ON THE KEY").font(Brand.label).tracking(2).foregroundStyle(Brand.brass).padding(.top, 6)
+                        Text("ON THE KEY").font(Brand.label).tracking(2).foregroundStyle(Brand.grey).padding(.top, 6)
                         VStack(alignment: .leading, spacing: 0) {
+                            Button { checkOne() } label: {
+                                HStack {
+                                    Text(model.busy.hasPrefix("Checking") ? "Checking…" : "Check this one for breaches").font(Brand.body).foregroundStyle(Brand.ink)
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.grey)
+                                }
+                                .padding(.horizontal, 14).frame(minHeight: 50).contentShape(Rectangle())
+                            }
+                            .disabled(!model.busy.isEmpty)
+                            Divider().overlay(Brand.line)
+                            Button { qr = SetupKeyQR.Prefill(site: e.site, account: e.user) } label: {
+                                HStack {
+                                    Text("Setup key to QR, for the KEY to scan").font(Brand.body).foregroundStyle(Brand.ink)
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.grey)
+                                }
+                                .padding(.horizontal, 14).frame(minHeight: 50).contentShape(Rectangle())
+                            }
+                            Divider().overlay(Brand.line)
                             Button { editing = true } label: {
                                 HStack {
                                     Text("Edit site, username, password or note").font(Brand.body).foregroundStyle(Brand.ink)
@@ -1298,6 +1321,7 @@ private struct AccountSheet: View {
                         .background(Brand.card)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                         if !model.asking.isEmpty && model.busy == "Deleting…" { WaitCard(title: "Check your KEY", detail: model.asking) }
+                        if !checkNote.isEmpty { Text(checkNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
                         if !manageNote.isEmpty { Text(manageNote).font(Brand.small).foregroundStyle(Brand.ink).fixedSize(horizontal: false, vertical: true) }
                         Text("Every change shows on the KEY first: hold ENTER there to make it, or press BACK. Nothing changes without that.")
                             .font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
@@ -1401,17 +1425,28 @@ private struct AccountSheet: View {
             }
         }
     }
+    /// A Fix it step: a row that opens to say how (28 Nov).
     private struct Step: View {
-        let n: Int, title: String, text: String
+        let n: Int
+        @Binding var open: Int
+        let urgent: Bool
+        let title: String, short: String, text: String
         var body: some View {
-            HStack(alignment: .top, spacing: 12) {
-                Text("\(n)").font(Brand.font(14, .semibold)).foregroundStyle(Brand.brass).frame(width: 22, height: 22).background(Brand.brass.opacity(0.14)).clipShape(Circle())
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(Brand.font(15, .semibold)).foregroundStyle(Brand.ink)
-                    Text(text).font(Brand.small).foregroundStyle(Brand.grey).fixedSize(horizontal: false, vertical: true)
+            Button { open = open == n ? 0 : n } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Text("\(n)").font(Brand.font(13, .bold)).foregroundStyle(urgent ? Brand.danger : Brand.ink)
+                        .frame(width: 28, height: 28).background((urgent ? Brand.danger : Brand.ink).opacity(0.14)).clipShape(Circle())
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(Brand.font(16, .semibold)).foregroundStyle(Brand.ink)
+                        Text(open == n ? text : short).font(Brand.small).foregroundStyle(Brand.grey)
+                            .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: open == n ? "chevron.down" : "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Brand.grey).padding(.top, 6)
                 }
+                .padding(14).contentShape(Rectangle())
             }
-            .padding(14)
+            .buttonStyle(.plain)
         }
     }
 }
